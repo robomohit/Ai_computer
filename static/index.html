@@ -2689,14 +2689,17 @@
             el.onmousemove = () => { if (cmdkState.idx !== i) { cmdkState.idx = i; renderCmdk(); } };
         });
     };
-    $('cmdk-input').addEventListener('input', e => { cmdkState.q = e.target.value; cmdkState.idx = 0; renderCmdk(); });
-    $('cmdk-input').addEventListener('keydown', e => {
-        if (!cmdkState.items.length) return;
-        if (e.key === 'ArrowDown') { e.preventDefault(); cmdkState.idx = (cmdkState.idx + 1) % cmdkState.items.length; renderCmdk(); }
-        if (e.key === 'ArrowUp')   { e.preventDefault(); cmdkState.idx = (cmdkState.idx - 1 + cmdkState.items.length) % cmdkState.items.length; renderCmdk(); }
-        if (e.key === 'Enter')     { e.preventDefault(); cmdkState.items[cmdkState.idx]?.run(); }
+    // cmdk-input and cmdk overlay are defined after this script tag — wire them after DOMContentLoaded
+    document.addEventListener('DOMContentLoaded', () => {
+        $('cmdk-input').addEventListener('input', e => { cmdkState.q = e.target.value; cmdkState.idx = 0; renderCmdk(); });
+        $('cmdk-input').addEventListener('keydown', e => {
+            if (!cmdkState.items.length) return;
+            if (e.key === 'ArrowDown') { e.preventDefault(); cmdkState.idx = (cmdkState.idx + 1) % cmdkState.items.length; renderCmdk(); }
+            if (e.key === 'ArrowUp')   { e.preventDefault(); cmdkState.idx = (cmdkState.idx - 1 + cmdkState.items.length) % cmdkState.items.length; renderCmdk(); }
+            if (e.key === 'Enter')     { e.preventDefault(); cmdkState.items[cmdkState.idx]?.run(); }
+        });
+        $('cmdk').addEventListener('click', e => { if (e.target === $('cmdk')) closeCmdk(); });
     });
-    $('cmdk').addEventListener('click', e => { if (e.target === $('cmdk')) closeCmdk(); });
 
     window.addEventListener('keydown', e => {
         if ((e.metaKey || e.ctrlKey) && e.key.toLowerCase() === 'k') { e.preventDefault(); cmdkState.open ? closeCmdk() : openCmdk(); }
@@ -2771,12 +2774,15 @@
         const show = on ?? !el.classList.contains('show');
         el.classList.toggle('show', show);
     };
+    // tweaks panel elements are defined after this script tag — wire them after DOMContentLoaded
     const tw = loadTweaks();
-    renderTweakSwatches(tw);
-    if (tw.density === 'compact') $('tw-density').querySelectorAll('button').forEach(b => b.classList.toggle('active', b.dataset.v === 'compact'));
-    if (tw.motion === 'reduce') $('tw-motion').querySelectorAll('button').forEach(b => b.classList.toggle('active', b.dataset.v === 'reduce'));
-    bindTwSeg($('tw-density'), 'density', v => document.body.classList.toggle('density-compact', v === 'compact'));
-    bindTwSeg($('tw-motion'),  'motion',  v => document.body.classList.toggle('reduce-motion', v === 'reduce'));
+    document.addEventListener('DOMContentLoaded', () => {
+        renderTweakSwatches(tw);
+        if (tw.density === 'compact') $('tw-density').querySelectorAll('button').forEach(b => b.classList.toggle('active', b.dataset.v === 'compact'));
+        if (tw.motion === 'reduce') $('tw-motion').querySelectorAll('button').forEach(b => b.classList.toggle('active', b.dataset.v === 'reduce'));
+        bindTwSeg($('tw-density'), 'density', v => document.body.classList.toggle('density-compact', v === 'compact'));
+        bindTwSeg($('tw-motion'),  'motion',  v => document.body.classList.toggle('reduce-motion', v === 'reduce'));
+    });
 
 
     // Handle host edit-mode protocol (must register listener before announcing)

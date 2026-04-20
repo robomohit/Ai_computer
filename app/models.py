@@ -7,6 +7,14 @@ from typing import Any, Callable, Dict, List, Optional
 from pydantic import BaseModel, Field
 
 
+class TaskStatus(str, Enum):
+    pending = "pending"
+    running = "running"
+    done = "done"
+    failed = "failed"
+    cancelled = "cancelled"
+
+
 class DangerLevel(str, Enum):
     low = "low"
     medium = "medium"
@@ -113,13 +121,19 @@ class TaskRecord(BaseModel):
     reason: Optional[str] = None
     model: Optional[str] = None
     mode: Optional[str] = None
+    execution_mode: str = "serial"
+    max_parallel_workers: int = 1
 
 
 class SubTask(BaseModel):
     id: str
     description: str
     actions: List[Action] = Field(default_factory=list)
-    status: str = "pending"
+    depends_on: List[str] = Field(default_factory=list)
+    write_scope: List[str] = Field(default_factory=list)
+    worker_hint: Optional[str] = None
+    worker_id: Optional[str] = None
+    status: TaskStatus = TaskStatus.pending
     error: Optional[str] = None
     post_screenshot_b64: Optional[str] = None
 
@@ -128,6 +142,8 @@ class HierarchicalPlan(BaseModel):
     reasoning: str
     sub_tasks: List[SubTask]
     overall_complete: bool = False
+    execution_mode: str = "serial"
+    max_parallel_workers: int = 1
 
 
 class ActionDecision(BaseModel):

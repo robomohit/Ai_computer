@@ -49,22 +49,26 @@ class MemoryStore:
         chroma_dir = db_path.parent / "chroma_memory"
         chroma_dir.mkdir(parents=True, exist_ok=True)
         self._counter = 0
-        try:
-            import chromadb
-            from chromadb.utils.embedding_functions import SentenceTransformerEmbeddingFunction
+        import os
+        use_chroma = os.environ.get("USE_CHROMA", "0") == "1"
+        if use_chroma:
+            try:
+                import chromadb
+                from chromadb.utils.embedding_functions import SentenceTransformerEmbeddingFunction
 
-            self.client = chromadb.PersistentClient(path=str(chroma_dir))
-            ef = SentenceTransformerEmbeddingFunction(
-                model_name="all-MiniLM-L6-v2", device="cpu", normalize_embeddings=True
-            )
-            self.collection = self.client.get_or_create_collection(
-                name="agent_memory",
-                embedding_function=ef,
-                metadata={"hnsw:space": "cosine"},
-            )
-            self._counter = self.collection.count()
-        except Exception:
-            # ChromaDB or sentence-transformers not installed — fall back to keyword search
+                self.client = chromadb.PersistentClient(path=str(chroma_dir))
+                ef = SentenceTransformerEmbeddingFunction(
+                    model_name="all-MiniLM-L6-v2", device="cpu", normalize_embeddings=True
+                )
+                self.collection = self.client.get_or_create_collection(
+                    name="agent_memory",
+                    embedding_function=ef,
+                    metadata={"hnsw:space": "cosine"},
+                )
+                self._counter = self.collection.count()
+            except Exception:
+                self.collection = _FallbackCollection()
+        else:
             self.collection = _FallbackCollection()
 
     def add(self, kind: str, content: str, metadata: Dict[str, Any] | None = None) -> int:

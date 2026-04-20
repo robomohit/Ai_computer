@@ -14,34 +14,33 @@ import httpx
 from PIL import Image
 
 from .models import HierarchicalPlan
+from .tool_registry import get_tool_guidance, get_mode_packs
 
-SYSTEM_PROMPT = """You are a computer control planner. Use action types: finish, run_command, bash, read_file, write_file, move_file,
-mouse_click, keyboard_type, screenshot, ocr_image, api_call, scroll, double_click, right_click, middle_click,
-mouse_move, left_click_drag, key_combo, hold_key, wait_action, cursor_position, text_view, text_create,
-text_str_replace, text_insert, text_undo_edit, browser_open, browser_screenshot, browser_click,
-browser_click_coords, browser_type, browser_scroll, browser_get_text, browser_accessibility_tree,
-browser_navigate_back, browser_close, type_with_delay, find_on_screen, get_clipboard, set_clipboard, notify,
-text_editor, computer, web_search."""
+SYSTEM_PROMPT = """You are a computer control planner. Use the provided actions to achieve the user's goal."""
 
 HIERARCHICAL_SYSTEM_PROMPT = """You are a hierarchical planning engine for an autonomous computer agent.
 Return ONLY valid JSON with shape:
-{
+{{
   "reasoning": str,
   "overall_complete": bool,
+  "execution_mode": "serial" | "parallel",
+  "max_parallel_workers": int,
   "sub_tasks": [
-    {
+    {{
       "id": str,
       "description": str,
-      "actions": [{"id": str, "type": str, "args": object, "explanation": str, "requires_approval": bool}]
-    }
+      "depends_on": [str],
+      "write_scope": [str],
+      "actions": [{{ "id": str, "type": str, "args": object, "explanation": str, "requires_approval": bool }}]
+    }}
   ]
-}
-Decompose the goal into 2-8 sequential sub-tasks. Each sub-task should be independently verifiable.
-Use only action types: finish, run_command, bash, read_file, write_file, move_file, mouse_click, keyboard_type,
-screenshot, ocr_image, api_call, scroll, double_click, right_click, middle_click, mouse_move, left_click_drag,
-key_combo, hold_key, wait_action, cursor_position, text_view, text_create, text_str_replace, text_insert,
-text_undo_edit, text_editor, computer, browser_open, browser_screenshot, browser_click, browser_click_coords, browser_type,
-browser_scroll, browser_get_text, browser_accessibility_tree, browser_navigate_back, browser_close, type_with_delay, find_on_screen, get_clipboard, set_clipboard, notify, file_glob, file_grep, web_fetch, web_search, list_processes, kill_process.
+}}
+Decompose the goal into sequential or parallel sub-tasks. Each sub-task should be independently verifiable.
+If multiple sub-tasks can run safely in parallel (without touching the same files/directories), set execution_mode to "parallel".
+
+Available actions:
+{tool_guidance}
+
 Never output markdown. Never output prose outside JSON."""
 
 # ──────────────────────────────────────────────────────────────────────────────
@@ -49,65 +48,47 @@ Never output markdown. Never output prose outside JSON."""
 # ──────────────────────────────────────────────────────────────────────────────
 CODING_SYSTEM_PROMPT = """You are an expert autonomous coding agent. You write, read, and execute code.
 Return ONLY valid JSON with shape:
-{
+{{
   "reasoning": str,
   "overall_complete": bool,
+  "execution_mode": "serial" | "parallel",
+  "max_parallel_workers": int,
   "sub_tasks": [
-    {
+    {{
       "id": str,
       "description": str,
-      "actions": [{"id": str, "type": str, "args": object, "explanation": str, "requires_approval": false}]
-    }
+      "depends_on": [str],
+      "write_scope": [str],
+      "actions": [{{ "id": str, "type": str, "args": object, "explanation": str, "requires_approval": false }}]
+    }}
   ]
-}
-Decompose the goal into 2-8 sequential sub-tasks. Each sub-task should be independently verifiable.
+}}
+Decompose the goal into sequential or parallel sub-tasks. Each sub-task should be independently verifiable.
+If multiple sub-tasks can run safely in parallel (without touching the same files/directories), set execution_mode to "parallel".
 
-Available action types:
-- system_info: {}  — returns OS, home dir, workspace, Downloads/Desktop/Documents paths, python command. ALWAYS call this first.
-- bash: {"command": str, "restart"?: bool}  — Claude-style shell tool; use for terminal work when helpful
-- list_directory: {"path": str, "max_depth": int}  — list contents of any directory (absolute or relative)
-- write_file: {"path": str, "content": str}  — create/overwrite a file
-- read_file: {"path": str}  — read a file's contents
-- run_command: {"command": str}  — run a shell command (install deps, run tests, etc.)
-- text_create: {"path": str, "file_text": str}  — create a new file (fails if exists)
-- text_view: {"path": str, "view_range": [start, end] | null}  — view file lines or directory listing
-- text_str_replace: {"path": str, "old_str": str, "new_str": str}  — precise find & replace
-- text_insert: {"path": str, "insert_line": int, "new_str": str}  — insert at line number
-- text_undo_edit: {"path": str}  — undo last edit to a file
-- text_editor: {"command": "view"|"create"|"str_replace"|"insert"|"undo_edit", "path": str, ...}  — Claude-style text editor wrapper
-- move_file: {"source": str, "destination": str}  — rename/move a file
-- file_glob: {"pattern": str}  — find files matching glob pattern
-- file_grep: {"pattern": str, "directory": str}  — search file contents via regex
-- web_fetch: {"url": str}  — fast HTTP fetch for docs/APIs
-- web_search: {"query": str, "max_results"?: int}  — search the web for current information
-- list_processes: {}  — list running processes (CPU, RAM, PID)
-- kill_process: {"pid": int, "force": bool}  — kill a process by PID
-- finish: {"reason": str}  — mark task as complete
+Available actions:
+{tool_guidance}
 
 Rules:
 1. The system environment (OS, paths, python command) is provided in the prompt. Use those EXACT paths.
 2. For project/code files: use relative paths (resolved from the workspace directory).
-3. When the user mentions system folders (Downloads, Desktop, Documents, etc.): use ABSOLUTE paths from environment info.
-4. Use list_directory to explore or verify folder contents when needed.
-5. Create directories automatically via write_file (parents are auto-created).
-6. For large files, use write_file. For surgical edits, use text_str_replace.
-7. Always verify your work: after writing code, run it or read it back.
-8. Do NOT use mouse, keyboard, screenshot, or browser actions. Those are not available.
-9. When you generate action ids, use short descriptive strings like "create-main", "run-test", etc.
-10. In file content strings, use actual newline characters.
+3. Use list_directory to explore or verify folder contents when needed.
+4. Create directories automatically via write_file (parents are auto-created).
+5. Always verify your work: after writing code, run it or read it back.
+6. When you generate action ids, use short descriptive strings like "create-main", "run-test", etc.
 Never output markdown. Never output prose outside JSON."""
 
 CODING_REFLECT_PROMPT = """You are a reflection agent for an autonomous coding agent.
 Given a completed sub-task description, the actions that ran, and their outputs (stdout/stderr/file contents),
 determine if the sub-task succeeded.
-Return ONLY valid JSON: {"success": bool, "reason": str, "retry_actions": []}
-If success is false, optionally populate retry_actions with corrective action objects using ONLY these types:
-write_file, read_file, run_command, bash, text_create, text_view, text_str_replace, text_insert, text_undo_edit, text_editor, move_file, file_glob, file_grep, web_fetch, web_search, list_processes, kill_process, finish.
+Return ONLY valid JSON: {{"success": bool, "reason": str, "retry_actions": []}}
+If success is false, optionally populate retry_actions with corrective action objects using these available types:
+{tool_guidance}
 Never output markdown. Never output prose outside JSON."""
 
 CODING_EVALUATE_PROMPT = """You are an evaluation agent for an autonomous coding agent.
 Given a goal, the action history (file writes, command outputs, etc.), determine if the overall goal is complete.
-Return ONLY valid JSON: {"complete": bool, "reason": str}
+Return ONLY valid JSON: {{"complete": bool, "reason": str}}
 Never output markdown. Never output prose outside JSON."""
 
 
@@ -117,31 +98,20 @@ Never output markdown. Never output prose outside JSON."""
 # ──────────────────────────────────────────────────────────────────────────────
 COMPUTER_USE_SYSTEM_PROMPT = """You are a browser-automation agent. You read pages as text via the accessibility tree — NEVER assume pixel coordinates.
 Return ONLY valid JSON with shape:
-{
+{{
   "reasoning": str,
   "overall_complete": bool,
   "sub_tasks": [
-    {
+    {{
       "id": str,
       "description": str,
-      "actions": [{"id": str, "type": str, "args": object, "explanation": str, "requires_approval": false}]
-    }
+      "actions": [{{ "id": str, "type": str, "args": object, "explanation": str, "requires_approval": false }}]
+    }}
   ]
-}
+}}
 
-Available actions (use ONLY these):
-- computer: {"action": "screenshot"|"mouse_move"|"left_click"|"double_click"|"right_click"|"middle_click"|"left_click_drag"|"key"|"type"|"scroll"|"cursor_position"|"wait", ...}  — Claude-style computer tool wrapper
-- request_permission: {"scope": "browser"|"google_sheets", "reason": str}  — MUST be the FIRST action. Ask the user for access.
-- browser_open: {"url": str}  — open a URL (full https:// URL required)
-- browser_accessibility_tree: {}  — read the current page as a structured text tree (use this BEFORE clicking/typing to find what's on the page)
-- browser_click: {"selector": str}  — CSS selector (e.g. 'button[name="btnK"]', 'input[type="submit"]', '#id', '.class')
-- browser_type: {"selector": str, "text": str}  — fill a text field
-- browser_scroll: {"direction": "up"|"down", "amount": int}
-- browser_get_text: {}  — get visible page text (fallback if accessibility tree is too noisy)
-- browser_navigate_back: {}
-- browser_close: {}
-- wait_action: {"seconds": float}  — wait for page to load (use 1-3 seconds after navigation)
-- finish: {"reason": str}
+Available actions:
+{tool_guidance}
 
 Rules:
 1. Your FIRST action in the first sub-task MUST be request_permission with the right scope (google_sheets if the task involves Google Sheets, otherwise browser).
@@ -149,35 +119,33 @@ Rules:
 3. Use CSS selectors based on the accessibility tree output. Prefer stable selectors: input[type=...], button[aria-label=...], #id, [role=...].
 4. NEVER use pixel coordinates. NEVER use mouse_click, keyboard_type, or screenshot. Those are blocked in this mode.
 5. For Google Sheets: open https://docs.google.com/spreadsheets/ and use browser_accessibility_tree to see cells. Click a cell then browser_type to write.
-6. Keep sub-tasks small (2-4 actions each) so reflection can correct errors quickly.
 Never output markdown. Never output prose outside JSON."""
 
 
 COMPUTER_USE_REFLECT_PROMPT = """You are a reflection agent for a browser-automation task.
 Given a sub-task description, the actions that ran, and their outputs (URLs, page text, accessibility trees),
 determine if the sub-task succeeded.
-Return ONLY valid JSON: {"success": bool, "reason": str, "retry_actions": []}
-If success is false, optionally populate retry_actions with corrective actions using ONLY these types:
-request_permission, computer, browser_open, browser_accessibility_tree, browser_click, browser_type,
-browser_scroll, browser_get_text, browser_navigate_back, browser_close, wait_action, finish.
+Return ONLY valid JSON: {{"success": bool, "reason": str, "retry_actions": []}}
+If success is false, optionally populate retry_actions with corrective actions using these available types:
+{tool_guidance}
 Never output markdown. Never output prose outside JSON."""
 
 
 COMPUTER_USE_EVALUATE_PROMPT = """You are an evaluation agent for a browser-automation task.
 Given a goal and the action history (URLs visited, page text observed, form submissions), determine if the goal is complete.
-Return ONLY valid JSON: {"complete": bool, "reason": str}
+Return ONLY valid JSON: {{"complete": bool, "reason": str}}
 Never output markdown. Never output prose outside JSON."""
 
 REFLECT_SYSTEM_PROMPT = """You are a reflection agent for an autonomous computer agent.
 Given a completed sub-task description, the actions that ran, their results, and a screenshot of the
 current screen, determine if the sub-task succeeded.
-Return ONLY valid JSON: {"success": bool, "reason": str, "retry_actions": []}
+Return ONLY valid JSON: {{"success": bool, "reason": str, "retry_actions": []}}
 If success is false, optionally populate retry_actions with corrective action objects.
 Never output markdown. Never output prose outside JSON."""
 
 EVALUATE_SYSTEM_PROMPT = """You are an evaluation agent for an autonomous computer agent.
 Given a goal, the action history, and the current screenshot, determine if the overall goal is complete.
-Return ONLY valid JSON: {"complete": bool, "reason": str}
+Return ONLY valid JSON: {{"complete": bool, "reason": str}}
 Never output markdown. Never output prose outside JSON."""
 
 
@@ -254,6 +222,17 @@ def _capture_screenshot_b64(width: int, height: int) -> str:
         return base64.b64encode(buf.getvalue()).decode("utf-8")
 
 
+def _sanitize_json_text(text: str) -> str:
+    """Strip trailing commas and JS-style comments that some LLMs emit."""
+    # Remove single-line comments //...
+    text = re.sub(r'//[^\n]*', '', text)
+    # Remove block comments /* ... */
+    text = re.sub(r'/\*.*?\*/', '', text, flags=re.DOTALL)
+    # Remove trailing commas before } or ]
+    text = re.sub(r',\s*([}\]])', r'\1', text)
+    return text
+
+
 def _extract_json(text: str) -> Any:
     """Extract JSON from LLM response text, handling markdown code fences and conversational filler."""
     text = text.strip()
@@ -267,11 +246,17 @@ def _extract_json(text: str) -> Any:
         end = text.rfind("}")
         if start != -1 and end != -1 and end > start:
             text = text[start:end+1].strip()
-    
+
+    # First attempt — raw
     try:
         return json.loads(text)
+    except json.JSONDecodeError:
+        pass
+
+    # Second attempt — after sanitizing trailing commas / comments
+    try:
+        return json.loads(_sanitize_json_text(text))
     except json.JSONDecodeError as e:
-        # If it still fails, log it and re-raise (the LLM retry loop will handle the crash)
         raise ValueError(f"Failed to parse JSON: {e}\nRaw text was:\n{text}")
 
 
@@ -577,7 +562,7 @@ class PlannerProvider:
         
         content: List[Any] = [{"type": "text", "text": prompt}]
         if screenshot_b64 and ("llava" in model.lower() or "vision" in model.lower()):
-            content.insert(0, {"type": "image_url", "image_url": {"url": f"data:image/png;base64,{screenshot_b64}"}})
+            content.insert(0, {"type": "image_url", "image_url": {"url": f"data:image/png;base64,{screenshot_b64} "}})
             
         messages = [
             {"role": "system", "content": system},
@@ -671,15 +656,20 @@ class PlannerProvider:
         prompt = f"Goal: {goal}\n\nDecompose this goal into 2-8 sequential sub-tasks with concrete actions."
         if memory_context:
             prompt = f"Relevant past experience:\n{memory_context}\n\n{prompt}"
+        
+        packs = get_mode_packs(mode)
+        tool_guidance = get_tool_guidance(packs)
+        
         if mode == "coding":
-            system = CODING_SYSTEM_PROMPT
+            system = CODING_SYSTEM_PROMPT.format(tool_guidance=tool_guidance)
             raw_text = self._call_llm(system, prompt)  # no screenshot for coding
         elif mode == "computer_use":
-            system = COMPUTER_USE_SYSTEM_PROMPT
+            system = COMPUTER_USE_SYSTEM_PROMPT.format(tool_guidance=tool_guidance)
             raw_text = self._call_llm(system, prompt)  # no screenshot — DOM-based
         else:
-            system = HIERARCHICAL_SYSTEM_PROMPT
+            system = HIERARCHICAL_SYSTEM_PROMPT.format(tool_guidance=tool_guidance)
             raw_text = self._call_llm(system, prompt, latest_screenshot_b64)
+            
         return HierarchicalPlan.model_validate(_normalize_hierarchical_plan(_extract_json(raw_text)))
 
     def reflect_on_subtask(
@@ -690,6 +680,9 @@ class PlannerProvider:
         post_screenshot_b64: Optional[str] = None,
         mode: str = "computer",
     ) -> Dict[str, Any]:
+        packs = get_mode_packs(mode)
+        tool_guidance = get_tool_guidance(packs)
+        
         if mode == "coding":
             prompt = (
                 f"Sub-task: {description}\n\n"
@@ -697,7 +690,7 @@ class PlannerProvider:
                 f"Results (stdout/stderr/file contents):\n{json.dumps(results, indent=2)}\n\n"
                 "Based on the action results, did this sub-task succeed?"
             )
-            raw_text = self._call_llm(CODING_REFLECT_PROMPT, prompt)  # no screenshot
+            raw_text = self._call_llm(CODING_REFLECT_PROMPT.format(tool_guidance=tool_guidance), prompt)  # no screenshot
         elif mode == "computer_use":
             prompt = (
                 f"Sub-task: {description}\n\n"
@@ -705,7 +698,7 @@ class PlannerProvider:
                 f"Results (page text / accessibility trees / URLs):\n{json.dumps(results, indent=2)[:8000]}\n\n"
                 "Based on the action results, did this sub-task succeed?"
             )
-            raw_text = self._call_llm(COMPUTER_USE_REFLECT_PROMPT, prompt)  # no screenshot
+            raw_text = self._call_llm(COMPUTER_USE_REFLECT_PROMPT.format(tool_guidance=tool_guidance), prompt)  # no screenshot
         else:
             prompt = (
                 f"Sub-task: {description}\n\n"
