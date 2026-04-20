@@ -158,10 +158,13 @@ class MemoryStore:
             if len(summary_text) > 4000:
                 summary_text = summary_text[:4000] + "..."
             
+            deleted = False
             try:
                 self.collection.delete(ids=oldest_ids)
+                deleted = True
             except AttributeError:
-                # _FallbackCollection doesn't support delete easily
+                # _FallbackCollection doesn't support delete — skip summarisation
                 pass
-            
-            self.add("summary", summary_text, {"task_id": task_id})
+
+            if deleted:
+                self.add("summary", summary_text, {"task_id": task_id})

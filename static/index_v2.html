@@ -1,0 +1,2520 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+<meta charset="UTF-8">
+<meta name="viewport" content="width=device-width, initial-scale=1.0">
+<title>AI Computer / Clean Stream</title>
+<link rel="preconnect" href="https://fonts.googleapis.com">
+<link rel="preconnect" href="https://fonts.gstatic.com" crossorigin>
+<link href="https://fonts.googleapis.com/css2?family=Inter:wght@400;500;600;700&family=Instrument+Serif:ital@0;1&family=JetBrains+Mono:wght@400;500;600&display=swap" rel="stylesheet">
+<style>
+  :root {
+    --paper: #f6f3ec;
+    --panel: rgba(255, 255, 255, 0.72);
+    --panel-strong: rgba(255, 255, 255, 0.9);
+    --ink: #1c1a17;
+    --muted: #70695f;
+    --muted-soft: #958d82;
+    --line: rgba(44, 36, 26, 0.12);
+    --line-strong: rgba(44, 36, 26, 0.2);
+    --accent: #2e63d3;
+    --accent-soft: rgba(46, 99, 211, 0.12);
+    --ok: #1d8f5a;
+    --ok-soft: rgba(29, 143, 90, 0.12);
+    --warn: #b56a11;
+    --warn-soft: rgba(181, 106, 17, 0.13);
+    --err: #bb3f38;
+    --err-soft: rgba(187, 63, 56, 0.12);
+    --shadow: 0 18px 40px rgba(20, 17, 12, 0.08);
+    --shadow-soft: 0 10px 24px rgba(20, 17, 12, 0.05);
+    --radius-lg: 24px;
+    --radius: 18px;
+    --radius-sm: 12px;
+  }
+
+  * { box-sizing: border-box; }
+  html, body { height: 100%; }
+  body {
+    margin: 0;
+    font-family: 'Inter', system-ui, sans-serif;
+    color: var(--ink);
+    background:
+      radial-gradient(circle at top left, rgba(255,255,255,0.7), transparent 30%),
+      linear-gradient(180deg, #faf8f2 0%, var(--paper) 100%);
+    overflow: hidden;
+    -webkit-font-smoothing: antialiased;
+  }
+
+  body::before {
+    content: '';
+    position: fixed;
+    inset: 0;
+    pointer-events: none;
+    opacity: 0.35;
+    background-image: radial-gradient(rgba(38, 30, 18, 0.06) 0.65px, transparent 0.65px);
+    background-size: 10px 10px;
+  }
+
+  button, textarea, select, input {
+    font: inherit;
+  }
+
+  button {
+    cursor: pointer;
+    border: 0;
+    background: none;
+  }
+
+  a {
+    color: inherit;
+    text-decoration: none;
+  }
+
+  .app-shell {
+    position: relative;
+    z-index: 1;
+    display: grid;
+    grid-template-columns: 280px minmax(0, 1fr);
+    height: 100vh;
+  }
+
+  .sidebar {
+    background: rgba(255, 255, 255, 0.58);
+    border-right: 1px solid var(--line);
+    backdrop-filter: blur(20px);
+    display: flex;
+    flex-direction: column;
+    min-width: 0;
+  }
+
+  .sidebar-top {
+    padding: 18px 18px 14px;
+    border-bottom: 1px solid var(--line);
+  }
+
+  .brand-row {
+    display: flex;
+    align-items: center;
+    gap: 12px;
+    margin-bottom: 16px;
+  }
+
+  .nav-toggle {
+    display: none;
+    width: 40px;
+    height: 40px;
+    border-radius: 999px;
+    align-items: center;
+    justify-content: center;
+    border: 1px solid var(--line);
+    background: var(--panel-strong);
+    box-shadow: var(--shadow-soft);
+  }
+
+  .brand-mark {
+    width: 38px;
+    height: 38px;
+    border-radius: 14px;
+    display: grid;
+    place-items: center;
+    background: linear-gradient(145deg, #111111, #3a342f);
+    color: #f8f3e8;
+    box-shadow: inset 0 1px 0 rgba(255,255,255,0.08), var(--shadow-soft);
+    font-family: 'Instrument Serif', serif;
+    font-size: 22px;
+  }
+
+  .brand-copy {
+    min-width: 0;
+  }
+
+  .brand-copy h1 {
+    margin: 0;
+    font-size: 18px;
+    font-weight: 600;
+    letter-spacing: -0.02em;
+  }
+
+  .brand-copy p {
+    margin: 3px 0 0;
+    font-size: 12px;
+    color: var(--muted);
+  }
+
+  .compare-row {
+    display: flex;
+    gap: 8px;
+  }
+
+  .compare-link {
+    display: inline-flex;
+    align-items: center;
+    gap: 6px;
+    padding: 8px 10px;
+    border-radius: 999px;
+    border: 1px solid var(--line);
+    background: rgba(255,255,255,0.65);
+    color: var(--muted);
+    font-size: 12px;
+    font-weight: 600;
+  }
+
+  .compare-link.active {
+    color: var(--ink);
+    border-color: rgba(28, 26, 23, 0.18);
+    background: rgba(255,255,255,0.95);
+    box-shadow: inset 0 1px 0 rgba(255,255,255,0.9);
+  }
+
+  .sidebar-controls {
+    padding: 16px 18px 14px;
+  }
+
+  .sidebar-button {
+    width: 100%;
+    display: inline-flex;
+    align-items: center;
+    justify-content: space-between;
+    padding: 12px 14px;
+    border-radius: 16px;
+    background: #111111;
+    color: #f8f4eb;
+    font-weight: 600;
+    box-shadow: var(--shadow-soft);
+  }
+
+  .sidebar-button span:last-child {
+    font-family: 'JetBrains Mono', monospace;
+    font-size: 11px;
+    opacity: 0.7;
+  }
+
+  .history-search {
+    padding: 0 18px 12px;
+  }
+
+  .history-search input {
+    width: 100%;
+    border-radius: 14px;
+    border: 1px solid var(--line);
+    background: rgba(255,255,255,0.74);
+    padding: 11px 13px;
+    color: var(--ink);
+    outline: none;
+  }
+
+  .history-search input:focus {
+    border-color: rgba(46, 99, 211, 0.28);
+    box-shadow: 0 0 0 4px var(--accent-soft);
+  }
+
+  .history-header {
+    display: flex;
+    align-items: center;
+    justify-content: space-between;
+    padding: 0 18px 10px;
+    color: var(--muted-soft);
+    font-size: 11px;
+    font-weight: 700;
+    text-transform: uppercase;
+    letter-spacing: 0.08em;
+  }
+
+  .history-list {
+    flex: 1;
+    overflow: auto;
+    padding: 0 10px 18px;
+  }
+
+  .history-item {
+    display: flex;
+    gap: 12px;
+    align-items: flex-start;
+    padding: 11px 12px;
+    border-radius: 16px;
+    margin-bottom: 4px;
+    border: 1px solid transparent;
+    transition: background 120ms ease, border-color 120ms ease;
+  }
+
+  .history-item:hover {
+    background: rgba(255,255,255,0.5);
+    border-color: rgba(44, 36, 26, 0.08);
+  }
+
+  .history-item.active {
+    background: rgba(255,255,255,0.86);
+    border-color: rgba(44, 36, 26, 0.12);
+    box-shadow: var(--shadow-soft);
+  }
+
+  .history-dot {
+    width: 10px;
+    height: 10px;
+    border-radius: 999px;
+    margin-top: 7px;
+    flex-shrink: 0;
+    background: rgba(28, 26, 23, 0.2);
+  }
+
+  .history-dot.running {
+    background: var(--accent);
+    box-shadow: 0 0 0 6px rgba(46, 99, 211, 0.12);
+  }
+
+  .history-dot.done {
+    background: var(--ok);
+  }
+
+  .history-dot.failed,
+  .history-dot.cancelled {
+    background: var(--err);
+  }
+
+  .history-copy {
+    min-width: 0;
+  }
+
+  .history-goal {
+    font-size: 13px;
+    font-weight: 600;
+    line-height: 1.35;
+    color: var(--ink);
+    display: -webkit-box;
+    -webkit-line-clamp: 2;
+    -webkit-box-orient: vertical;
+    overflow: hidden;
+  }
+
+  .history-meta {
+    margin-top: 4px;
+    color: var(--muted);
+    font-size: 11px;
+  }
+
+  .history-empty {
+    margin: 10px 8px 0;
+    padding: 16px;
+    color: var(--muted);
+    border: 1px dashed var(--line-strong);
+    border-radius: 18px;
+    background: rgba(255,255,255,0.45);
+    font-size: 13px;
+    line-height: 1.5;
+  }
+
+  .sidebar-footer {
+    border-top: 1px solid var(--line);
+    padding: 16px 18px 18px;
+    display: grid;
+    gap: 12px;
+  }
+
+  .selector-label {
+    font-size: 11px;
+    font-weight: 700;
+    letter-spacing: 0.08em;
+    text-transform: uppercase;
+    color: var(--muted-soft);
+    margin-bottom: 6px;
+  }
+
+  .selector-wrap select {
+    width: 100%;
+    border-radius: 14px;
+    border: 1px solid var(--line);
+    background: rgba(255,255,255,0.82);
+    padding: 11px 13px;
+    color: var(--ink);
+    outline: none;
+  }
+
+  .main {
+    min-width: 0;
+    display: flex;
+    flex-direction: column;
+    height: 100vh;
+  }
+
+  .topbar {
+    display: flex;
+    align-items: center;
+    justify-content: space-between;
+    gap: 18px;
+    padding: 14px 24px;
+    border-bottom: 1px solid var(--line);
+    backdrop-filter: blur(18px);
+    background: rgba(246, 243, 236, 0.64);
+  }
+
+  .topbar-main {
+    min-width: 0;
+  }
+
+  .topbar-main p {
+    margin: 0 0 4px;
+    color: var(--muted);
+    font-size: 11px;
+  }
+
+  .topbar-main h2 {
+    margin: 0;
+    font-size: 18px;
+    font-weight: 600;
+    letter-spacing: -0.03em;
+    white-space: nowrap;
+    overflow: hidden;
+    text-overflow: ellipsis;
+  }
+
+  .topbar-pills {
+    display: flex;
+    align-items: center;
+    gap: 10px;
+    flex-wrap: wrap;
+    justify-content: flex-end;
+  }
+
+  .pill {
+    display: inline-flex;
+    align-items: center;
+    gap: 8px;
+    padding: 7px 11px;
+    border-radius: 999px;
+    border: 1px solid var(--line);
+    background: rgba(255,255,255,0.66);
+    font-size: 11px;
+    color: var(--muted);
+    box-shadow: inset 0 1px 0 rgba(255,255,255,0.72);
+  }
+
+  .pill strong {
+    color: var(--ink);
+  }
+
+  .pill.status-running {
+    border-color: rgba(46, 99, 211, 0.2);
+    background: rgba(255,255,255,0.94);
+    color: var(--accent);
+  }
+
+  .pill.status-complete {
+    color: var(--ok);
+    border-color: rgba(29, 143, 90, 0.2);
+  }
+
+  .pill.status-paused,
+  .pill.status-cancelled {
+    color: var(--warn);
+    border-color: rgba(181, 106, 17, 0.22);
+  }
+
+  .pill.status-error,
+  .pill.status-failed {
+    color: var(--err);
+    border-color: rgba(187, 63, 56, 0.22);
+  }
+
+  .controls {
+    display: flex;
+    gap: 8px;
+    flex-wrap: wrap;
+  }
+
+  .control-btn {
+    padding: 10px 12px;
+    border-radius: 14px;
+    border: 1px solid var(--line);
+    background: rgba(255,255,255,0.72);
+    color: var(--ink);
+    font-size: 12px;
+    font-weight: 600;
+  }
+
+  .control-btn.primary {
+    background: #111111;
+    border-color: #111111;
+    color: #f8f3ea;
+  }
+
+  .control-btn.hidden {
+    display: none;
+  }
+
+  .feed-scroll {
+    flex: 1;
+    overflow: auto;
+    padding: 0 24px;
+  }
+
+  .feed {
+    width: min(860px, 100%);
+    margin: 0 auto;
+    padding: 28px 0 32px;
+    display: flex;
+    flex-direction: column;
+    gap: 10px;
+  }
+
+  .welcome {
+    padding: 28px 0 10px;
+  }
+
+  .welcome h3 {
+    margin: 0 0 10px;
+    font-size: 38px;
+    font-family: 'Instrument Serif', serif;
+    font-weight: 400;
+    letter-spacing: -0.04em;
+  }
+
+  .welcome p {
+    max-width: 700px;
+    margin: 0 0 18px;
+    color: var(--muted);
+    line-height: 1.7;
+    font-size: 15px;
+  }
+
+  .example-grid {
+    display: grid;
+    grid-template-columns: repeat(2, minmax(0, 1fr));
+    gap: 12px;
+  }
+
+  .example-btn {
+    text-align: left;
+    padding: 16px;
+    border-radius: 18px;
+    border: 1px solid var(--line);
+    background: rgba(255,255,255,0.68);
+    color: var(--ink);
+    line-height: 1.5;
+    box-shadow: var(--shadow-soft);
+  }
+
+  .example-btn span {
+    display: block;
+    margin-top: 6px;
+    color: var(--muted);
+    font-size: 12px;
+  }
+
+  .message {
+    width: 100%;
+    padding: 12px 0;
+    line-height: 1.65;
+    font-size: 14px;
+    white-space: pre-wrap;
+  }
+
+  .message.user {
+    align-self: flex-end;
+    width: min(720px, 100%);
+    padding: 15px 18px;
+    border-radius: 18px;
+    background: #edf3ff;
+    border: 1px solid rgba(46, 99, 211, 0.14);
+    box-shadow: 0 8px 18px rgba(46, 99, 211, 0.06);
+  }
+
+  .message.system-success {
+    padding-left: 14px;
+    border-left: 2px solid rgba(29, 143, 90, 0.34);
+    color: #215f43;
+    background: linear-gradient(90deg, rgba(29, 143, 90, 0.07), transparent 70%);
+  }
+
+  .message.system-error {
+    padding-left: 14px;
+    border-left: 2px solid rgba(187, 63, 56, 0.32);
+    color: #7d2f29;
+    background: linear-gradient(90deg, rgba(187, 63, 56, 0.08), transparent 70%);
+  }
+
+  .message.system-cancelled {
+    padding-left: 14px;
+    border-left: 2px solid rgba(181, 106, 17, 0.3);
+    color: #855412;
+    background: linear-gradient(90deg, rgba(181, 106, 17, 0.08), transparent 70%);
+  }
+
+  .message.system-note {
+    padding-left: 14px;
+    border-left: 2px solid rgba(28, 26, 23, 0.12);
+    color: var(--muted);
+    background: transparent;
+  }
+
+  .feed-card {
+    width: 100%;
+    padding: 10px 0;
+    border: 0;
+    background: transparent;
+    box-shadow: none;
+  }
+
+  .feed-card.active {
+    border: 0;
+  }
+
+  .card-head {
+    display: flex;
+    align-items: flex-start;
+    justify-content: space-between;
+    gap: 14px;
+    margin-bottom: 8px;
+  }
+
+  .card-head.compact {
+    margin-bottom: 0;
+  }
+
+  .card-meta {
+    min-width: 0;
+    flex: 1;
+  }
+
+  .eyebrow {
+    display: inline-flex;
+    align-items: center;
+    gap: 6px;
+    color: var(--muted);
+    font-size: 11px;
+    font-weight: 700;
+    letter-spacing: 0.06em;
+    text-transform: uppercase;
+  }
+
+  .card-title {
+    margin: 4px 0 3px;
+    font-size: 15px;
+    font-weight: 600;
+    letter-spacing: -0.02em;
+  }
+
+  .card-subtitle {
+    color: var(--muted);
+    font-size: 12px;
+    line-height: 1.55;
+    white-space: pre-wrap;
+  }
+
+  .state-chip {
+    flex-shrink: 0;
+    padding: 2px 0;
+    border-radius: 0;
+    font-size: 11px;
+    font-weight: 700;
+    letter-spacing: 0.05em;
+    text-transform: uppercase;
+    color: var(--muted);
+    background: transparent;
+  }
+
+  .state-chip.running {
+    background: var(--accent-soft);
+    color: var(--accent);
+  }
+
+  .state-chip.ok {
+    background: var(--ok-soft);
+    color: var(--ok);
+  }
+
+  .state-chip.fail {
+    background: var(--err-soft);
+    color: var(--err);
+  }
+
+  .state-chip.waiting {
+    background: var(--warn-soft);
+    color: var(--warn);
+  }
+
+  .tool-output,
+  .artifact-preview,
+  .detail-preview,
+  .modal-code {
+    margin: 0;
+    white-space: pre-wrap;
+    word-break: break-word;
+    font-family: 'JetBrains Mono', monospace;
+    font-size: 12px;
+    line-height: 1.6;
+    color: #302a24;
+    background: rgba(27, 22, 18, 0.028);
+    border: 1px solid rgba(27, 22, 18, 0.05);
+    border-radius: 14px;
+    padding: 11px 13px;
+    overflow: auto;
+    max-height: 340px;
+  }
+
+  .detail-list {
+    display: grid;
+    gap: 8px;
+  }
+
+  .detail-row {
+    border-left: 1px solid rgba(27, 22, 18, 0.12);
+    background: transparent;
+    padding: 8px 0 8px 14px;
+  }
+
+  .detail-row-head {
+    display: flex;
+    align-items: center;
+    justify-content: space-between;
+    gap: 12px;
+    margin-bottom: 10px;
+  }
+
+  .detail-label {
+    font-size: 11px;
+    font-weight: 700;
+    text-transform: uppercase;
+    letter-spacing: 0.07em;
+    color: var(--muted-soft);
+  }
+
+  .detail-title {
+    margin-top: 4px;
+    font-size: 13px;
+    font-weight: 600;
+  }
+
+  .detail-copy {
+    color: var(--muted);
+    font-size: 12px;
+    line-height: 1.55;
+  }
+
+  .plan-card.superseded {
+    opacity: 0.7;
+  }
+
+  .plan-card,
+  .reflection-card,
+  .screenshot-card {
+    padding-left: 14px;
+    border-left: 2px solid rgba(28, 26, 23, 0.1);
+  }
+
+  .tool-card {
+    padding-left: 12px;
+    border-left: 1px solid rgba(28, 26, 23, 0.12);
+  }
+
+  .reasoning-note {
+    padding-left: 12px;
+    border-left: 1px solid rgba(46, 99, 211, 0.2);
+  }
+
+  .reasoning-note .card-title {
+    font-size: 14px;
+  }
+
+  .reasoning-note .card-subtitle {
+    font-size: 12px;
+  }
+
+  .tool-card .card-head,
+  .plan-card .card-head,
+  .reflection-card .card-head,
+  .screenshot-card .card-head {
+    padding-right: 6px;
+  }
+
+  .plan-card {
+    border-left-color: rgba(46, 99, 211, 0.18);
+  }
+
+  .reflection-card.success {
+    border-left-color: rgba(29, 143, 90, 0.28);
+  }
+
+  .reflection-card.failure {
+    border-left-color: rgba(181, 106, 17, 0.28);
+  }
+
+  .subtask-list {
+    display: grid;
+    gap: 8px;
+  }
+
+  .subtask-item {
+    display: flex;
+    align-items: flex-start;
+    gap: 12px;
+    padding: 10px 0 10px 2px;
+    border-bottom: 1px solid rgba(27, 22, 18, 0.06);
+  }
+
+  .subtask-icon {
+    width: 26px;
+    height: 26px;
+    border-radius: 999px;
+    display: inline-flex;
+    align-items: center;
+    justify-content: center;
+    font-size: 11px;
+    font-weight: 700;
+    flex-shrink: 0;
+    color: var(--muted);
+    background: rgba(27, 22, 18, 0.07);
+  }
+
+  .subtask-item.running {
+    background: transparent;
+  }
+
+  .subtask-item.running .subtask-icon {
+    color: var(--accent);
+    background: rgba(46, 99, 211, 0.12);
+  }
+
+  .subtask-item.done .subtask-icon {
+    color: var(--ok);
+    background: rgba(29, 143, 90, 0.12);
+  }
+
+  .subtask-item.failed .subtask-icon {
+    color: var(--err);
+    background: rgba(187, 63, 56, 0.12);
+  }
+
+  .subtask-text {
+    line-height: 1.55;
+  }
+
+  .status-row {
+    padding: 7px 0 7px 12px;
+    border-left: 1px solid rgba(46, 99, 211, 0.24);
+    display: flex;
+    align-items: center;
+    gap: 12px;
+  }
+
+  .status-dot {
+    width: 10px;
+    height: 10px;
+    border-radius: 999px;
+    background: var(--accent);
+    box-shadow: 0 0 0 6px rgba(46, 99, 211, 0.12);
+    flex-shrink: 0;
+  }
+
+  .status-copy {
+    min-width: 0;
+    flex: 1;
+  }
+
+  .status-line {
+    display: flex;
+    align-items: center;
+    gap: 8px;
+    flex-wrap: wrap;
+  }
+
+  .status-title {
+    font-size: 13px;
+    font-weight: 700;
+    letter-spacing: -0.01em;
+  }
+
+  .status-subtitle {
+    margin-top: 2px;
+    color: var(--muted);
+    font-size: 12px;
+    line-height: 1.5;
+  }
+
+  .status-age {
+    color: var(--muted-soft);
+    font-size: 11px;
+    font-family: 'JetBrains Mono', monospace;
+  }
+
+  .status-row.active .status-title::after {
+    content: ' ...';
+    color: var(--muted);
+  }
+
+  .screenshot-img {
+    width: 100%;
+    display: block;
+    border-radius: 18px;
+    border: 1px solid rgba(27, 22, 18, 0.06);
+    box-shadow: 0 8px 20px rgba(20, 17, 12, 0.06);
+    background: #e9e2d7;
+  }
+
+  .screenshot-btn {
+    display: inline-flex;
+    align-items: center;
+    gap: 8px;
+    padding: 10px 12px;
+    border-radius: 12px;
+    border: 1px solid var(--line);
+    background: rgba(255,255,255,0.82);
+    color: var(--ink);
+    font-size: 12px;
+    font-weight: 600;
+  }
+
+  .composer-wrap {
+    border-top: 1px solid var(--line);
+    padding: 16px 24px 22px;
+    background: rgba(246, 243, 236, 0.82);
+    backdrop-filter: blur(18px);
+  }
+
+  .composer {
+    width: min(880px, 100%);
+    margin: 0 auto;
+    background: rgba(255,255,255,0.86);
+    border: 1px solid rgba(44, 36, 26, 0.12);
+    box-shadow: 0 16px 30px rgba(20, 17, 12, 0.08);
+    border-radius: 22px;
+    padding: 14px;
+  }
+
+  .composer textarea {
+    width: 100%;
+    min-height: 68px;
+    max-height: 180px;
+    resize: none;
+    border: 0;
+    background: transparent;
+    color: var(--ink);
+    outline: none;
+    font-size: 15px;
+    line-height: 1.6;
+  }
+
+  .composer-bottom {
+    display: flex;
+    align-items: center;
+    justify-content: space-between;
+    gap: 12px;
+    margin-top: 10px;
+    flex-wrap: wrap;
+  }
+
+  .composer-meta {
+    display: flex;
+    align-items: center;
+    gap: 10px;
+    flex-wrap: wrap;
+  }
+
+  .mini-chip {
+    display: inline-flex;
+    align-items: center;
+    gap: 6px;
+    padding: 7px 10px;
+    border-radius: 999px;
+    background: rgba(27, 22, 18, 0.04);
+    color: var(--muted);
+    font-size: 11px;
+  }
+
+  .composer-actions {
+    display: flex;
+    align-items: center;
+    gap: 10px;
+  }
+
+  .send-btn {
+    display: inline-flex;
+    align-items: center;
+    gap: 8px;
+    padding: 12px 15px;
+    border-radius: 14px;
+    background: #111111;
+    color: #f8f3ea;
+    font-weight: 700;
+  }
+
+  .char-count {
+    color: var(--muted);
+    font-size: 12px;
+  }
+
+  .toast-stack {
+    position: fixed;
+    right: 18px;
+    bottom: 18px;
+    display: flex;
+    flex-direction: column;
+    gap: 10px;
+    z-index: 50;
+  }
+
+  .toast {
+    min-width: 220px;
+    max-width: 360px;
+    border-radius: 16px;
+    padding: 14px 16px;
+    color: #fff;
+    box-shadow: var(--shadow);
+    font-size: 13px;
+    line-height: 1.5;
+  }
+
+  .toast.info { background: #2b2a27; }
+  .toast.ok { background: #1d8f5a; }
+  .toast.warn { background: #b56a11; }
+  .toast.err { background: #bb3f38; }
+
+  .overlay {
+    position: fixed;
+    inset: 0;
+    background: rgba(16, 13, 10, 0.34);
+    backdrop-filter: blur(8px);
+    display: none;
+    align-items: center;
+    justify-content: center;
+    padding: 20px;
+    z-index: 40;
+  }
+
+  .overlay.show {
+    display: flex;
+  }
+
+  .modal {
+    width: min(680px, 100%);
+    background: #fffdf9;
+    border: 1px solid rgba(44, 36, 26, 0.14);
+    border-radius: 28px;
+    box-shadow: var(--shadow);
+    padding: 24px;
+  }
+
+  .modal h3 {
+    margin: 12px 0 6px;
+    font-size: 26px;
+    letter-spacing: -0.03em;
+  }
+
+  .modal p {
+    margin: 0;
+    color: var(--muted);
+    line-height: 1.65;
+  }
+
+  .modal-actions {
+    display: flex;
+    justify-content: flex-end;
+    gap: 10px;
+    margin-top: 18px;
+  }
+
+  .modal-btn {
+    padding: 11px 14px;
+    border-radius: 14px;
+    border: 1px solid var(--line);
+    background: rgba(255,255,255,0.9);
+    color: var(--ink);
+    font-weight: 700;
+  }
+
+  .modal-btn.primary {
+    background: #111111;
+    color: #f8f3ea;
+    border-color: #111111;
+  }
+
+  .lightbox {
+    position: fixed;
+    inset: 0;
+    background: rgba(16, 13, 10, 0.84);
+    display: none;
+    align-items: center;
+    justify-content: center;
+    padding: 20px;
+    z-index: 60;
+  }
+
+  .lightbox.show {
+    display: flex;
+  }
+
+  .lightbox-inner {
+    max-width: min(1200px, 96vw);
+    max-height: 92vh;
+    display: grid;
+    gap: 14px;
+  }
+
+  .lightbox img {
+    max-width: min(1200px, 96vw);
+    max-height: calc(92vh - 48px);
+    border-radius: 22px;
+    border: 1px solid rgba(255,255,255,0.16);
+    box-shadow: var(--shadow);
+  }
+
+  .lightbox-caption {
+    text-align: center;
+    color: rgba(255,255,255,0.78);
+    font-size: 13px;
+  }
+
+  .lightbox-close {
+    position: absolute;
+    top: 16px;
+    right: 16px;
+    width: 44px;
+    height: 44px;
+    border-radius: 999px;
+    background: rgba(255,255,255,0.12);
+    color: #fff;
+    font-size: 20px;
+  }
+
+  .hidden {
+    display: none !important;
+  }
+
+  @media (max-width: 1080px) {
+    .app-shell {
+      grid-template-columns: minmax(0, 1fr);
+    }
+
+    .sidebar {
+      position: fixed;
+      inset: 0 auto 0 0;
+      width: min(320px, 88vw);
+      transform: translateX(-105%);
+      transition: transform 180ms ease;
+      z-index: 20;
+      box-shadow: var(--shadow);
+    }
+
+    body.nav-open .sidebar {
+      transform: translateX(0);
+    }
+
+    .nav-toggle {
+      display: inline-flex;
+    }
+
+    .topbar {
+      padding-left: 18px;
+      padding-right: 18px;
+    }
+
+    .feed-scroll,
+    .composer-wrap {
+      padding-left: 18px;
+      padding-right: 18px;
+    }
+  }
+
+  @media (max-width: 760px) {
+    .example-grid {
+      grid-template-columns: 1fr;
+    }
+
+    .topbar {
+      flex-direction: column;
+      align-items: stretch;
+    }
+
+    .topbar-pills,
+    .controls {
+      justify-content: flex-start;
+    }
+
+    .card-head,
+    .composer-bottom {
+      flex-direction: column;
+      align-items: stretch;
+    }
+
+    .composer-actions {
+      justify-content: space-between;
+    }
+  }
+</style>
+</head>
+<body>
+<div class="app-shell">
+  <aside class="sidebar" id="sidebar">
+    <div class="sidebar-top">
+      <div class="brand-row">
+        <div class="brand-mark">A</div>
+        <div class="brand-copy">
+          <h1>AI Computer</h1>
+          <p>Single-stream workspace</p>
+        </div>
+      </div>
+      <div class="compare-row">
+        <a class="compare-link" href="/">Current UI</a>
+        <a class="compare-link active" href="/v2">Clean v2</a>
+      </div>
+    </div>
+    <div class="sidebar-controls">
+      <button class="sidebar-button" id="new-session-btn" type="button">
+        <span>New session</span>
+        <span>Ctrl+N</span>
+      </button>
+    </div>
+    <div class="history-search">
+      <input id="history-search" type="search" placeholder="Search history">
+    </div>
+    <div class="history-header">
+      <span>Sessions</span>
+      <span id="history-count">0</span>
+    </div>
+    <div class="history-list" id="task-history">
+      <div class="history-empty">Your recent runs appear here. Click any session to replay the whole task in this cleaner stream view.</div>
+    </div>
+    <div class="sidebar-footer">
+      <div class="selector-wrap">
+        <div class="selector-label">Model</div>
+        <select id="model-id"></select>
+      </div>
+      <div class="selector-wrap">
+        <div class="selector-label">Mode</div>
+        <select id="mode-id">
+          <option value="auto">Auto detect</option>
+          <option value="coding">Coding</option>
+          <option value="computer">Desktop control</option>
+          <option value="computer_use">Browser cowork</option>
+        </select>
+      </div>
+    </div>
+  </aside>
+
+  <main class="main">
+    <header class="topbar">
+      <div class="topbar-main">
+        <p>Ai_computer / Claude-style compare view</p>
+        <h2 id="task-title">Clean stream</h2>
+      </div>
+      <div class="topbar-pills">
+        <button class="nav-toggle" id="nav-toggle" type="button">=</button>
+        <div class="pill status-ready" id="status-pill"><strong>Ready</strong></div>
+        <div class="pill" id="mode-pill"><strong>Mode:</strong> coding</div>
+        <div class="pill" id="background-pill"><strong>Run:</strong> background</div>
+        <div class="pill" id="elapsed-pill"><strong>Elapsed:</strong> <span id="elapsed-time">00:00</span></div>
+      </div>
+    </header>
+
+    <div class="feed-scroll" id="feed-scroll">
+      <div class="feed" id="feed">
+        <section class="welcome" id="welcome">
+          <h3>Everything in one clean stream.</h3>
+          <p>This version keeps the left history rail, but collapses plans, thinking, tools, file edits, terminal output, screenshots, and approvals into a single timeline so the agent feels more like one conversation and less like three separate dashboards.</p>
+          <div class="example-grid">
+            <button class="example-btn" type="button" data-example="Create a FastAPI app with CRUD endpoints and tests.">
+              Build a coding task
+              <span>Plans, file writes, terminal output, and reflections render inline.</span>
+            </button>
+            <button class="example-btn" type="button" data-example="Open example.com in browser cowork mode, summarize the page, and save notes to the workspace.">
+              Try browser cowork
+              <span>Browser actions and screenshots stay in the same stream.</span>
+            </button>
+            <button class="example-btn" type="button" data-example="Inspect the existing workspace, explain the architecture, and suggest two cleanup tasks.">
+              Review a project
+              <span>Good for comparing the old UI to this simpler feed.</span>
+            </button>
+            <button class="example-btn" type="button" data-example="Update the frontend to a lighter premium style and show me each file change.">
+              Ship a UI change
+              <span>File rewrites, tool calls, and thinking all stay visible without extra panels.</span>
+            </button>
+          </div>
+        </section>
+      </div>
+    </div>
+
+    <div class="composer-wrap">
+      <div class="composer">
+        <textarea id="input" placeholder="Describe a task. The agent will plan, act, reflect, and ask before risky actions."></textarea>
+        <div class="composer-bottom">
+          <div class="composer-meta">
+            <div class="mini-chip">Press Enter to send</div>
+            <div class="mini-chip">Shift+Enter for newline</div>
+            <div class="char-count" id="char-count"></div>
+          </div>
+          <div class="composer-actions">
+            <div class="controls" id="controls">
+              <button class="control-btn hidden" id="btn-pause" type="button">Pause</button>
+              <button class="control-btn hidden" id="btn-cancel" type="button">Cancel</button>
+              <button class="control-btn hidden" id="btn-retry" type="button">Retry</button>
+              <button class="control-btn hidden" id="btn-copy-log" type="button">Copy log</button>
+              <button class="control-btn hidden" id="btn-download-log" type="button">Download log</button>
+            </div>
+            <button class="send-btn" id="send" type="button">Start task</button>
+          </div>
+        </div>
+      </div>
+    </div>
+  </main>
+</div>
+
+<div class="overlay" id="approval">
+  <div class="modal">
+    <div class="eyebrow">Approval required</div>
+    <h3 id="app-title">Action requires approval</h3>
+    <p id="app-reason">The agent wants to run something risky.</p>
+    <pre class="modal-code" id="app-code"></pre>
+    <div class="modal-actions">
+      <button class="modal-btn" id="app-deny" type="button">Deny</button>
+      <button class="modal-btn primary" id="app-approve" type="button">Approve</button>
+    </div>
+  </div>
+</div>
+
+<div class="overlay" id="permission">
+  <div class="modal">
+    <div class="eyebrow">Permission requested</div>
+    <h3 id="perm-title">Permission requested</h3>
+    <p id="perm-reason">The agent wants additional access.</p>
+    <pre class="modal-code" id="perm-code"></pre>
+    <div class="modal-actions">
+      <button class="modal-btn" id="perm-deny" type="button">Deny</button>
+      <button class="modal-btn primary" id="perm-approve" type="button">Allow</button>
+    </div>
+  </div>
+</div>
+
+<div class="lightbox" id="lightbox">
+  <button class="lightbox-close" id="lightbox-close" type="button">x</button>
+  <div class="lightbox-inner">
+    <img id="lightbox-img" alt="Screenshot preview">
+    <div class="lightbox-caption" id="lightbox-caption">Screenshot</div>
+  </div>
+</div>
+
+<div class="toast-stack" id="toast-stack"></div>
+
+<script>
+  const $ = (id) => document.getElementById(id);
+
+  let KEY = '';
+  let keyReady = Promise.resolve('');
+
+  let task = null;
+  let currentViewedTask = null;
+  let sse = null;
+  let streamCursor = 0;
+  let reconnectAttempts = 0;
+  let reconnectTimer = null;
+  let streamClosedManually = false;
+  let isPaused = false;
+  let timer = null;
+  let startTime = 0;
+
+  let historyItems = [];
+  let activeHistoryItem = null;
+  let activePlanCard = null;
+  let liveStatusCard = null;
+  let liveStatusMessage = '';
+  let planSubtasks = [];
+  let currentSubtaskIdx = 0;
+  let subtaskEls = {};
+  let screenshots = [];
+  let currentMode = 'coding';
+  let currentBackgroundMode = true;
+  let lastActionId = null;
+  let terminalStateKey = null;
+  const actionCards = {};
+
+  const WELCOME_HTML = `
+    <section class="welcome" id="welcome">
+      <h3>Everything in one clean stream.</h3>
+      <p>This version keeps the left history rail, but collapses plans, thinking, tools, file edits, terminal output, screenshots, and approvals into a single timeline so the agent feels more like one conversation and less like three separate dashboards.</p>
+      <div class="example-grid">
+        <button class="example-btn" type="button" data-example="Create a FastAPI app with CRUD endpoints and tests.">
+          Build a coding task
+          <span>Plans, file writes, terminal output, and reflections render inline.</span>
+        </button>
+        <button class="example-btn" type="button" data-example="Open example.com in browser cowork mode, summarize the page, and save notes to the workspace.">
+          Try browser cowork
+          <span>Browser actions and screenshots stay in the same stream.</span>
+        </button>
+        <button class="example-btn" type="button" data-example="Inspect the existing workspace, explain the architecture, and suggest two cleanup tasks.">
+          Review a project
+          <span>Good for comparing the old UI to this simpler feed.</span>
+        </button>
+        <button class="example-btn" type="button" data-example="Update the frontend to a lighter premium style and show me each file change.">
+          Ship a UI change
+          <span>File rewrites, tool calls, and thinking all stay visible without extra panels.</span>
+        </button>
+      </div>
+    </section>
+  `;
+
+  const api = (path, method = 'GET', body = null) => fetch(path, {
+    method,
+    headers: {
+      'Authorization': `Bearer ${KEY || ''}`,
+      'Content-Type': 'application/json'
+    },
+    body: body ? JSON.stringify(body) : null
+  }).then(async (response) => {
+    if (response.ok) return response.json();
+    const err = await response.json().catch(() => ({}));
+    throw { status: response.status, detail: err.detail || response.statusText || 'Unknown error' };
+  });
+
+  const safeDate = (value) => {
+    const parsed = typeof value === 'number' ? value : Date.parse(value || '');
+    return Number.isNaN(parsed) ? null : parsed;
+  };
+
+  const relTime = (value) => {
+    const ts = safeDate(value);
+    if (ts === null) return '';
+    const diff = Math.floor((Date.now() - ts) / 1000);
+    if (diff < 60) return `${diff}s ago`;
+    if (diff < 3600) return `${Math.floor(diff / 60)}m ago`;
+    if (diff < 86400) return `${Math.floor(diff / 3600)}h ago`;
+    return `${Math.floor(diff / 86400)}d ago`;
+  };
+
+  const humanize = (value = '') => value
+    .replace(/_/g, ' ')
+    .replace(/\b\w/g, (char) => char.toUpperCase());
+
+  const truncate = (value = '', limit = 500) => value.length > limit ? `${value.slice(0, limit)}\n...` : value;
+
+  const isTerminalStatus = (value = '') => /complete|failed|error|cancelled/i.test(value);
+
+  const toast = (message, kind = 'info', ttl = 3200) => {
+    const el = document.createElement('div');
+    el.className = `toast ${kind}`;
+    el.textContent = message;
+    $('toast-stack').appendChild(el);
+    if (ttl > 0) {
+      setTimeout(() => {
+        el.remove();
+      }, ttl);
+    }
+  };
+
+  const removeWelcome = () => {
+    const welcome = $('welcome');
+    if (welcome) welcome.remove();
+  };
+
+  const bindExamples = () => {
+    document.querySelectorAll('.example-btn').forEach((btn) => {
+      btn.onclick = () => {
+        $('input').value = btn.dataset.example || '';
+        $('input').focus();
+        autoGrow();
+        updateCharCount();
+      };
+    });
+  };
+
+  const scrollFeed = () => {
+    $('feed-scroll').scrollTop = $('feed-scroll').scrollHeight;
+  };
+
+  const appendMessage = (text, kind = 'system-note') => {
+    removeWelcome();
+    const el = document.createElement('div');
+    el.className = `message ${kind}`;
+    el.textContent = text;
+    $('feed').appendChild(el);
+    scrollFeed();
+    return el;
+  };
+
+  const createFeedCard = (className = '') => {
+    removeWelcome();
+    const card = document.createElement('div');
+    card.className = `feed-card ${className}`.trim();
+    $('feed').appendChild(card);
+    scrollFeed();
+    return card;
+  };
+
+  const setStatus = (status) => {
+    const map = {
+      ready: 'Ready',
+      running: 'Running',
+      paused: 'Paused',
+      complete: 'Complete',
+      failed: 'Failed',
+      error: 'Error',
+      cancelled: 'Cancelled'
+    };
+    const key = (status || 'ready').toLowerCase();
+    $('status-pill').className = `pill status-${key}`;
+    $('status-pill').innerHTML = `<strong>${map[key] || humanize(key)}</strong>`;
+  };
+
+  const setMode = (mode) => {
+    currentMode = mode || 'coding';
+    $('mode-pill').innerHTML = `<strong>Mode:</strong> ${humanize(currentMode)}`;
+  };
+
+  const setBackgroundMode = (background, message = '') => {
+    currentBackgroundMode = !!background;
+    $('background-pill').innerHTML = `<strong>Run:</strong> ${currentBackgroundMode ? 'background' : 'desktop'}`;
+    if (message) appendMessage(message, 'system-note');
+  };
+
+  const updateClock = () => {
+    if (!startTime) {
+      $('elapsed-time').textContent = '00:00';
+      return;
+    }
+    const totalSeconds = Math.floor((Date.now() - startTime) / 1000);
+    const mins = String(Math.floor(totalSeconds / 60)).padStart(2, '0');
+    const secs = String(totalSeconds % 60).padStart(2, '0');
+    $('elapsed-time').textContent = `${mins}:${secs}`;
+  };
+
+  const setTaskTitle = (title) => {
+    $('task-title').textContent = title || 'Clean stream';
+  };
+
+  const renderHistoryItem = (taskRecord, makeActive = false) => {
+    const item = document.createElement('button');
+    item.type = 'button';
+    item.className = `history-item${makeActive ? ' active' : ''}`;
+    item.dataset.taskId = taskRecord.id || '';
+    const status = (taskRecord.status || '').toLowerCase();
+    const dotState = status === 'running'
+      ? 'running'
+      : (status === 'done' || status === 'complete')
+        ? 'done'
+        : (status === 'failed' || status === 'error' || status === 'cancelled')
+          ? status === 'cancelled' ? 'cancelled' : 'failed'
+          : '';
+    item.innerHTML = `
+      <span class="history-dot ${dotState}"></span>
+      <span class="history-copy">
+        <span class="history-goal"></span>
+        <span class="history-meta">${relTime(taskRecord.created_at || taskRecord.timestamp || taskRecord.finished_at) || humanize(status || 'saved')}</span>
+      </span>
+    `;
+    item.querySelector('.history-goal').textContent = taskRecord.goal || '(untitled)';
+    item.title = [taskRecord.mode, taskRecord.model].filter(Boolean).join(' / ');
+    $('task-history').prepend(item);
+    historyItems.unshift(item);
+    bindHistoryItem(item, taskRecord.id);
+    return item;
+  };
+
+  const refreshHistoryCount = () => {
+    $('history-count').textContent = String(historyItems.length);
+  };
+
+  const bindHistoryItem = (element, taskId) => {
+    if (!taskId) return;
+    element.onclick = async () => {
+      if (task && sse) {
+        toast('Cancel the running task before opening another session.', 'warn');
+        return;
+      }
+      if (task === taskId) return;
+      try {
+        const result = await api(`/api/tasks/${taskId}/log`);
+        loadTaskLog(taskId, result.log || [], element);
+        if (window.innerWidth <= 1080) document.body.classList.remove('nav-open');
+      } catch (_) {
+        toast('Could not load that task log.', 'err');
+      }
+    };
+  };
+
+  const filterHistory = () => {
+    const query = $('history-search').value.trim().toLowerCase();
+    historyItems.forEach((item) => {
+      const goal = item.querySelector('.history-goal')?.textContent.toLowerCase() || '';
+      item.style.display = !query || goal.includes(query) ? '' : 'none';
+    });
+  };
+
+  const addActiveHistoryItem = (goal) => {
+    const empty = $('task-history').querySelector('.history-empty');
+    if (empty) empty.remove();
+    historyItems.forEach((item) => item.classList.remove('active'));
+    const item = renderHistoryItem({ id: task, goal, status: 'running', created_at: new Date().toISOString() }, true);
+    activeHistoryItem = item;
+    refreshHistoryCount();
+    return item;
+  };
+
+  const markHistoryFinal = (state) => {
+    if (!activeHistoryItem) return;
+    activeHistoryItem.classList.remove('active');
+    const dot = activeHistoryItem.querySelector('.history-dot');
+    if (!dot) return;
+    dot.className = `history-dot ${state}`;
+  };
+
+  const ensureStatusCard = () => {
+    if (liveStatusCard && liveStatusCard.isConnected) return liveStatusCard;
+    const row = document.createElement('div');
+    row.className = 'status-row active';
+    row.innerHTML = `
+      <div class="status-dot"></div>
+      <div class="status-copy">
+        <div class="status-line">
+          <div class="status-title">Agent update</div>
+          <div class="status-age"></div>
+        </div>
+        <div class="status-subtitle"></div>
+      </div>
+    `;
+    $('feed').appendChild(row);
+    liveStatusCard = row;
+    scrollFeed();
+    return row;
+  };
+
+  const setLiveStatus = (title, detail = '', age = '') => {
+    const card = ensureStatusCard();
+    liveStatusMessage = detail || title || '';
+    card.querySelector('.status-title').textContent = title || 'Agent update';
+    card.querySelector('.status-subtitle').textContent = detail || '';
+    card.querySelector('.status-age').textContent = age || '';
+    scrollFeed();
+  };
+
+  const finalizeLiveStatus = () => {
+    if (!liveStatusCard || !liveStatusCard.isConnected) return;
+    liveStatusCard.classList.remove('active');
+    liveStatusCard = null;
+    liveStatusMessage = '';
+  };
+
+  const createStateChip = (label, cls = '') => {
+    const chip = document.createElement('span');
+    chip.className = `state-chip ${cls}`.trim();
+    chip.textContent = label;
+    return chip;
+  };
+
+  const createCardHead = ({ eyebrow, title, subtitle, stateLabel = '', stateClass = '' }) => {
+    const head = document.createElement('div');
+    head.className = 'card-head';
+
+    const meta = document.createElement('div');
+    meta.className = 'card-meta';
+
+    const eyebrowEl = document.createElement('div');
+    eyebrowEl.className = 'eyebrow';
+    eyebrowEl.textContent = eyebrow;
+
+    const titleEl = document.createElement('div');
+    titleEl.className = 'card-title';
+    titleEl.textContent = title;
+
+    const subtitleEl = document.createElement('div');
+    subtitleEl.className = 'card-subtitle';
+    subtitleEl.textContent = subtitle || '';
+
+    meta.appendChild(eyebrowEl);
+    meta.appendChild(titleEl);
+    meta.appendChild(subtitleEl);
+    head.appendChild(meta);
+    const stateEl = stateLabel ? createStateChip(stateLabel, stateClass) : null;
+    if (stateEl) head.appendChild(stateEl);
+
+    return { head, titleEl, subtitleEl, stateEl };
+  };
+
+  const renderReasoning = (note) => {
+    const summary = note.summary || humanize(note.stage || 'thinking');
+    const detail = note.detail || '';
+    const age = Number.isFinite(note.elapsed_seconds) ? `${note.elapsed_seconds}s` : '';
+
+    if (note.live) {
+      setLiveStatus(summary, detail, age);
+      return;
+    }
+
+    finalizeLiveStatus();
+    const card = createFeedCard('reasoning-note');
+    const bits = createCardHead({
+      eyebrow: 'Thinking',
+      title: summary,
+      subtitle: detail,
+      stateLabel: age
+    });
+    card.appendChild(bits.head);
+  };
+
+  const renderPlan = (plan) => {
+    finalizeLiveStatus();
+    const replacingPlan = !!(activePlanCard && activePlanCard.isConnected);
+    if (replacingPlan) {
+      activePlanCard.classList.add('superseded');
+    }
+
+    activePlanCard = createFeedCard('plan-card');
+    const headBits = createCardHead({
+      eyebrow: 'Plan',
+      title: replacingPlan ? 'Updated plan' : 'Execution plan',
+      subtitle: plan.reasoning || 'No reasoning provided.',
+      stateLabel: `${(plan.sub_tasks || []).length} steps`
+    });
+    activePlanCard.appendChild(headBits.head);
+
+    const list = document.createElement('div');
+    list.className = 'subtask-list';
+    subtaskEls = {};
+    planSubtasks = plan.sub_tasks || [];
+    currentSubtaskIdx = 0;
+
+    planSubtasks.forEach((subtask, index) => {
+      const row = document.createElement('div');
+      row.className = 'subtask-item';
+      row.innerHTML = `<div class="subtask-icon">${index + 1}</div><div class="subtask-text"></div>`;
+      row.querySelector('.subtask-text').textContent = subtask.description;
+      subtaskEls[subtask.id] = row;
+      list.appendChild(row);
+    });
+
+    activePlanCard.appendChild(list);
+    scrollFeed();
+  };
+
+  const markSubtask = (id, state) => {
+    const row = subtaskEls[id];
+    if (!row) return;
+    row.className = `subtask-item ${state}`.trim();
+    const icon = row.querySelector('.subtask-icon');
+    if (!icon) return;
+    icon.textContent = state === 'done'
+      ? 'OK'
+      : state === 'running'
+        ? '...'
+        : state === 'failed'
+          ? 'X'
+          : icon.textContent;
+  };
+
+  const ensureActionCard = (actionId, actionType = 'action', summary = '') => {
+    if (actionId && actionCards[actionId]) {
+      const existing = actionCards[actionId];
+      if (summary) existing.subtitleEl.textContent = summary;
+      return existing;
+    }
+
+    const card = createFeedCard('tool-card');
+    const label = humanize(actionType || 'action');
+    const parts = createCardHead({
+      eyebrow: 'Tool',
+      title: label,
+      subtitle: summary || 'Waiting for result...',
+      stateLabel: 'Running',
+      stateClass: 'running'
+    });
+    card.appendChild(parts.head);
+
+    const output = document.createElement('pre');
+    output.className = 'tool-output hidden';
+    const details = document.createElement('div');
+    details.className = 'detail-list';
+
+    card.appendChild(output);
+    card.appendChild(details);
+
+    const entry = {
+      card,
+      output,
+      details,
+      titleEl: parts.titleEl,
+      subtitleEl: parts.subtitleEl,
+      stateEl: parts.stateEl,
+      terminalPre: null
+    };
+
+    if (actionId) actionCards[actionId] = entry;
+    return entry;
+  };
+
+  const setActionState = (entry, label, cls = '') => {
+    if (!entry || !entry.stateEl) return;
+    entry.stateEl.className = `state-chip ${cls}`.trim();
+    entry.stateEl.textContent = label;
+  };
+
+  const appendDetailRow = (entry, eyebrow, title, copy = '', preview = '') => {
+    if (!entry) return null;
+    const row = document.createElement('div');
+    row.className = 'detail-row';
+
+    const head = document.createElement('div');
+    head.className = 'detail-row-head';
+    head.innerHTML = `<div><div class="detail-label"></div><div class="detail-title"></div></div>`;
+    head.querySelector('.detail-label').textContent = eyebrow;
+    head.querySelector('.detail-title').textContent = title || '';
+    row.appendChild(head);
+
+    if (copy) {
+      const body = document.createElement('div');
+      body.className = 'detail-copy';
+      body.textContent = copy;
+      row.appendChild(body);
+    }
+
+    if (preview) {
+      const code = document.createElement('pre');
+      code.className = 'detail-preview';
+      code.textContent = preview;
+      row.appendChild(code);
+    }
+
+    entry.details.appendChild(row);
+    scrollFeed();
+    return row;
+  };
+
+  const appendTerminalOutput = (entry, command, output, ok) => {
+    if (!entry) return;
+
+    if (!entry.terminalPre) {
+      const row = document.createElement('div');
+      row.className = 'detail-row';
+      row.innerHTML = `
+        <div class="detail-row-head">
+          <div>
+            <div class="detail-label">Terminal</div>
+            <div class="detail-title"></div>
+          </div>
+        </div>
+      `;
+      row.querySelector('.detail-title').textContent = command || 'Command output';
+      const pre = document.createElement('pre');
+      pre.className = 'detail-preview';
+      row.appendChild(pre);
+      entry.details.appendChild(row);
+      entry.terminalPre = pre;
+    }
+
+    entry.terminalPre.textContent += output || '';
+    if (!ok) entry.terminalPre.style.color = '#8d261f';
+    if (entry.terminalPre.textContent.length > 12000) {
+      entry.terminalPre.textContent = entry.terminalPre.textContent.slice(-12000);
+    }
+    scrollFeed();
+  };
+
+  const renderStandaloneArtifact = ({ eyebrow, title, copy = '', preview = '', className = '' }) => {
+    const card = createFeedCard(className);
+    const bits = createCardHead({
+      eyebrow,
+      title,
+      subtitle: copy,
+      stateLabel: 'Inline'
+    });
+    card.appendChild(bits.head);
+    if (preview) {
+      const pre = document.createElement('pre');
+      pre.className = 'artifact-preview';
+      pre.textContent = preview;
+      card.appendChild(pre);
+    }
+    return card;
+  };
+
+  const renderReflection = (reflection) => {
+    finalizeLiveStatus();
+    const success = reflection.success === true;
+    const failure = reflection.success === false;
+    const card = createFeedCard(`reflection-card${success ? ' success' : failure ? ' failure' : ''}`);
+    const bits = createCardHead({
+      eyebrow: 'Reflection',
+      title: success ? 'Subtask passed' : failure ? 'Needs another pass' : 'Reflection',
+      subtitle: reflection.reason || reflection.summary || reflection.explanation || 'No notes provided.',
+      stateLabel: success ? 'OK' : failure ? 'Retry' : 'Note',
+      stateClass: success ? 'ok' : failure ? 'waiting' : ''
+    });
+    card.appendChild(bits.head);
+  };
+
+  const renderScreenshot = (payload) => {
+    finalizeLiveStatus();
+    screenshots.push({ data: payload.data, createdAt: Date.now() });
+    const index = screenshots.length - 1;
+    const card = createFeedCard('screenshot-card');
+    const bits = createCardHead({
+      eyebrow: 'Preview',
+      title: currentMode === 'computer_use' ? 'Browser snapshot' : 'Screen snapshot',
+      subtitle: 'Captured inline so the whole run stays in one timeline.',
+      stateLabel: `Frame ${index + 1}`
+    });
+    card.appendChild(bits.head);
+    const img = document.createElement('img');
+    img.className = 'screenshot-img';
+    img.src = `data:image/png;base64,${payload.data}`;
+    img.alt = 'Agent screenshot';
+    card.appendChild(img);
+    const button = document.createElement('button');
+    button.className = 'screenshot-btn';
+    button.type = 'button';
+    button.textContent = 'Open full screenshot';
+    button.onclick = () => openLightbox(index);
+    card.appendChild(button);
+  };
+
+  const openLightbox = (index) => {
+    const shot = screenshots[index];
+    if (!shot) return;
+    $('lightbox-img').src = `data:image/png;base64,${shot.data}`;
+    $('lightbox-caption').textContent = `Screenshot ${index + 1} of ${screenshots.length}`;
+    $('lightbox').classList.add('show');
+  };
+
+  const closeLightbox = () => {
+    $('lightbox').classList.remove('show');
+  };
+
+  const resetTaskView = ({ replay = false, keepFeed = false } = {}) => {
+    clearInterval(timer);
+    clearReconnectTimer();
+    if (sse) {
+      sse.close();
+      sse = null;
+    }
+    streamClosedManually = replay;
+    reconnectAttempts = 0;
+    streamCursor = 0;
+    startTime = 0;
+    isPaused = false;
+    activePlanCard = null;
+    liveStatusCard = null;
+    liveStatusMessage = '';
+    planSubtasks = [];
+    currentSubtaskIdx = 0;
+    subtaskEls = {};
+    screenshots = [];
+    lastActionId = null;
+    terminalStateKey = null;
+    Object.keys(actionCards).forEach((key) => delete actionCards[key]);
+
+    setStatus('ready');
+    setMode('coding');
+    $('background-pill').innerHTML = '<strong>Run:</strong> background';
+    $('elapsed-time').textContent = replay ? '--:--' : '00:00';
+    $('btn-pause').classList.add('hidden');
+    $('btn-cancel').classList.add('hidden');
+    $('btn-retry').classList.add('hidden');
+    $('btn-copy-log').classList.add('hidden');
+    $('btn-download-log').classList.add('hidden');
+
+    if (!keepFeed) {
+      $('feed').innerHTML = WELCOME_HTML;
+      bindExamples();
+    }
+  };
+
+  const clearReconnectTimer = () => {
+    if (reconnectTimer) {
+      clearTimeout(reconnectTimer);
+      reconnectTimer = null;
+    }
+  };
+
+  const updateCharCount = () => {
+    const count = $('input').value.length;
+    $('char-count').textContent = count ? `${count} chars` : '';
+  };
+
+  const autoGrow = () => {
+    const box = $('input');
+    box.style.height = 'auto';
+    box.style.height = `${Math.min(box.scrollHeight, 180)}px`;
+  };
+
+  const showPostRunControls = () => {
+    $('btn-pause').classList.add('hidden');
+    $('btn-cancel').classList.add('hidden');
+    $('btn-retry').classList.remove('hidden');
+    $('btn-copy-log').classList.remove('hidden');
+    $('btn-download-log').classList.remove('hidden');
+  };
+
+  const statusPhase = (message = '') => {
+    if (/reflecting/i.test(message)) return 'Reflecting';
+    if (/evaluating/i.test(message)) return 'Evaluating';
+    if (/re-planning/i.test(message)) return 'Re-planning';
+    if (/thinking|planning/i.test(message)) return 'Planning';
+    if (/executing sub-task/i.test(message)) return 'Executing';
+    if (/initializing/i.test(message)) return 'Initializing';
+    if (/paused/i.test(message)) return 'Paused';
+    if (/resumed/i.test(message)) return 'Running';
+    return 'Working';
+  };
+
+  const shouldReuseLiveStatus = (message = '') => /thinking|planning|reflecting|evaluating|executing sub-task|initializing|re-planning|still/i.test(message);
+
+  const processTaskEvent = (event, { replay = false, taskId = task, suppressToasts = false } = {}) => {
+    if (event.type === 'task_created') return;
+
+    if (event.type === 'reasoning') {
+      renderReasoning(event);
+      return;
+    }
+
+    if (event.type === 'plan') {
+      renderPlan(event);
+      return;
+    }
+
+    if (event.type === 'status') {
+      if (event.heartbeat) return;
+
+      if (/executing sub-task:/i.test(event.message || '') && planSubtasks[currentSubtaskIdx]) {
+        if (currentSubtaskIdx > 0 && planSubtasks[currentSubtaskIdx - 1]) {
+          markSubtask(planSubtasks[currentSubtaskIdx - 1].id, 'done');
+        }
+        markSubtask(planSubtasks[currentSubtaskIdx].id, 'running');
+      }
+
+      if (shouldReuseLiveStatus(event.message || '')) {
+        setLiveStatus(statusPhase(event.message || ''), event.message || '', Number.isFinite(event.elapsed_seconds) ? `${event.elapsed_seconds}s` : '');
+      } else {
+        finalizeLiveStatus();
+        appendMessage(event.message || 'Agent update', 'system-note');
+      }
+      return;
+    }
+
+    if (event.type === 'action_start') {
+      finalizeLiveStatus();
+      const entry = ensureActionCard(event.action_id, event.action_type, event.args_summary || event.explanation || '');
+      setActionState(entry, 'Running', 'running');
+      entry.subtitleEl.textContent = event.args_summary || event.explanation || 'Working...';
+      lastActionId = event.action_id || null;
+      return;
+    }
+
+    if (event.type === 'action_result') {
+      const entry = ensureActionCard(event.action_id, event.action_type, event.args_summary || '');
+      setActionState(entry, event.ok ? 'OK' : 'Fail', event.ok ? 'ok' : 'fail');
+      if (event.args_summary) entry.subtitleEl.textContent = event.args_summary;
+      if (event.output) {
+        entry.output.classList.remove('hidden');
+        entry.output.textContent = truncate(event.output, 1400);
+      }
+      return;
+    }
+
+    if (event.type === 'mode') {
+      setMode(event.mode);
+      return;
+    }
+
+    if (event.type === 'cowork_status') {
+      currentBackgroundMode = !!event.background;
+      $('background-pill').innerHTML = `<strong>Run:</strong> ${currentBackgroundMode ? 'background' : 'desktop'}`;
+      if (!replay) appendMessage(event.message || '', 'system-note');
+      return;
+    }
+
+    if (event.type === 'file_change') {
+      const entry = lastActionId && actionCards[lastActionId] ? actionCards[lastActionId] : null;
+      const preview = truncate(event.content || '', 1200);
+      if (entry) {
+        appendDetailRow(entry, 'File change', event.path || 'Updated file', humanize(event.action || 'write_file'), preview);
+      } else {
+        renderStandaloneArtifact({
+          eyebrow: 'File change',
+          title: event.path || 'Updated file',
+          copy: humanize(event.action || 'write_file'),
+          preview
+        });
+      }
+      return;
+    }
+
+    if (event.type === 'terminal_output') {
+      const target = (event.action_id && actionCards[event.action_id])
+        ? actionCards[event.action_id]
+        : (lastActionId && actionCards[lastActionId])
+          ? actionCards[lastActionId]
+          : ensureActionCard(event.action_id || `terminal-${Date.now()}`, 'run_command', event.command || '');
+      if (event.command && !target.subtitleEl.textContent) target.subtitleEl.textContent = event.command;
+      appendTerminalOutput(target, event.command || 'Command output', event.output || '', event.ok !== false);
+      return;
+    }
+
+    if (event.type === 'browser_event') {
+      const label = event.kind === 'page_read' ? 'Read page' : humanize(event.kind || 'browser_event');
+      const copy = event.url || event.selector || truncate(event.excerpt || '', 240);
+      const entry = lastActionId && actionCards[lastActionId] ? actionCards[lastActionId] : null;
+      if (entry) {
+        appendDetailRow(entry, 'Browser', label, copy);
+      } else {
+        renderStandaloneArtifact({
+          eyebrow: 'Browser',
+          title: label,
+          copy
+        });
+      }
+      return;
+    }
+
+    if (event.type === 'screenshot') {
+      renderScreenshot(event);
+      return;
+    }
+
+    if (event.type === 'reflection') {
+      renderReflection(event);
+      if (event.success === false && planSubtasks[currentSubtaskIdx]) {
+        markSubtask(planSubtasks[currentSubtaskIdx].id, 'failed');
+      } else if (event.success === true && planSubtasks[currentSubtaskIdx]) {
+        markSubtask(planSubtasks[currentSubtaskIdx].id, 'done');
+        currentSubtaskIdx += 1;
+      }
+      return;
+    }
+
+    if (event.type === 'approval_required') {
+      finalizeLiveStatus();
+      const reason = event.reason || event.action?.explanation || 'High risk action requires approval.';
+      const entry = ensureActionCard(event.action_id, event.action?.type || 'approval', reason);
+      setActionState(entry, 'Waiting', 'waiting');
+      appendDetailRow(entry, 'Approval', humanize(event.action?.type || 'Action'), reason, JSON.stringify(event.action?.args || {}, null, 2));
+      if (!replay) {
+        $('app-title').textContent = `${humanize(event.action?.type || 'Action')} needs approval`;
+        $('app-reason').textContent = reason;
+        $('app-code').textContent = JSON.stringify(event.action?.args || {}, null, 2);
+        $('approval').classList.add('show');
+        window.pendingTaskId = taskId;
+        window.pendingApprovalId = event.action_id;
+        if (!suppressToasts) toast('Agent is waiting for approval.', 'warn', 5000);
+      }
+      return;
+    }
+
+    if (event.type === 'permission_required') {
+      finalizeLiveStatus();
+      const detail = event.reason || event.explanation || `The agent needs ${event.scope || 'additional'} access.`;
+      const entry = ensureActionCard(event.action_id, 'request_permission', detail);
+      setActionState(entry, 'Waiting', 'waiting');
+      appendDetailRow(entry, 'Permission', event.scope || 'Requested scope', detail, JSON.stringify({ scope: event.scope, explanation: event.explanation || '' }, null, 2));
+      if (!replay) {
+        $('perm-title').textContent = `Allow ${event.scope || 'access'}?`;
+        $('perm-reason').textContent = detail;
+        $('perm-code').textContent = JSON.stringify({ scope: event.scope, explanation: event.explanation || '' }, null, 2);
+        $('permission').classList.add('show');
+        window.pendingTaskId = taskId;
+        window.pendingPermissionId = event.action_id;
+        window.pendingPermissionScope = event.scope;
+        if (!suppressToasts) toast('Agent is waiting on a permission choice.', 'warn', 5000);
+      }
+      return;
+    }
+
+    if (event.type === 'error') {
+      const errorKey = `error:${event.message || ''}`;
+      if (terminalStateKey === errorKey) return;
+      terminalStateKey = errorKey;
+      finalizeLiveStatus();
+      setStatus('error');
+      appendMessage(`Error: ${event.message}`, 'system-error');
+      if (!replay) {
+        markHistoryFinal('failed');
+        stopEverything();
+      }
+      return;
+    }
+
+    if (event.type === 'done') {
+      const doneKey = `done:${event.complete ? '1' : '0'}:${event.reason || ''}:${event.blocked ? '1' : '0'}`;
+      if (terminalStateKey === doneKey) return;
+      terminalStateKey = doneKey;
+      finalizeLiveStatus();
+      if (event.complete) {
+        setStatus('complete');
+        appendMessage('Task completed successfully.', 'system-success');
+        if (!replay) {
+          markHistoryFinal('done');
+          stopEverything();
+          if (!suppressToasts) toast('Task complete.', 'ok');
+        }
+      } else {
+        setStatus('failed');
+        appendMessage(event.blocked ? `Request blocked: ${event.reason || 'This request could not be completed.'}` : `Task failed: ${event.reason || 'Unknown failure.'}`, 'system-error');
+        if (!replay) {
+          markHistoryFinal('failed');
+          stopEverything();
+          if (!suppressToasts) toast('Task failed.', 'err');
+        }
+      }
+      return;
+    }
+
+    if (event.type === 'cancelled') {
+      const cancelledKey = `cancelled:${event.message || ''}`;
+      if (terminalStateKey === cancelledKey) return;
+      terminalStateKey = cancelledKey;
+      finalizeLiveStatus();
+      setStatus('cancelled');
+      appendMessage(event.message || 'Task was cancelled.', 'system-cancelled');
+      if (!replay) {
+        markHistoryFinal('cancelled');
+        stopEverything();
+      }
+    }
+  };
+
+  const scheduleReconnect = (listenTask) => {
+    clearReconnectTimer();
+    reconnectAttempts += 1;
+    const delay = Math.min(3000 * reconnectAttempts, 15000);
+    reconnectTimer = setTimeout(async () => {
+      try {
+        const record = await api(`/api/tasks/${listenTask}`);
+        if (record.status && record.status !== 'running' && !record.paused) {
+          if (record.status === 'done' || record.status === 'complete') {
+            processTaskEvent({ type: 'done', complete: true, reason: record.reason || '' }, { taskId: listenTask, suppressToasts: true });
+          } else if (record.status === 'failed' || record.status === 'error') {
+            processTaskEvent({ type: 'done', complete: false, reason: record.reason || '' }, { taskId: listenTask, suppressToasts: true });
+          } else if (record.status === 'cancelled') {
+            processTaskEvent({ type: 'cancelled', message: record.reason || 'Task was cancelled.' }, { taskId: listenTask, suppressToasts: true });
+          }
+          return;
+        }
+      } catch (_) {}
+
+      if (task === listenTask && !streamClosedManually) openStream(listenTask);
+    }, delay);
+  };
+
+  const openStream = (listenTask) => {
+    if (sse) {
+      sse.close();
+      sse = null;
+    }
+    sse = new EventSource(`/api/tasks/${listenTask}/stream?token=${encodeURIComponent(KEY || '')}&since=${streamCursor}`);
+    sse.onmessage = (message) => {
+      if (task !== listenTask) return;
+      reconnectAttempts = 0;
+      const data = JSON.parse(message.data);
+      streamCursor += 1;
+      processTaskEvent(data, { taskId: listenTask });
+    };
+    sse.onerror = () => {
+      if (task !== listenTask || streamClosedManually) return;
+      toast(`Stream interrupted. Reconnecting (attempt ${reconnectAttempts + 1}).`, 'warn', 2200);
+      scheduleReconnect(listenTask);
+    };
+  };
+
+  const start = async () => {
+    const goal = $('input').value.trim();
+    if (!goal) return;
+    if (task && sse) {
+      toast('A task is already running. Cancel it before starting another.', 'warn');
+      return;
+    }
+
+    task = Math.random().toString(36).slice(2);
+    currentViewedTask = task;
+    resetTaskView();
+
+    appendMessage(goal, 'user');
+    $('input').value = '';
+    updateCharCount();
+    autoGrow();
+
+    setTaskTitle(goal);
+    setStatus('running');
+    $('btn-pause').classList.remove('hidden');
+    $('btn-cancel').classList.remove('hidden');
+    $('btn-retry').classList.add('hidden');
+    $('btn-copy-log').classList.add('hidden');
+    $('btn-download-log').classList.add('hidden');
+    activeHistoryItem = addActiveHistoryItem(goal);
+
+    startTime = Date.now();
+    timer = setInterval(updateClock, 1000);
+    updateClock();
+    setLiveStatus('Initializing', 'Starting task...');
+
+    try {
+      await keyReady;
+      const model = $('model-id').value;
+      const mode = $('mode-id').value;
+      streamClosedManually = false;
+      openStream(task);
+      await api('/api/tasks', 'POST', { task_id: task, goal, model, mode });
+      if (window.innerWidth <= 1080) document.body.classList.remove('nav-open');
+    } catch (err) {
+      finalizeLiveStatus();
+      setStatus('error');
+      appendMessage(`Failed to start task: ${err.detail || 'Unknown error.'}`, 'system-error');
+      markHistoryFinal('failed');
+      showPostRunControls();
+    }
+  };
+
+  const stopEverything = () => {
+    clearInterval(timer);
+    clearReconnectTimer();
+    streamClosedManually = true;
+    if (sse) {
+      sse.close();
+      sse = null;
+    }
+    finalizeLiveStatus();
+    showPostRunControls();
+  };
+
+  const cancelTask = async () => {
+    try {
+      await api(`/api/tasks/${task}`, 'DELETE');
+    } catch (_) {}
+    processTaskEvent({ type: 'cancelled', message: 'Task cancelled by user.' }, { suppressToasts: true });
+    stopEverything();
+  };
+
+  const togglePause = async () => {
+    if (!task) return;
+    isPaused = !isPaused;
+    await api(`/api/tasks/${task}/${isPaused ? 'pause' : 'resume'}`, 'POST');
+    $('btn-pause').textContent = isPaused ? 'Resume' : 'Pause';
+    setStatus(isPaused ? 'paused' : 'running');
+    setLiveStatus(isPaused ? 'Paused' : 'Running', isPaused ? 'Task is waiting.' : 'Task resumed.');
+  };
+
+  const retryTask = async () => {
+    if (!currentViewedTask) {
+      toast('No task selected to retry.', 'warn');
+      return;
+    }
+    try {
+      const title = $('task-title').textContent || 'Retry';
+      const result = await api(`/api/tasks/${currentViewedTask}/retry`, 'POST');
+      task = result.task_id;
+      currentViewedTask = task;
+      resetTaskView();
+      appendMessage(title, 'user');
+      setTaskTitle(title);
+      setStatus('running');
+      $('btn-pause').classList.remove('hidden');
+      $('btn-cancel').classList.remove('hidden');
+      activeHistoryItem = addActiveHistoryItem(title);
+      startTime = Date.now();
+      timer = setInterval(updateClock, 1000);
+      updateClock();
+      setLiveStatus('Initializing', 'Retrying task...');
+      streamClosedManually = false;
+      openStream(task);
+      toast(`Retried as ${task}.`, 'ok');
+    } catch (err) {
+      toast(err.detail || 'Retry failed.', 'err');
+    }
+  };
+
+  const copyCurrentLog = async () => {
+    if (!currentViewedTask) {
+      toast('No task selected.', 'warn');
+      return;
+    }
+    try {
+      const result = await api(`/api/tasks/${currentViewedTask}/log`);
+      await navigator.clipboard.writeText(JSON.stringify(result.log || [], null, 2));
+      toast('Copied log to clipboard.', 'ok');
+    } catch (_) {
+      toast('Could not copy the task log.', 'err');
+    }
+  };
+
+  const downloadCurrentLog = () => {
+    if (!currentViewedTask) {
+      toast('No task selected.', 'warn');
+      return;
+    }
+    const link = document.createElement('a');
+    link.href = `/api/tasks/${currentViewedTask}/log/download?token=${encodeURIComponent(KEY || '')}`;
+    link.download = `${currentViewedTask}.jsonl`;
+    document.body.appendChild(link);
+    link.click();
+    link.remove();
+  };
+
+  const loadTaskLog = (taskId, events, sourceEl) => {
+    currentViewedTask = taskId;
+    resetTaskView({ replay: true });
+    historyItems.forEach((item) => item.classList.remove('active'));
+    sourceEl?.classList.add('active');
+    activeHistoryItem = sourceEl || null;
+
+    const firstGoal = events.find((entry) => entry.type === 'task_created')?.goal;
+    const title = sourceEl?.querySelector('.history-goal')?.textContent || firstGoal || 'Past task';
+    setTaskTitle(title);
+    appendMessage(title, 'user');
+    $('btn-retry').classList.remove('hidden');
+    $('btn-copy-log').classList.remove('hidden');
+    $('btn-download-log').classList.remove('hidden');
+
+    events.forEach((entry) => processTaskEvent(entry, { replay: true, taskId, suppressToasts: true }));
+    toast('Loaded task log.', 'info', 1800);
+  };
+
+  const hydrateModelSelect = (models) => {
+    const select = $('model-id');
+    const list = models && models.length ? models : [
+      'openrouter/nvidia/nemotron-3-super-120b-a12b:free',
+      'openrouter/google/gemma-4-31b-it:free',
+      'openrouter/meta-llama/llama-3.3-70b-instruct:free',
+      'openrouter/qwen/qwen3-coder:free',
+      'claude-3-5-sonnet-20241022',
+      'gpt-4o-mini'
+    ];
+
+    select.innerHTML = '';
+    list.forEach((model) => {
+      const option = document.createElement('option');
+      option.value = model;
+      let label = model.replace('openrouter/', '');
+      if (label.includes('/')) label = label.split('/').slice(-1)[0];
+      option.textContent = label;
+      select.appendChild(option);
+    });
+    if (!select.value && select.options.length) select.selectedIndex = 0;
+  };
+
+  const newSession = () => {
+    if (task && sse) {
+      toast('Cancel the running task before starting fresh.', 'warn');
+      return;
+    }
+    task = null;
+    currentViewedTask = null;
+    activeHistoryItem = null;
+    historyItems.forEach((item) => item.classList.remove('active'));
+    resetTaskView();
+    setTaskTitle('Clean stream');
+    $('input').value = '';
+    updateCharCount();
+    autoGrow();
+    $('input').focus();
+  };
+
+  const sendApproval = (approve) => {
+    api('/api/approvals', 'POST', {
+      task_id: window.pendingTaskId,
+      action_id: window.pendingApprovalId,
+      approve
+    }).catch(() => {});
+    $('approval').classList.remove('show');
+  };
+
+  const sendPermission = (grant) => {
+    api('/api/permissions', 'POST', {
+      task_id: window.pendingTaskId,
+      action_id: window.pendingPermissionId,
+      grant,
+      scope: window.pendingPermissionScope
+    }).catch(() => {});
+    $('permission').classList.remove('show');
+  };
+
+  const init = async () => {
+    bindExamples();
+    hydrateModelSelect();
+
+    keyReady = fetch(`/api/config?cb=${Date.now()}`)
+      .then((response) => response.json())
+      .then((config) => {
+        KEY = config.api_key || '';
+        return KEY;
+      })
+      .catch(() => '');
+
+    try {
+      await keyReady;
+      api(`/api/models?cb=${Date.now()}`)
+        .then((response) => hydrateModelSelect(response.models))
+        .catch(() => {});
+
+      api(`/api/tasks?cb=${Date.now()}`)
+        .then((response) => {
+          const tasks = [...(response.tasks || [])].reverse();
+          if (tasks.length) $('task-history').innerHTML = '';
+          tasks.forEach((item) => renderHistoryItem(item));
+          refreshHistoryCount();
+        })
+        .catch(() => {});
+    } catch (_) {}
+  };
+
+  $('send').onclick = start;
+  $('btn-cancel').onclick = () => { stopEverything(); cancelTask(); };
+  $('btn-pause').onclick = togglePause;
+  $('btn-retry').onclick = retryTask;
+  $('btn-copy-log').onclick = copyCurrentLog;
+  $('btn-download-log').onclick = downloadCurrentLog;
+  $('new-session-btn').onclick = newSession;
+  $('history-search').addEventListener('input', filterHistory);
+  $('nav-toggle').onclick = () => document.body.classList.toggle('nav-open');
+  $('lightbox-close').onclick = closeLightbox;
+  $('lightbox').onclick = (event) => {
+    if (event.target === $('lightbox')) closeLightbox();
+  };
+  $('app-approve').onclick = () => sendApproval(true);
+  $('app-deny').onclick = () => sendApproval(false);
+  $('perm-approve').onclick = () => sendPermission(true);
+  $('perm-deny').onclick = () => sendPermission(false);
+
+  $('input').addEventListener('input', () => {
+    autoGrow();
+    updateCharCount();
+  });
+
+  $('input').addEventListener('keydown', (event) => {
+    if (event.key === 'Enter' && !event.shiftKey) {
+      event.preventDefault();
+      start();
+    }
+  });
+
+  window.addEventListener('keydown', (event) => {
+    if ((event.ctrlKey || event.metaKey) && event.key.toLowerCase() === 'n') {
+      event.preventDefault();
+      newSession();
+      return;
+    }
+
+    if ($('approval').classList.contains('show')) {
+      if (event.key === 'Enter') {
+        event.preventDefault();
+        sendApproval(true);
+      }
+      if (event.key === 'Escape') {
+        event.preventDefault();
+        sendApproval(false);
+      }
+    }
+
+    if ($('permission').classList.contains('show')) {
+      if (event.key === 'Enter') {
+        event.preventDefault();
+        sendPermission(true);
+      }
+      if (event.key === 'Escape') {
+        event.preventDefault();
+        sendPermission(false);
+      }
+    }
+
+    if ($('lightbox').classList.contains('show') && event.key === 'Escape') {
+      event.preventDefault();
+      closeLightbox();
+    }
+  });
+
+  init();
+</script>
+</body>
+</html>

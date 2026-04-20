@@ -1,64 +1,70 @@
-import httpx
 import time
-import json
 
-base_url = "http://localhost:8765"
-token = "test"
-headers = {"Authorization": f"Bearer {token}", "Content-Type": "application/json"}
+import httpx
+import pytest
 
-print("Test A - Health check")
-r = httpx.get(f"{base_url}/api/health")
-assert r.status_code == 200, r.text
-print("Test A passed")
 
-print("Test B - Models endpoint")
-r = httpx.get(f"{base_url}/api/models")
-assert r.status_code == 200, r.text
-assert isinstance(r.json()["models"], list)
-print("Test B passed")
+BASE_URL = "http://localhost:8765"
+TOKEN = "test"
+HEADERS = {"Authorization": f"Bearer {TOKEN}", "Content-Type": "application/json"}
 
-print("Test C - Create a task")
-data = {
-    "task_id": "test-001",
-    "goal": "open notepad and type hello world",
-    "model": "claude-3-5-sonnet-20241022"
-}
-r = httpx.post(f"{base_url}/api/tasks", headers=headers, json=data)
-print("Create response:", r.text)
-assert r.status_code == 200, r.text
-print("Test C passed")
 
-print("Test D - Check task status")
-r = httpx.get(f"{base_url}/api/tasks", headers=headers)
-print("Tasks list:", r.text)
-assert r.status_code == 200, r.text
-assert "test-001" in r.text
-print("Test D passed")
+def _require_local_server() -> None:
+    try:
+        response = httpx.get(f"{BASE_URL}/api/health", timeout=2.0)
+        response.raise_for_status()
+    except httpx.HTTPError as exc:
+        pytest.skip(f"Local server is not running at {BASE_URL}: {exc}")
 
-print("Test E - SSE stream")
-events = []
-try:
-    with httpx.stream("GET", f"{base_url}/api/tasks/test-001/stream?token={token}", timeout=6.0) as resp:
-        start_time = time.time()
-        for line in resp.iter_lines():
-            if line.startswith("data: "):
-                events.append(line)
-                break
-            if time.time() - start_time > 5:
-                break
-except httpx.ReadTimeout:
-    print("Stream timed out (expected if no events)")
-assert len(events) >= 0
-print("Test E passed")
 
-print("Test F - Cancel task")
-r = httpx.delete(f"{base_url}/api/tasks/test-001", headers=headers)
-assert r.status_code == 200, r.text
-print("Test F passed")
+@pytest.fixture(scope="module")
+def local_server():
+    _require_local_server()
+    return BASE_URL
 
-print("Test G - Task log")
-r = httpx.get(f"{base_url}/api/tasks/test-001/log", headers=headers)
-assert r.status_code == 200, r.text
-print("Test G passed")
 
-print("ALL TESTS PASSED")
+def test_health_check(local_server):
+    response = httpx.get(f"{local_server}/api/health", timeout=5.0)
+    assert response.status_code == 200, response.text
+
+
+def test_models_endpoint(local_server):
+    response = httpx.get(f"{local_server}/api/models", timeout=5.0)
+    assert response.status_code == 200, response.text
+    assert isinstance(response.json()["models"], list)
+
+
+def test_task_lifecycle(local_server):
+    task_id = "test-001"
+    data = {
+        "task_id": task_id,
+        "goal": "open notepad and type hello world",
+        "model": "claude-3-5-sonnet-20241022",
+    }
+
+    response = httpx.post(f"{local_server}/api/tasks", headers=HEADERS, json=data, timeout=10.0)
+    assert response.status_code == 200, response.text
+
+    response = httpx.get(f"{local_server}/api/tasks", headers=HEADERS, timeout=5.0)
+    assert response.status_code == 200, response.text
+    assert task_id in response.text
+
+    events = []
+    try:
+        with httpx.stream("GET", f"{local_server}/api/tasks/{task_id}/stream?token={TOKEN}", timeout=6.0) as response:
+            start_time = time.time()
+            for line in response.iter_lines():
+                if line.startswith("data: "):
+                    events.append(line)
+                    break
+                if time.time() - start_time > 5:
+                    break
+    except httpx.ReadTimeout:
+        pass
+    assert len(events) >= 0
+
+    response = httpx.delete(f"{local_server}/api/tasks/{task_id}", headers=HEADERS, timeout=5.0)
+    assert response.status_code == 200, response.text
+
+    response = httpx.get(f"{local_server}/api/tasks/{task_id}/log", headers=HEADERS, timeout=5.0)
+    assert response.status_code == 200, response.text

@@ -152,6 +152,20 @@
     overflow-y: auto;
     padding: 0 8px;
   }
+  .history-search {
+    margin: 0 14px 10px;
+  }
+  .history-search input {
+    width: 100%;
+    background: var(--bg-2);
+    border: 1px solid var(--border);
+    color: var(--text-1);
+    border-radius: 6px;
+    padding: 8px 10px;
+    font-size: 12px;
+    outline: none;
+  }
+  .history-search input:focus { border-color: var(--border-strong); }
   .history-item {
     padding: 9px 10px;
     border-radius: 6px;
@@ -211,7 +225,7 @@
     transform: translateY(-75%) rotate(45deg);
     pointer-events: none;
   }
-  #model-id {
+  #model-id, #mode-id {
     appearance: none;
     width: 100%;
     background: var(--bg-2);
@@ -224,8 +238,8 @@
     outline: none;
     transition: border-color 120ms ease;
   }
-  #model-id:focus, #model-id:hover { border-color: var(--border-strong); }
-  #model-id option { background: var(--bg-2); color: var(--text-0); }
+  #model-id:focus, #model-id:hover, #mode-id:focus, #mode-id:hover { border-color: var(--border-strong); }
+  #model-id option, #mode-id option { background: var(--bg-2); color: var(--text-0); }
 
   /* ============ center panel ============ */
   .center { background: var(--bg-0); position: relative; }
@@ -268,9 +282,61 @@
   .status-pill.complete .dot { background: var(--ok); }
   .status-pill.error, .status-pill.failed { background: var(--err-dim); border-color: oklch(0.7 0.21 25 / 0.3); color: var(--err); }
   .status-pill.error .dot, .status-pill.failed .dot { background: var(--err); }
+  .thinking-pill {
+    display: inline-flex; align-items: center; gap: 7px;
+    padding: 4px 10px 4px 8px;
+    border-radius: 999px;
+    font-size: 10.5px; font-weight: 600;
+    text-transform: uppercase; letter-spacing: 0.08em;
+    background: var(--accent-dim);
+    border: 1px solid var(--accent-edge);
+    color: var(--accent);
+    flex-shrink: 0;
+    font-family: 'JetBrains Mono', monospace;
+  }
+  .thinking-pill.hidden { display: none; }
+  .thinking-pill .dot {
+    width: 6px; height: 6px; border-radius: 50%;
+    background: var(--accent);
+    box-shadow: 0 0 0 3px var(--accent-dim);
+    animation: pulse 1.6s infinite;
+  }
 
   .header-left { display: flex; align-items: center; gap: 12px; min-width: 0; flex: 1 1 auto; overflow: hidden; }
   .task-title { flex: 1 1 auto; min-width: 0; }
+  .mode-banner {
+    display: flex;
+    align-items: center;
+    gap: 10px;
+    padding: 10px 22px;
+    border-bottom: 1px solid var(--border);
+    background: linear-gradient(180deg, oklch(0.22 0.008 60), oklch(0.20 0.007 60));
+  }
+  .mode-banner.hidden { display: none; }
+  .mode-badge {
+    display: inline-flex;
+    align-items: center;
+    padding: 4px 9px;
+    border-radius: 999px;
+    font-size: 10px;
+    font-weight: 700;
+    letter-spacing: 0.08em;
+    text-transform: uppercase;
+    border: 1px solid var(--border);
+    color: var(--text-1);
+    background: var(--bg-2);
+    flex-shrink: 0;
+  }
+  .mode-copy {
+    font-size: 12px;
+    color: var(--text-1);
+    line-height: 1.4;
+    min-width: 0;
+  }
+  .mode-copy strong {
+    color: var(--text-0);
+    font-weight: 600;
+  }
 
   .header-ctrls { display: flex; gap: 6px; }
   .btn {
@@ -719,6 +785,35 @@
     gap: 8px;
     flex-shrink: 0;
   }
+  .live-detail-panel {
+    background: var(--bg-0);
+    border: 1px solid var(--border);
+    border-radius: 8px;
+    padding: 12px;
+    display: grid;
+    gap: 10px;
+    flex-shrink: 0;
+  }
+  .live-detail-row {
+    display: grid;
+    gap: 4px;
+  }
+  .live-detail-label {
+    font-size: 9.5px;
+    font-weight: 600;
+    color: var(--text-3);
+    text-transform: uppercase;
+    letter-spacing: 0.08em;
+  }
+  .live-detail-value {
+    color: var(--text-1);
+    font-size: 12px;
+    line-height: 1.45;
+    min-height: 16px;
+    word-break: break-word;
+  }
+  .live-detail-value.muted { color: var(--text-3); }
+  .live-detail-value.waiting { color: var(--warn); }
   .stat-card {
     background: var(--bg-0);
     border: 1px solid var(--border);
@@ -1206,18 +1301,25 @@
       <kbd>⌘N</kbd>
     </button>
 
-    <div class="sidebar-section-label">
-      <span>History</span>
-      <span class="count" id="history-count">0</span>
-    </div>
-    <div class="history-scroll" id="task-history">
-      <div class="log-empty" style="font-size:11.5px; padding: 12px 10px; color: var(--text-3); font-style: italic;">No tasks yet</div>
-    </div>
-
-    <div class="sidebar-footer">
-      <div class="footer-label">Model</div>
+    <div style="padding: 15px 18px 5px;">
+      <div class="footer-label" style="display:flex; justify-content:space-between; align-items:center;">
+        MODEL
+        <button onclick="hydrateModelSelect()" style="background:transparent; border:none; color:var(--text-3); cursor:pointer; font-size:10px;">↻</button>
+      </div>
       <div class="model-select-wrap">
-        <select id="model-id"></select>
+        <select id="model-id">
+          <option value="openrouter/nvidia/nemotron-3-super-120b-a12b:free">Nemotron 3 (Free)</option>
+          <option value="openrouter/google/gemma-4-31b-it:free">Gemma 4 31B (Free)</option>
+          <option value="openrouter/meta-llama/llama-3.3-70b-instruct:free">Llama 3.3 70B (Free)</option>
+          <option value="openrouter/qwen/qwen3-coder:free">Qwen3 Coder (Free)</option>
+          <option value="openrouter/arcee-ai/trinity-large-preview:free">Trinity Large (Free)</option>
+          <option value="openrouter/nousresearch/hermes-3-llama-3.1-405b:free">Hermes 3 405B (Free)</option>
+          <option value="gemini-2.5-flash">Gemini 2.5 Flash</option>
+          <option value="gemini-2.0-flash">Gemini 2.0 Flash</option>
+          <option value="claude-3-5-sonnet-20241022">Claude 3.5 Sonnet</option>
+          <option value="gpt-4o">GPT-4o</option>
+          <option value="gpt-4o-mini">GPT-4o Mini</option>
+        </select>
       </div>
       <div class="footer-label" style="margin-top:10px;">Mode</div>
       <div class="model-select-wrap">
@@ -1228,23 +1330,45 @@
         </select>
       </div>
     </div>
+
+      <div class="sidebar-section-label" style="margin-top:10px;">
+        <span>History</span>
+        <span class="count" id="history-count">0</span>
+      </div>
+      <div class="history-search">
+        <input id="history-search" placeholder="Search task history" />
+      </div>
+      <div class="history-scroll" id="task-history">
+        <div class="log-empty" style="font-size:11.5px; padding: 12px 10px; color: var(--text-3); font-style: italic;">No tasks yet</div>
+      </div>
   </aside>
 
   <!-- ========== CENTER ========== -->
   <main class="pane center">
-    <header class="center-header">
-      <div class="header-left">
-        <h1 class="task-title idle" id="task-title">Idle</h1>
-        <span class="status-pill" id="status-pill-wrap">
-          <span class="dot"></span>
-          <span id="status-pill">Ready</span>
-        </span>
+      <header class="center-header">
+        <div class="header-left">
+          <h1 class="task-title idle" id="task-title">Idle</h1>
+          <span class="status-pill" id="status-pill-wrap">
+            <span class="dot"></span>
+            <span id="status-pill">Ready</span>
+          </span>
+          <span class="thinking-pill hidden" id="thinking-pill">
+            <span class="dot"></span>
+            <span id="thinking-pill-text">Thinking</span>
+          </span>
+        </div>
+        <div class="header-ctrls hidden" id="controls">
+          <button id="btn-retry" class="btn" onclick="retryTask()">Retry</button>
+          <button id="btn-copy-log" class="btn" onclick="copyCurrentLog()">Copy log</button>
+          <button id="btn-download-log" class="btn" onclick="downloadCurrentLog()">Download log</button>
+          <button id="btn-pause" class="btn" onclick="togglePause()">Pause</button>
+          <button id="btn-cancel" class="btn danger" onclick="cancelTask()">Cancel</button>
+        </div>
+      </header>
+      <div class="mode-banner hidden" id="mode-banner">
+        <span class="mode-badge" id="mode-badge">Coding</span>
+        <div class="mode-copy" id="mode-copy"><strong>Ready.</strong> Choose a task to begin.</div>
       </div>
-      <div class="header-ctrls hidden" id="controls">
-        <button id="btn-pause" class="btn" onclick="togglePause()">Pause</button>
-        <button id="btn-cancel" class="btn danger" onclick="cancelTask()">Cancel</button>
-      </div>
-    </header>
 
     <div class="messages" id="messages-scroll">
       <div class="messages-inner" id="messages">
@@ -1290,7 +1414,7 @@
     <!-- LIVE SCREEN (computer mode) -->
     <div id="screen-section">
       <div class="right-block-label">
-        <span>Live screen</span>
+        <span id="screen-panel-title">Live screen</span>
         <span class="live-chip" id="live-chip"><span class="dot"></span><span id="live-text">IDLE</span></span>
       </div>
       <div class="live-screen" id="live-screen-box">
@@ -1307,7 +1431,7 @@
     <!-- CODE OUTPUT (coding mode) -->
     <div id="code-section" class="hidden">
       <div class="right-block-label">
-        <span>Code Output</span>
+        <span id="code-panel-title">Code output</span>
         <span class="live-chip" id="code-live-chip"><span class="dot"></span><span id="code-live-text">CODING</span></span>
       </div>
       <div class="code-output-panel">
@@ -1324,22 +1448,45 @@
       </div>
     </div>
 
-    <div class="stats-row">
-      <div class="stat-card">
-        <div class="stat-label">Actions</div>
-        <div class="stat-value" id="stat-actions">0</div>
+      <div class="stats-row">
+        <div class="stat-card">
+          <div class="stat-label">Actions</div>
+          <div class="stat-value" id="stat-actions">0</div>
       </div>
       <div class="stat-card">
         <div class="stat-label">Subtasks</div>
         <div class="stat-value" id="stat-subtasks">0<span class="sub">/0</span></div>
       </div>
-      <div class="stat-card">
-        <div class="stat-label">Elapsed</div>
-        <div class="stat-value" id="stat-time">00:00</div>
+        <div class="stat-card">
+          <div class="stat-label">Elapsed</div>
+          <div class="stat-value" id="stat-time">00:00</div>
+        </div>
       </div>
-    </div>
 
-    <div class="log-wrap">
+      <div class="live-detail-panel">
+        <div class="right-block-label" style="margin-bottom:0;">
+          <span>Live details</span>
+          <span id="phase-time" style="font-family:'JetBrains Mono',monospace; color:var(--text-3);">00:00</span>
+        </div>
+        <div class="live-detail-row">
+          <div class="live-detail-label">Phase</div>
+          <div class="live-detail-value muted" id="live-phase">Idle</div>
+        </div>
+        <div class="live-detail-row">
+          <div class="live-detail-label">Subtask</div>
+          <div class="live-detail-value muted" id="live-subtask">No active subtask</div>
+        </div>
+        <div class="live-detail-row">
+          <div class="live-detail-label">Action</div>
+          <div class="live-detail-value muted" id="live-action">No active action</div>
+        </div>
+        <div class="live-detail-row">
+          <div class="live-detail-label">Waiting on</div>
+          <div class="live-detail-value muted" id="live-waiting">Nothing</div>
+        </div>
+      </div>
+
+      <div class="log-wrap">
       <div class="right-block-label">
         <span>Activity log</span>
         <span id="log-count" style="font-family:'JetBrains Mono',monospace; color:var(--text-3); letter-spacing:0;">0 events</span>
@@ -1389,48 +1536,79 @@
 </div>
 
 <script>
+    console.log("=== SCRIPT STARTING ===");
     // ============================================================
     // All JS logic preserved from the original — only light cosmetic
     // changes to match the new DOM (status pill structure, live chip,
     // empty-state removal, history items, log rows, subtask icons).
     // ============================================================
 
-    const getKey = () => 'your-secret-token-here';
-    let KEY = getKey();
+    let KEY = null;
+    let keyReady = null; // resolves when KEY is loaded
+    const getKey = () => KEY || '';
+    const waitForKey = () => keyReady;
 
     const $ = id => document.getElementById(id);
     let task = null;
     let sse = null;
+    let streamCursor = 0;
+    let reconnectAttempts = 0;
+    let reconnectTimer = null;
+    let streamClosedManually = false;
     let isPaused = false;
     let timer = null;
     let startTime = 0;
     let subtaskEls = {};
     let stats = { actions: 0, subDone: 0, subTotal: 0, logEvents: 0 };
     let historyItems = [];
+    let planSubtasks = [];
+    let currentSubtaskIdx = 0;
+
+    // Load API key IMMEDIATELY at top level to avoid race conditions
+    keyReady = fetch('/api/config?cb=' + Date.now()).then(r => r.json()).then(cfg => { 
+        KEY = cfg.api_key; 
+        console.log('API Key synchronized.'); 
+        return KEY;
+    }).catch(e => {
+        console.warn('Config fetch failed, using default auth');
+        return null;
+    });
 
     const api = (p, m='GET', b=null) => fetch(p, {
         method: m,
         headers: {'Authorization':`Bearer ${getKey()}`, 'Content-Type':'application/json'},
         body: b ? JSON.stringify(b) : null
-    }).then(r => r.ok ? r.json() : Promise.reject(r));
+    }).then(async r => {
+        if (r.ok) return r.json();
+        const err = await r.json().catch(() => ({}));
+        throw { status: r.status, detail: err.detail || r.statusText || 'Unknown error' };
+    });
 
     const init = async () => {
+        // 1. Instantly populate with fallbacks so it's NEVER blank
+        hydrateModelSelect();
+
         try {
-            const health = await api('/api/health');
-            $('version-tag').innerText = `v${health.version}`;
+            // Wait for key before proceeding to auth-required calls
+            await keyReady;
 
-            const models = await api('/api/models');
-            hydrateModelSelect(models.models);
+            // 2. Try to refresh models from server
+            api('/api/models?cb=' + Date.now()).then(m => {
+                if (m && m.models) hydrateModelSelect(m.models);
+            }).catch(e => console.warn('Models fetch failed, using fallbacks'));
 
-            const tasks = await api('/api/tasks');
-            const reversed = (tasks.tasks || []).reverse();
-            if (reversed.length) $('task-history').innerHTML = '';
-            reversed.forEach(t => renderHistoryItem(t));
-            $('history-count').innerText = reversed.length;
+            // 3. Try to load history
+            api('/api/tasks?cb=' + Date.now()).then(tasks => {
+                const reversed = (tasks.tasks || []).reverse();
+                if (reversed.length) $('task-history').innerHTML = '';
+                reversed.forEach(t => renderHistoryItem(t));
+                $('history-count').innerText = reversed.length;
+            }).catch(e => console.warn('History fetch failed'));
+
+            const health = await api('/api/health').catch(e => ({version: '1.0.0'}));
+            console.log('Server version:', health.version);
         } catch (e) {
-            console.error("Init failed", e);
-            toast('Could not reach the agent server', 'err', 5000);
-
+            console.error("Init resilient mode active", e);
         }
     };
 
@@ -1458,6 +1636,7 @@
             </div>
         `;
         histItem.querySelector('.history-goal').innerText = t.goal || '(untitled)';
+        histItem.title = [t.mode, t.model].filter(Boolean).join(' • ');
         $('task-history').appendChild(histItem);
         historyItems.push(histItem);
         bindHistoryItem(histItem, t.id);
@@ -1504,11 +1683,72 @@
     };
 
     let activeHistoryItem = null;
+    let currentViewedTask = null;
+    let currentMode = 'coding';
+    let currentBackgroundMode = true;
+    let activePlanCard = null;
+    let currentPhase = 'Idle';
+    let currentSubtaskText = 'No active subtask';
+    let currentActionText = 'No active action';
+    let currentWaitingText = 'Nothing';
+    let phaseStartedAt = null;
+    const terminalStreamEls = {};
 
     const updateClock = () => {
         if (!startTime) return;
         const s = Math.floor((Date.now() - startTime) / 1000);
         $('stat-time').innerText = `${String(Math.floor(s/60)).padStart(2,'0')}:${String(s%60).padStart(2,'0')}`;
+        if (phaseStartedAt) {
+            const ps = Math.floor((Date.now() - phaseStartedAt) / 1000);
+            $('phase-time').innerText = `${String(Math.floor(ps/60)).padStart(2,'0')}:${String(ps%60).padStart(2,'0')}`;
+        } else {
+            $('phase-time').innerText = '00:00';
+        }
+    };
+
+    const renderLiveDetails = () => {
+        const phaseEl = $('live-phase');
+        const subtaskEl = $('live-subtask');
+        const actionEl = $('live-action');
+        const waitingEl = $('live-waiting');
+        phaseEl.innerText = currentPhase;
+        subtaskEl.innerText = currentSubtaskText;
+        actionEl.innerText = currentActionText;
+        waitingEl.innerText = currentWaitingText;
+        phaseEl.className = 'live-detail-value' + (currentPhase === 'Idle' ? ' muted' : '');
+        subtaskEl.className = 'live-detail-value' + (currentSubtaskText === 'No active subtask' ? ' muted' : '');
+        actionEl.className = 'live-detail-value' + (currentActionText === 'No active action' ? ' muted' : '');
+        waitingEl.className = 'live-detail-value' + (currentWaitingText === 'Nothing' ? ' muted' : ' waiting');
+    };
+
+    const setPhase = (label) => {
+        currentPhase = label || 'Idle';
+        phaseStartedAt = Date.now();
+        renderLiveDetails();
+    };
+
+    const setSubtask = (label) => {
+        currentSubtaskText = label || 'No active subtask';
+        renderLiveDetails();
+    };
+
+    const setAction = (label) => {
+        currentActionText = label || 'No active action';
+        renderLiveDetails();
+    };
+
+    const setWaiting = (label) => {
+        currentWaitingText = label || 'Nothing';
+        renderLiveDetails();
+    };
+
+    const resetLiveDetails = () => {
+        currentPhase = 'Idle';
+        currentSubtaskText = 'No active subtask';
+        currentActionText = 'No active action';
+        currentWaitingText = 'Nothing';
+        phaseStartedAt = null;
+        renderLiveDetails();
     };
 
     const logMsg = (text, type='info') => {
@@ -1551,7 +1791,8 @@
         const el = document.createElement('div');
         el.className = 'status-bubble bubble' + (isThinking ? ' thinking' : '');
         if (isThinking) {
-            el.innerHTML = `${text} <span class="thinking-dots"><span>.</span><span>.</span><span>.</span></span>`;
+            const cleanText = String(text || '').replace(/[.\u2026]+\s*$/, '');
+            el.innerHTML = `${cleanText} <span class="thinking-dots"><span>.</span><span>.</span><span>.</span></span>`;
         } else {
             el.innerText = text;
         }
@@ -1559,6 +1800,19 @@
         _lastStatusEl = el;
         scrollMessages();
         return el;
+    };
+
+    const filterHistory = () => {
+        const q = ($('history-search')?.value || '').toLowerCase().trim();
+        historyItems.forEach(el => {
+            const goal = (el.querySelector('.history-goal')?.innerText || '').toLowerCase();
+            el.style.display = !q || goal.includes(q) ? '' : 'none';
+        });
+    };
+
+    const setThinking = (active, text = 'Thinking') => {
+        $('thinking-pill-text').innerText = text;
+        $('thinking-pill').classList.toggle('hidden', !active);
     };
 
     // Action result mini-card in main chat
@@ -1598,10 +1852,12 @@
 
     const renderPlan = plan => {
         removeEmptyState();
+        const replacingPlan = !!activePlanCard;
+        if (activePlanCard && activePlanCard.parentNode) activePlanCard.remove();
         const planContainer = document.createElement('div');
         planContainer.className = 'plan-card';
         planContainer.innerHTML = `
-            <div class="plan-label">Hierarchical plan</div>
+            <div class="plan-label">${replacingPlan ? 'Updated plan' : 'Hierarchical plan'}</div>
             <div class="plan-reasoning"></div>
             <div class="subtask-list"></div>
         `;
@@ -1620,6 +1876,7 @@
             list.appendChild(row);
         });
         $('messages').appendChild(planContainer);
+        activePlanCard = planContainer;
         scrollMessages();
     };
 
@@ -1639,8 +1896,6 @@
         }
     };
 
-    let currentMode = 'coding'; // default to coding mode
-
     // Code output tab switching
     window.switchCodeTab = (tab) => {
         document.querySelectorAll('.panel-tab').forEach(t => t.classList.toggle('active', t.dataset.tab === tab));
@@ -1648,14 +1903,55 @@
         $('code-terminal-tab').classList.toggle('hidden', tab !== 'terminal');
     };
 
-    const setCodingMode = (isCoding) => {
-        currentMode = isCoding ? 'coding' : 'computer';
+    const setModeBanner = (badge, copy, hidden = false) => {
+        $('mode-banner').classList.toggle('hidden', hidden);
+        $('mode-badge').innerText = badge;
+        $('mode-copy').innerHTML = copy;
+    };
+
+    const setModeState = (mode = 'coding', background = currentBackgroundMode, detailMessage = '') => {
+        currentMode = mode || 'coding';
+        currentBackgroundMode = background;
+
+        const isCoding = currentMode === 'coding';
+        const isBrowser = currentMode === 'computer_use';
+        const isDesktop = currentMode === 'computer';
+
         $('screen-section').classList.toggle('hidden', isCoding);
         $('code-section').classList.toggle('hidden', !isCoding);
+
+        $('screen-panel-title').innerText = isBrowser ? 'Browser preview' : 'Live screen';
+        $('code-panel-title').innerText = 'Code output';
+
+        $('code-live-chip').classList.toggle('live', isCoding);
+        $('code-live-text').innerText = 'CODING';
+
+        $('live-chip').classList.toggle('live', !isCoding);
+        $('live-text').innerText = isBrowser ? 'BROWSER' : isDesktop ? 'DESKTOP' : 'IDLE';
+
         if (isCoding) {
-            $('code-live-chip').classList.add('live');
-            $('code-live-text').innerText = 'CODING';
+            setModeBanner(
+                'Coding',
+                `<strong>Coding mode.</strong> The agent is working through files and shell commands.${detailMessage ? ` ${detailMessage}` : ''}`,
+                false,
+            );
+        } else if (isBrowser) {
+            setModeBanner(
+                'Browser',
+                `<strong>Browser cowork mode.</strong> ${detailMessage || (currentBackgroundMode ? 'The agent is browsing in the background while you keep using your computer.' : 'Browser automation is active.')}`,
+                false,
+            );
+        } else {
+            setModeBanner(
+                'Desktop',
+                `<strong>Desktop control mode.</strong> ${detailMessage || 'The agent may move the mouse and type on your real desktop.'}`,
+                false,
+            );
         }
+    };
+
+    const setCodingMode = (isCoding) => {
+        setModeState(isCoding ? 'coding' : 'computer', !isCoding ? false : true, '');
     };
 
     const addFileEntry = (path, action, content) => {
@@ -1677,9 +1973,17 @@
         $('code-files-tab').scrollTop = $('code-files-tab').scrollHeight;
     };
 
-    const addTerminalEntry = (command, output, ok) => {
+    const addTerminalEntry = (command, output, ok, stream=false, streamId='') => {
         const empty = $('code-terminal-tab').querySelector('.log-empty');
         if (empty) empty.remove();
+        if (stream && streamId && terminalStreamEls[streamId]) {
+            const outDiv = terminalStreamEls[streamId].querySelector('.terminal-out') || document.createElement('div');
+            outDiv.className = 'terminal-out' + (ok ? '' : ' fail');
+            outDiv.textContent += output;
+            if (!outDiv.parentNode) terminalStreamEls[streamId].appendChild(outDiv);
+            $('code-terminal-tab').scrollTop = $('code-terminal-tab').scrollHeight;
+            return;
+        }
         const el = document.createElement('div');
         el.className = 'terminal-entry';
         const cmdDiv = document.createElement('div');
@@ -1692,27 +1996,318 @@
             outDiv.textContent = output.slice(0, 500);
             el.appendChild(outDiv);
         }
+        if (stream && streamId) terminalStreamEls[streamId] = el;
         $('code-terminal-tab').appendChild(el);
         $('code-terminal-tab').scrollTop = $('code-terminal-tab').scrollHeight;
+    };
+
+    const clearReconnectTimer = () => {
+        if (reconnectTimer) {
+            clearTimeout(reconnectTimer);
+            reconnectTimer = null;
+        }
+    };
+
+    const resetTaskView = ({ replay = false, keepMessages = false } = {}) => {
+        clearReconnectTimer();
+        if (sse) { sse.close(); sse = null; }
+        streamClosedManually = replay;
+        streamCursor = 0;
+        reconnectAttempts = 0;
+        activePlanCard = null;
+        subtaskEls = {};
+        planSubtasks = [];
+        currentSubtaskIdx = 0;
+        stats = { actions: 0, subDone: 0, subTotal: 0, logEvents: 0 };
+        $('stat-actions').innerText = '0';
+        $('stat-subtasks').innerHTML = `0<span class="sub">/0</span>`;
+        $('stat-time').innerText = replay ? '—' : '00:00';
+        $('log').innerHTML = '';
+        $('log-count').innerText = '0 events';
+        if (!keepMessages) $('messages').innerHTML = '';
+        $('code-files-tab').innerHTML = '<div class="log-empty" id="files-empty">Modified files will appear here</div>';
+        $('code-terminal-tab').innerHTML = '<div class="log-empty" id="terminal-empty">Command output will appear here</div>';
+        Object.keys(terminalStreamEls).forEach(k => delete terminalStreamEls[k]);
+        screenshots.length = 0;
+        resetLiveDetails();
+        setThinking(false);
+        setModeState('coding', true, '');
+        $('screen').src = '';
+        $('screen').classList.remove('on');
+        $('screen-grid').classList.remove('hidden');
+        $('screen-placeholder').classList.remove('hidden');
+        $('screen-placeholder').innerHTML = '<div class="placeholder-dot"></div>Awaiting task · no stream';
+        switchCodeTab('files');
+    };
+
+    const statusPhase = (message = '') => (
+        /initializing/i.test(message) ? 'Initializing' :
+        /executing sub-task/i.test(message) ? 'Executing' :
+        /reflecting/i.test(message) ? 'Reflecting' :
+        /evaluating/i.test(message) ? 'Evaluating' :
+        /re-planning/i.test(message) ? 'Re-planning' :
+        /thinking|planning/i.test(message) ? 'Planning' :
+        /paused/i.test(message) ? 'Paused' :
+        /resumed/i.test(message) ? 'Running' :
+        currentPhase
+    );
+
+    const processTaskEvent = (d, { replay = false, taskId = task, suppressToasts = false } = {}) => {
+        if (d.type === 'task_created') return;
+
+        if (d.type === 'plan') {
+            planSubtasks = d.sub_tasks || [];
+            currentSubtaskIdx = 0;
+            renderPlan(d);
+            return;
+        }
+
+        if (d.type === 'status') {
+            logAction(null, d.message, '', 'info');
+            const runningMatch = d.message && d.message.match(/Executing sub-task:/);
+            if (runningMatch && planSubtasks[currentSubtaskIdx]) {
+                if (currentSubtaskIdx > 0 && subtaskEls[planSubtasks[currentSubtaskIdx - 1].id] && subtaskEls[planSubtasks[currentSubtaskIdx - 1].id].classList.contains('subtask-running')) {
+                    markSubtask(planSubtasks[currentSubtaskIdx - 1].id, 'done');
+                }
+                markSubtask(planSubtasks[currentSubtaskIdx].id, 'running');
+                setSubtask(planSubtasks[currentSubtaskIdx].description || d.message.replace('Executing sub-task: ', ''));
+                setAction('');
+                setWaiting('Working');
+            }
+            setPhase(statusPhase(d.message || ''));
+            const isThinking = /thinking|planning|evaluating|reflecting/i.test(d.message);
+            const thinkingLabel = /reflecting/i.test(d.message) ? 'Reflecting' : /evaluating/i.test(d.message) ? 'Evaluating' : 'Thinking';
+            setThinking(isThinking, thinkingLabel);
+            if (!replay) chatStatus(d.message, isThinking);
+            return;
+        }
+
+        if (d.type === 'action_start') {
+            setThinking(false);
+            setPhase('Acting');
+            setAction(`${d.action_type}${d.args_summary ? ` — ${d.args_summary}` : ''}`);
+            setWaiting('Working');
+            logAction(d.action_type, 'EXEC', d.args_summary || '', 'info');
+            if (!replay) chatStatus(`▸ ${d.action_type}: ${d.args_summary || ''}`);
+            return;
+        }
+
+        if (d.type === 'action_result') {
+            stats.actions++;
+            $('stat-actions').innerText = stats.actions;
+            const truncated = (d.output || '').slice(0, 80).replace(/\n/g, ' ');
+            logAction(null, d.ok ? 'OK  ' : 'FAIL', truncated, d.ok ? 'ok' : 'fail');
+            if (!replay) chatAction(d.action_type || '', d.args_summary || '', d.output, d.ok);
+            return;
+        }
+
+        if (d.type === 'mode') {
+            const detail = d.mode === 'coding'
+                ? 'Text-only flow with file edits and shell output.'
+                : d.mode === 'computer_use'
+                    ? 'Browser automation with background previews.'
+                    : 'Vision-driven desktop control on your real screen.';
+            setModeState(d.mode, currentBackgroundMode, detail);
+            logAction(null, 'MODE', detail, 'info');
+            return;
+        }
+
+        if (d.type === 'cowork_status') {
+            setModeState(currentMode, !!d.background, d.message || '');
+            setWaiting(d.background ? 'Background automation' : 'Using your desktop');
+            logAction(null, 'COWORK', d.message || '', 'info');
+            return;
+        }
+
+        if (d.type === 'screenshot') {
+            $('screen').classList.add('on');
+            $('screen').src = `data:image/png;base64,${d.data}`;
+            $('screen-placeholder').classList.add('hidden');
+            $('screen-grid').classList.add('hidden');
+            screenshots.push({b64: d.data, ts: Date.now()});
+            if (screenshots.length > 200) screenshots.shift();
+            return;
+        }
+
+        if (d.type === 'file_change') {
+            addFileEntry(d.path, d.action, d.content || '');
+            logAction('write_file', 'FILE', d.path, 'ok');
+            return;
+        }
+
+        if (d.type === 'terminal_output') {
+            addTerminalEntry(d.command, d.output, d.ok, !!d.stream, d.action_id || d.command);
+            if (!replay) switchCodeTab('terminal');
+            return;
+        }
+
+        if (d.type === 'reflection') {
+            setPhase('Reflecting');
+            setAction('');
+            renderReflection(d);
+            if (d.success === false) {
+                if (planSubtasks[currentSubtaskIdx]) markSubtask(planSubtasks[currentSubtaskIdx].id, 'failed');
+                setWaiting('Retrying or re-planning');
+                if (!replay && !suppressToasts) toast(`Subtask failed: ${(d.reason || 'unknown').slice(0, 60)}`, 'warn', 4200);
+            } else if (d.success === true) {
+                if (planSubtasks[currentSubtaskIdx]) {
+                    markSubtask(planSubtasks[currentSubtaskIdx].id, 'done');
+                    currentSubtaskIdx++;
+                }
+                setWaiting('Working');
+            }
+            return;
+        }
+
+        if (d.type === 'approval_required') {
+            const reason = d.reason || d.action.explanation || 'High risk action requires approval.';
+            setPhase('Waiting');
+            setWaiting(`Approval for ${d.action.type}`);
+            logAction(d.action.type, 'APPROVAL', reason, 'warn');
+            if (replay) return;
+            $('app-type').innerText = d.action.type;
+            $('app-reason').innerText = reason;
+            $('app-code').innerText = JSON.stringify(d.action.args, null, 2);
+            try { hljs.highlightElement($('app-code')); } catch(err) {}
+            $('approval').classList.add('show');
+            window.tid = taskId;
+            window.aid = d.action_id;
+            if (!suppressToasts) toast('Agent is waiting for approval', 'warn', 6000);
+            return;
+        }
+
+        if (d.type === 'permission_required') {
+            const scope = (d.scope || 'app').toUpperCase();
+            setPhase('Waiting');
+            setWaiting(`Permission: ${d.scope || 'unknown'}`);
+            logAction(d.action_id, 'PERMISSION', `Requested: ${d.scope}`, 'info');
+            if (replay) return;
+            $('perm-scope').innerText = scope;
+            $('perm-reason').innerText = d.reason || d.explanation || `The agent needs access to ${scope}.`;
+            $('perm-code').innerText = JSON.stringify({scope: d.scope, explanation: d.explanation || ''}, null, 2);
+            try { hljs.highlightElement($('perm-code')); } catch(err) {}
+            $('permission').classList.add('show');
+            window.tid = taskId;
+            window.paid = d.action_id;
+            window.pscope = d.scope;
+            if (!suppressToasts) toast(`Agent asks to use ${scope}`, 'warn', 6000);
+            return;
+        }
+
+        if (d.type === 'browser_event') {
+            const k = d.kind || 'browser';
+            let detail = '';
+            if (k === 'navigate') detail = d.url || '';
+            else if (k === 'page_read') detail = (d.excerpt || '').slice(0, 120).replace(/\s+/g,' ');
+            else detail = d.selector || '';
+            setAction(k === 'page_read' ? 'Reading page' : `Browser ${k}`);
+            logAction(null, k.toUpperCase(), detail, 'info');
+            return;
+        }
+
+        if (d.type === 'error') {
+            setThinking(false);
+            setPhase('Error');
+            setWaiting('Nothing');
+            setStatus('error');
+            logAction(null, 'ERROR', d.message, 'fail');
+            if (!replay) {
+                msg(`Error: ${d.message}`, 'error');
+                markHistoryFinal('failed');
+                if (!suppressToasts) toast(d.message || 'Task errored', 'err', 5000);
+                stopEverything();
+            }
+            return;
+        }
+
+        if (d.type === 'done') {
+            setThinking(false);
+            setPhase(d.complete ? 'Complete' : 'Failed');
+            setAction('');
+            setWaiting('Nothing');
+            if (planSubtasks[currentSubtaskIdx] && d.complete) markSubtask(planSubtasks[currentSubtaskIdx].id, 'done');
+            if (d.complete) {
+                setStatus('complete');
+                logAction(null, 'DONE', 'Task complete', 'ok');
+                if (!replay) {
+                    msg('Task completed successfully 🎉', 'success');
+                    markHistoryFinal('done');
+                    if (!suppressToasts) toast('Task complete', 'ok', 3200);
+                    confetti({ particleCount: 120, spread: 70, origin: { y: 0.6 }, colors: ['#d97757','#e89875','#f4c4a8','#f5f0e8','#ffffff'] });
+                    stopEverything();
+                }
+            } else {
+                setStatus('failed');
+                logAction(null, 'FAILED', d.reason || '', 'fail');
+                if (!replay) {
+                    msg(`Task failed: ${d.reason}`, 'error');
+                    markHistoryFinal('failed');
+                    if (!suppressToasts) toast('Task failed', 'err', 4200);
+                    stopEverything();
+                }
+            }
+            if (replay) msg(d.complete ? 'Task completed successfully.' : `Task failed: ${d.reason || ''}`, d.complete ? 'success' : 'error');
+            return;
+        }
+
+        if (d.type === 'cancelled') {
+            setThinking(false);
+            setPhase('Cancelled');
+            setStatus('cancelled');
+            setWaiting('Nothing');
+            if (!replay) {
+                markHistoryFinal('failed');
+                msg('Task was cancelled.', 'cancel');
+                stopEverything();
+            }
+        }
+    };
+
+    const scheduleReconnect = (listenTask) => {
+        clearReconnectTimer();
+        reconnectAttempts += 1;
+        const delay = Math.min(3000 * reconnectAttempts, 15000);
+        reconnectTimer = setTimeout(async () => {
+            try {
+                const rec = await api(`/api/tasks/${listenTask}`);
+                if (rec.status && rec.status !== 'running' && !rec.paused) {
+                    if (rec.status === 'done' || rec.status === 'complete') {
+                        processTaskEvent({ type: 'done', complete: true, reason: rec.reason || '' }, { taskId: listenTask, suppressToasts: true });
+                    } else if (rec.status === 'failed') {
+                        processTaskEvent({ type: 'done', complete: false, reason: rec.reason || '' }, { taskId: listenTask, suppressToasts: true });
+                    } else if (rec.status === 'cancelled') {
+                        processTaskEvent({ type: 'cancelled', message: rec.reason || 'Task was cancelled.' }, { taskId: listenTask, suppressToasts: true });
+                    }
+                    return;
+                }
+            } catch (_) {}
+
+            if (task === listenTask && !streamClosedManually) openStream(listenTask);
+        }, delay);
+    };
+
+    const openStream = (listenTask) => {
+        if (sse) { sse.close(); sse = null; }
+        sse = new EventSource(`/api/tasks/${listenTask}/stream?token=${getKey()}&since=${streamCursor}`);
+        sse.onmessage = e => {
+            if (task !== listenTask) return;
+            reconnectAttempts = 0;
+            const d = JSON.parse(e.data);
+            streamCursor += 1;
+            processTaskEvent(d, { taskId: listenTask });
+        };
+        sse.onerror = () => {
+            if (task !== listenTask || streamClosedManually) return;
+            logMsg(`Stream interrupted. Reconnecting (attempt ${reconnectAttempts + 1})...`, 'warn');
+            scheduleReconnect(listenTask);
+        };
     };
 
     const start = async () => {
         const goal = $('input').value.trim(); if(!goal) return;
         task = Math.random().toString(36).slice(2);
-        subtaskEls = {};
-        stats = { actions: 0, subDone: 0, subTotal: 0, logEvents: 0 };
-        $('stat-actions').innerText = '0';
-        $('stat-subtasks').innerHTML = `0<span class="sub">/0</span>`;
-        $('stat-time').innerText = '00:00';
-        $('log').innerHTML = '';
-        $('log-count').innerText = '0 events';
-
-        // Reset code output panels
-        $('code-files-tab').innerHTML = '<div class="log-empty" id="files-empty">Modified files will appear here</div>';
-        $('code-terminal-tab').innerHTML = '<div class="log-empty" id="terminal-empty">Command output will appear here</div>';
-
-        // Default to coding mode (will be confirmed by server)
-        setCodingMode(true);
+        currentViewedTask = task;
+        resetTaskView();
 
         removeEmptyState();
         msg(goal, 'user');
@@ -1723,36 +2318,50 @@
         $('task-title').classList.remove('idle');
         setStatus('running', true);
         $('controls').classList.remove('hidden');
-
-        $('screen-placeholder').classList.add('hidden');
-        $('screen-grid').classList.add('hidden');
-        $('screen').classList.add('on');
-        const liveChip = $('live-chip'); liveChip.classList.add('live'); $('live-text').innerText = 'LIVE';
+        $('btn-pause').classList.remove('hidden');
+        $('btn-cancel').classList.remove('hidden');
+        $('btn-retry').classList.add('hidden');
 
         activeHistoryItem = addActiveHistoryItem(goal);
+        setPhase('Initializing');
 
         startTime = Date.now();
+        clearInterval(timer);
         timer = setInterval(updateClock, 1000);
 
         logMsg('Initializing task...', 'info');
         try {
+            // Wait for API key to be ready before submitting task
+            if (keyReady) await keyReady;
             const modeSel = $('mode-id') ? $('mode-id').value : 'auto';
-            await api('/api/tasks', 'POST', {task_id:task, goal, model:$('model-id').value, mode: modeSel});
-            listen();
+            const modelVal = $('model-id').value;
+            await api('/api/tasks', 'POST', {task_id:task, goal, model:modelVal, mode: modeSel});
+            streamClosedManually = false;
+            openStream(task);
         } catch (e) {
             setStatus('error');
-            msg("Failed to start task.", "error");
-            logMsg('Failed to start task', 'fail');
+            const errorMsg = e.detail ? `Failed: ${e.detail}` : "Failed to start task.";
+            msg(errorMsg, "error");
+            logMsg(errorMsg, 'fail');
+            console.error("Task start error:", e);
         }
     };
 
 
     const stopEverything = () => {
         clearInterval(timer);
-        if (sse) sse.close();
-        $('controls').classList.add('hidden');
-        $('live-text').innerText = 'IDLE';
-        $('live-chip').classList.remove('live');
+        clearReconnectTimer();
+        streamClosedManually = true;
+        if (sse) { sse.close(); sse = null; }
+        // Keep controls visible but show only post-task actions
+        $('btn-pause').classList.add('hidden');
+        $('btn-cancel').classList.add('hidden');
+        $('btn-retry').classList.remove('hidden');
+        $('btn-copy-log').classList.remove('hidden');
+        $('btn-download-log').classList.remove('hidden');
+        setThinking(false);
+        setAction('');
+        setWaiting('Nothing');
     };
 
     const markHistoryFinal = (state) => {
@@ -1776,195 +2385,62 @@
         await api(`/api/tasks/${task}/${isPaused ? 'pause' : 'resume'}`, 'POST');
         $('btn-pause').innerText = isPaused ? 'Resume' : 'Pause';
         if (isPaused) {
+            setPhase('Paused');
             setStatus('paused');
             logMsg('Task paused', 'warn');
         } else {
+            setPhase('Running');
             setStatus('running', true);
             logMsg('Task resumed', 'info');
         }
     };
 
-    let currentSubtaskIdx = 0;
-    let planSubtasks = [];
+    const retryTask = async () => {
+        if (!currentViewedTask) return toast('No task selected', 'warn');
+        try {
+            const goal = $('task-title').innerText || 'Retry';
+            const res = await api(`/api/tasks/${currentViewedTask}/retry`, 'POST');
+            task = res.task_id;
+            currentViewedTask = task;
+            resetTaskView();
+            $('task-title').innerText = goal;
+            $('task-title').classList.remove('idle');
+            setStatus('running', true);
+            $('controls').classList.remove('hidden');
+            $('btn-pause').classList.remove('hidden');
+            $('btn-cancel').classList.remove('hidden');
+            activeHistoryItem = addActiveHistoryItem(goal);
+            msg(goal, 'user');
+            setPhase('Initializing');
+            startTime = Date.now();
+            clearInterval(timer);
+            timer = setInterval(updateClock, 1000);
+            toast(`Retried as ${task}`, 'ok', 2600);
+            openStream(task);
+        } catch (e) {
+            toast(e.detail || 'Retry failed', 'err');
+        }
+    };
 
+    const copyCurrentLog = async () => {
+        if (!currentViewedTask) return toast('No task selected', 'warn');
+        try {
+            const r = await api(`/api/tasks/${currentViewedTask}/log`);
+            await navigator.clipboard.writeText(JSON.stringify(r.log || [], null, 2));
+            toast('Copied log to clipboard', 'ok', 2200);
+        } catch (e) {
+            toast('Could not copy log', 'err');
+        }
+    };
 
-    const listen = () => {
-        if (sse) { sse.close(); sse = null; }
-        sse = new EventSource(`/api/tasks/${task}/stream?token=${getKey()}`);
-        const listenTask = task;
-        sse.onmessage = e => {
-            if (task !== listenTask) return; // stale handler — new task started
-            const d = JSON.parse(e.data);
-
-            if (d.type === 'plan') {
-                planSubtasks = d.sub_tasks || [];
-                currentSubtaskIdx = 0;
-                renderPlan(d);
-            }
-
-            if (d.type === 'status') {
-                logAction(null, d.message, '', 'info');
-                const runningMatch = d.message && d.message.match(/Executing sub-task:/);
-                if (runningMatch && planSubtasks[currentSubtaskIdx]) {
-                    if (currentSubtaskIdx > 0 && subtaskEls[planSubtasks[currentSubtaskIdx-1].id] && subtaskEls[planSubtasks[currentSubtaskIdx-1].id].classList.contains('subtask-running')) {
-                        markSubtask(planSubtasks[currentSubtaskIdx-1].id, 'done');
-                    }
-                    markSubtask(planSubtasks[currentSubtaskIdx].id, 'running');
-                }
-                // Stream status into main chat
-                const isThinking = /thinking|planning|evaluating/i.test(d.message);
-                chatStatus(d.message, isThinking);
-            }
-
-            if (d.type === 'action_start') {
-                logAction(d.action_type, 'EXEC', d.args_summary || '', 'info');
-                chatStatus(`▸ ${d.action_type}: ${d.args_summary || ''}`);
-            }
-
-            if (d.type === 'action_result') {
-                stats.actions++;
-                $('stat-actions').innerText = stats.actions;
-                const truncated = (d.output || '').slice(0, 80).replace(/\n/g, ' ');
-                logAction(null, d.ok ? 'OK  ' : 'FAIL', truncated, d.ok ? 'ok' : 'fail');
-                // Show action result in main chat as mini-card
-                chatAction(d.action_type || '', d.args_summary || '', d.output, d.ok);
-            }
-
-            if (d.type === 'mode') {
-                setCodingMode(d.mode === 'coding');
-                logAction(null, 'MODE', d.mode === 'coding' ? 'Coding mode (text-only, no screenshots)' : 'Computer mode (vision + mouse)', 'info');
-            }
-
-            if (d.type === 'screenshot') {
-                $('screen').src = `data:image/png;base64,${d.data}`;
-                screenshots.push({b64: d.data, ts: Date.now()});
-                if (screenshots.length > 200) screenshots.shift();
-            }
-
-            if (d.type === 'file_change') {
-                addFileEntry(d.path, d.action, d.content || '');
-                logAction('write_file', 'FILE', d.path, 'ok');
-            }
-
-            if (d.type === 'terminal_output') {
-                addTerminalEntry(d.command, d.output, d.ok);
-                // Auto-switch to terminal tab when a command runs
-                switchCodeTab('terminal');
-            }
-
-            if (d.type === 'reflection') {
-                renderReflection(d);
-                if (d.success === false) {
-                    if (planSubtasks[currentSubtaskIdx]) {
-                        markSubtask(planSubtasks[currentSubtaskIdx].id, 'failed');
-                    }
-                    toast(`Subtask failed: ${(d.reason || 'unknown').slice(0, 60)}`, 'warn', 4200);
-                } else if (d.success === true) {
-                    if (planSubtasks[currentSubtaskIdx]) {
-                        markSubtask(planSubtasks[currentSubtaskIdx].id, 'done');
-                        currentSubtaskIdx++;
-
-                    }
-                }
-            }
-
-            if (d.type === 'approval_required') {
-                $('app-type').innerText = d.action.type;
-                // Handle both old and new payload shapes
-                const reason = d.reason || d.action.explanation || "High risk action requires approval.";
-                $('app-reason').innerText = reason;
-                $('app-code').innerText = JSON.stringify(d.action.args, null, 2);
-                try { hljs.highlightElement($('app-code')); } catch(err) {}
-                $('approval').classList.add('show');
-                window.tid = task;
-                window.aid = d.action_id;
-                toast('Agent is waiting for approval', 'warn', 6000);
-            }
-
-            if (d.type === 'permission_required') {
-                const scope = (d.scope || 'app').toUpperCase();
-                $('perm-scope').innerText = scope;
-                $('perm-reason').innerText = d.reason || d.explanation || `The agent needs access to ${scope}.`;
-                $('perm-code').innerText = JSON.stringify({scope: d.scope, explanation: d.explanation || ''}, null, 2);
-                try { hljs.highlightElement($('perm-code')); } catch(err) {}
-                $('permission').classList.add('show');
-                window.tid = task;
-                window.paid = d.action_id;
-                window.pscope = d.scope;
-                toast(`Agent asks to use ${scope}`, 'warn', 6000);
-                logAction(d.action_id, 'PERMISSION', `Requested: ${d.scope}`, 'info');
-            }
-
-            if (d.type === 'browser_event') {
-                const k = d.kind || 'browser';
-                let detail = '';
-                if (k === 'navigate') detail = d.url || '';
-                else if (k === 'page_read') detail = (d.excerpt || '').slice(0, 120).replace(/\s+/g,' ');
-                else detail = d.selector || '';
-                logAction(null, k.toUpperCase(), detail, 'info');
-            }
-
-            if (d.type === 'error') {
-                msg(`Error: ${d.message}`, 'error');
-                setStatus('error');
-                logAction(null, 'ERROR', d.message, 'fail');
-                markHistoryFinal('failed');
-                toast(d.message || 'Task errored', 'err', 5000);
-                stopEverything();
-            }
-
-            if (d.type === 'done') {
-                if (planSubtasks[currentSubtaskIdx] && d.complete) {
-                    markSubtask(planSubtasks[currentSubtaskIdx].id, 'done');
-
-                }
-                if (d.complete) {
-                    setStatus('complete');
-                    msg("Task completed successfully 🎉", "success");
-                    logAction(null, 'DONE', 'Task complete', 'ok');
-                    markHistoryFinal('done');
-                    toast('Task complete', 'ok', 3200);
-                    confetti({ particleCount: 120, spread: 70, origin: { y: 0.6 }, colors: ['#d97757','#e89875','#f4c4a8','#f5f0e8','#ffffff'] });
-                } else {
-                    setStatus('failed');
-                    msg(`Task failed: ${d.reason}`, "error");
-                    logAction(null, 'FAILED', d.reason || '', 'fail');
-                    markHistoryFinal('failed');
-                    toast('Task failed', 'err', 4200);
-                }
-                stopEverything();
-            }
-
-            if (d.type === 'cancelled') {
-                setStatus('cancelled');
-                markHistoryFinal('failed');
-                stopEverything();
-            }
-        };
-
-        sse.onerror = () => {
-            // Poll task status to catch completion that happened before SSE connected
-            if (task) {
-                api(`/api/tasks/${task}`).then(rec => {
-                    if (rec.status && rec.status !== 'running') {
-                        const done = rec.status === 'done' || rec.status === 'complete';
-                        const failed = rec.status === 'failed';
-                        const cancelled = rec.status === 'cancelled';
-                        if (done) { setStatus('complete'); msg('Task completed successfully.', 'success'); }
-                        else if (failed) { setStatus('failed'); msg(`Task failed: ${rec.reason || ''}`, 'error'); }
-                        else if (cancelled) { setStatus('cancelled'); msg('Task was cancelled.', 'cancel'); }
-                        markHistoryFinal(rec.status);
-                        stopEverything();
-                    } else {
-                        logMsg("Lost connection to stream", "fail");
-                        stopEverything();
-                    }
-                }).catch(() => { logMsg("Lost connection to stream", "fail"); stopEverything(); });
-            } else {
-                logMsg("Lost connection to stream", "fail");
-                stopEverything();
-            }
-        };
+    const downloadCurrentLog = () => {
+        if (!currentViewedTask) return toast('No task selected', 'warn');
+        const a = document.createElement('a');
+        a.href = `/api/tasks/${currentViewedTask}/log/download?token=${encodeURIComponent(getKey())}`;
+        a.download = `${currentViewedTask}.jsonl`;
+        document.body.appendChild(a);
+        a.click();
+        a.remove();
     };
 
     const sendApp = a => {
@@ -1989,6 +2465,7 @@
         $('char-count').innerText = n ? `${n} chars` : '';
     };
     ta.addEventListener('input', () => { autoGrow(); updateCharCount(); });
+    $('history-search').addEventListener('input', filterHistory);
 
     $('send').onclick = start;
     ta.onkeydown = e => {
@@ -2049,6 +2526,10 @@
     const actionTag = (type) => {
         if (!type) return {cls: 'sys', label: 'SYS'};
         const t = type.toLowerCase();
+        if (t === 'bash') return {cls:'shell', label:'BASH'};
+        if (t === 'text_editor') return {cls:'text', label:'EDIT'};
+        if (t === 'computer') return {cls:'mouse', label:'COMP'};
+        if (t === 'web_search') return {cls:'api', label:'WEB'};
         if (t === 'run_command') return {cls:'shell', label:'SHELL'};
         if (t.startsWith('browser_')) return {cls:'brow', label:'BROW'};
         if (t.startsWith('text_')) return {cls:'text', label:'TEXT'};
@@ -2311,30 +2792,30 @@
     // ============================================================
     function hydrateModelSelect(models) {
         const sel = $('model-id');
+        if (!sel) return;
         sel.innerHTML = '';
-        const groups = {};
-        (models || []).forEach(m => {
-            let provider = 'Other';
-            if (m.startsWith('claude')) provider = 'Anthropic';
-            else if (m.startsWith('gpt')) provider = 'OpenAI';
-            else if (m.startsWith('gemini')) provider = 'Google';
-            else if (m.startsWith('groq')) provider = 'Groq';
-            else if (m.startsWith('openrouter')) provider = 'OpenRouter';
-            (groups[provider] = groups[provider] || []).push(m);
+        
+        // Use provided models or a reasonable fallback if none found
+        let list = models && models.length ? models : [
+            "openrouter/nvidia/nemotron-3-super-120b-a12b:free",
+            "openrouter/google/gemma-4-31b-it:free",
+            "openrouter/google/gemma-4-26b-a4b-it:free",
+            "claude-3-5-sonnet-20241022",
+            "gpt-4o-mini"
+        ];
+
+        list.forEach(m => {
+            const opt = document.createElement('option');
+            opt.value = m;
+            // Human readable label
+            let label = m.replace('openrouter/', '');
+            if (label.includes('/')) label = label.split('/').pop();
+            opt.textContent = label;
+            sel.appendChild(opt);
         });
-        const order = ['Anthropic','OpenAI','Google','Groq','OpenRouter','Other'];
-        order.forEach(p => {
-            if (!groups[p]) return;
-            const og = document.createElement('optgroup');
-            og.label = p;
-            groups[p].forEach(m => {
-                const opt = document.createElement('option');
-                opt.value = m;
-                opt.textContent = m.replace('openrouter/','').split('/').pop();
-                og.appendChild(opt);
-            });
-            sel.appendChild(og);
-        });
+        
+        // Ensure first one is selected if none is
+        if (sel.options.length > 0 && !sel.value) sel.selectedIndex = 0;
     };
 
     // ============================================================
@@ -2342,44 +2823,25 @@
     // ============================================================
     const loadTaskLog = (taskId, events, sourceEl) => {
         // Reset UI
-        $('messages').innerHTML = '';
-        $('log').innerHTML = '';
-        subtaskEls = {};
-        stats = { actions: 0, subDone: 0, subTotal: 0, logEvents: 0 };
-        screenshots.length = 0;
+        currentViewedTask = taskId;
+        resetTaskView({ replay: true });
         historyItems.forEach(el => el.classList.remove('active'));
         sourceEl?.classList.add('active');
-        const firstUser = events.find(e => e.type === 'plan')?.context?.goal;
+        const firstUser = events.find(e => e.type === 'task_created')?.goal;
         const title = sourceEl?.querySelector('.history-goal')?.innerText || firstUser || 'Past task';
         $('task-title').innerText = title;
         $('task-title').classList.remove('idle');
         setStatus('complete');
-        $('controls').classList.add('hidden');
-        $('stat-actions').innerText = '0';
-        $('stat-time').innerText = '—';
+        // Show log/retry controls but not the active-task controls
+        $('controls').classList.remove('hidden');
+        $('btn-pause').classList.add('hidden');
+        $('btn-cancel').classList.add('hidden');
+        $('btn-retry').classList.remove('hidden');
+        $('btn-copy-log').classList.remove('hidden');
+        $('btn-download-log').classList.remove('hidden');
         // Replay events
         msg(title, 'user');
-        events.forEach(d => {
-            if (d.type === 'plan') { planSubtasks = d.sub_tasks || []; currentSubtaskIdx = 0; renderPlan(d); }
-            else if (d.type === 'status') logAction(null, d.message, '');
-            else if (d.type === 'action_start') logAction(d.action_type, 'EXEC', d.args_summary || '', 'info');
-            else if (d.type === 'action_result') {
-                stats.actions++; $('stat-actions').innerText = stats.actions;
-                logAction(null, d.ok ? 'OK  ' : 'FAIL', (d.output || '').slice(0, 80).replace(/\n/g,' '), d.ok ? 'ok' : 'fail');
-            }
-            else if (d.type === 'screenshot') {
-                $('screen').classList.add('on');
-                $('screen').src = `data:image/png;base64,${d.data}`;
-                $('screen-placeholder').classList.add('hidden');
-                $('screen-grid').classList.add('hidden');
-                screenshots.push({b64: d.data, ts: Date.now()});
-            }
-            else if (d.type === 'reflection') renderReflection(d);
-            else if (d.type === 'done') {
-                setStatus(d.complete ? 'complete' : 'failed');
-                msg(d.complete ? 'Task completed successfully.' : `Task failed: ${d.reason || ''}`, d.complete ? 'success' : 'error');
-            }
-        });
+        events.forEach(d => processTaskEvent(d, { replay: true, taskId, suppressToasts: true }));
         toast('Loaded task log', 'info', 1800);
     };
 

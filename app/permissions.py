@@ -27,13 +27,14 @@ _BROWSER_ACTIONS = {
 _FS_ACTIONS = {
     "write_file",
     "move_file",
+    "text_editor",
     "text_create",
     "text_str_replace",
     "text_insert",
     "text_undo_edit",
 }
 
-_SHELL_ACTIONS = {"run_command"}
+_SHELL_ACTIONS = {"run_command", "bash"}
 
 
 def scope_for_action(action_type: str, args: dict | None = None) -> PermissionScope | None:

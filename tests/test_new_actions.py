@@ -1,6 +1,8 @@
+import asyncio
 import json
 import pytest
 import types
+import time
 
 from app.models import Action, ActionType
 from app.safety import SafetyManager
@@ -21,7 +23,8 @@ async def test_new_actions(monkeypatch, workspace):
         keyUp=lambda k: calls.setdefault("keyUp", []).append(k),
         position=lambda: (5, 7),
         write=lambda x, **kw: calls.setdefault("write", []).append(x),
-        size=lambda: (1920, 1080)
+        size=lambda: (1920, 1080),
+        easeInOutQuad=lambda n: n,  # tween function used by moveTo/dragTo
     )
     monkeypatch.setitem(__import__("sys").modules, "pyautogui", pg)
     slept = []
@@ -49,7 +52,88 @@ async def test_new_actions(monkeypatch, workspace):
     out = await t.run_action(Action(id="10", type=ActionType.cursor_position, args={}))
     assert out.data == {"x": 5, "y": 7}
 
+    bash_out = await t.run_action(Action(id="11", type=ActionType.bash, args={"command": "cd ."}))
+    assert bash_out.ok
+
+    text_create_out = await t.run_action(
+        Action(
+            id="12",
+            type=ActionType.text_editor,
+            args={"command": "create", "path": "alias.txt", "file_text": "hello"},
+        )
+    )
+    assert text_create_out.ok
+
+    text_view_out = await t.run_action(
+        Action(
+            id="13",
+            type=ActionType.text_editor,
+            args={"command": "view", "path": "alias.txt"},
+        )
+    )
+    assert "hello" in text_view_out.output
+
+    computer_out = await t.run_action(
+        Action(
+            id="14",
+            type=ActionType.computer,
+            args={"action": "key", "keys": "ctrl+l"},
+        )
+    )
+    assert computer_out.ok
+    assert calls["hotkey"][-1] == ("ctrl", "l")
+
 def test_safety_key_combo():
     s = SafetyManager()
     dec = s.evaluate(Action(id="1", type=ActionType.key_combo, args={"keys": "ctrl+alt+del"}))
     assert dec.danger.value == "high"
+
+
+def test_safety_bash():
+    s = SafetyManager()
+    dec = s.evaluate(Action(id="2", type=ActionType.bash, args={"command": "echo hi"}))
+    assert dec.danger.value == "high"
+
+
+@pytest.mark.asyncio
+async def test_run_action_offloads_blocking_tool(workspace, monkeypatch):
+    t = ToolExecutor(workspace, text_editor=TextEditorTool(workspace))
+
+    def slow_run_command(command: str):
+        time.sleep(0.2)
+        return types.SimpleNamespace(ok=True, output="done", base64_image=None, data=None)
+
+    monkeypatch.setattr(t, "run_command", slow_run_command)
+
+    started = time.monotonic()
+    task = asyncio.create_task(t.run_action(Action(id="slow", type=ActionType.run_command, args={"command": "echo hi"})))
+    await asyncio.sleep(0.05)
+    elapsed = time.monotonic() - started
+
+    assert elapsed < 0.15
+    result = await task
+    assert result.ok
+
+
+@pytest.mark.asyncio
+async def test_run_action_streams_run_command(workspace, monkeypatch):
+    t = ToolExecutor(workspace, text_editor=TextEditorTool(workspace))
+    seen = []
+
+    async def fake_stream(command, on_chunk=None):
+        if on_chunk:
+            await on_chunk("hello\n")
+            await on_chunk("world\n")
+        return types.SimpleNamespace(ok=True, output="hello\nworld\n", base64_image=None, data=None)
+
+    monkeypatch.setattr(t, "run_command_streaming", fake_stream)
+
+    async def on_stream(chunk):
+        seen.append(chunk)
+
+    result = await t.run_action(
+        Action(id="stream", type=ActionType.run_command, args={"command": "echo hi"}),
+        on_stream=on_stream,
+    )
+    assert result.ok
+    assert seen == ["hello\n", "world\n"]

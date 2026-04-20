@@ -16,6 +16,7 @@ class DangerLevel(str, Enum):
 class ActionType(str, Enum):
     finish = "finish"
     run_command = "run_command"
+    bash = "bash"
     read_file = "read_file"
     write_file = "write_file"
     move_file = "move_file"
@@ -39,6 +40,8 @@ class ActionType(str, Enum):
     text_str_replace = "text_str_replace"
     text_insert = "text_insert"
     text_undo_edit = "text_undo_edit"
+    text_editor = "text_editor"
+    computer = "computer"
     browser_open = "browser_open"
     browser_screenshot = "browser_screenshot"
     browser_click = "browser_click"
@@ -57,6 +60,12 @@ class ActionType(str, Enum):
     system_info = "system_info"
     list_directory = "list_directory"
     request_permission = "request_permission"
+    file_glob = "file_glob"
+    file_grep = "file_grep"
+    web_fetch = "web_fetch"
+    web_search = "web_search"
+    list_processes = "list_processes"
+    kill_process = "kill_process"
 
 
 class Action(BaseModel):
@@ -102,6 +111,8 @@ class TaskRecord(BaseModel):
     finished_at: Optional[str] = None
     goal: Optional[str] = None
     reason: Optional[str] = None
+    model: Optional[str] = None
+    mode: Optional[str] = None
 
 
 class SubTask(BaseModel):
@@ -133,7 +144,7 @@ class ApprovalBundle(BaseModel):
     reason: str
     explanation: str
     context_screenshot_b64: Optional[str] = None
-    timeout_seconds: int = 60
+    timeout_seconds: int = 300
     task_id: str
     created_at: str
 

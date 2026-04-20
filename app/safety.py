@@ -7,12 +7,14 @@ class SafetyManager:
     def evaluate(self, action: Action, safe_mode: bool = True) -> ActionDecision:
         t = action.type.value
 
-        high_risk = {"run_command", "write_file", "move_file", "text_create", "text_str_replace", "text_insert"}
+        high_risk = {"run_command", "bash", "write_file", "move_file", "text_editor", "text_create", "text_str_replace", "text_insert"}
 
         # Hard-blocked dangerous commands — always require approval regardless of mode
-        if t == "run_command":
-            cmd = action.args.get("command", "").lower()
-            dangerous_patterns = ["rm -rf /", "format ", "del /f /s", ":(){ :|:& };:",
+        if t in {"run_command", "bash"}:
+            import re
+            raw_cmd = action.args.get("command", "")
+            cmd = re.sub(r"\s+", " ", raw_cmd).lower().strip()
+            dangerous_patterns = ["rm -rf /", "format c:", "del /f /s", ":(){ :|:& };:",
                                   "rd /s /q c:", "rmdir /s /q c:", "shutdown", "reboot"]
             if any(p in cmd for p in dangerous_patterns):
                 return ActionDecision(
@@ -89,4 +91,8 @@ class SafetyManager:
         if t == "request_permission":
             # The action itself is the user consent flow — no extra approval.
             return ActionDecision(danger=DangerLevel.low, reason="permission request", requires_approval=False)
+        if t == "web_search":
+            return ActionDecision(danger=DangerLevel.low, reason="read-only web search", requires_approval=False)
+        if t == "computer":
+            return ActionDecision(danger=DangerLevel.medium, reason="computer interaction wrapper", requires_approval=safe_mode)
         return ActionDecision(danger=DangerLevel.low, reason="default — unclassified action", requires_approval=False)

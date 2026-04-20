@@ -17,10 +17,15 @@ async def _ensure_browser(headless: Optional[bool] = None):
     global _pw, _browser, _page
     if _browser is None:
         from playwright.async_api import async_playwright
-        _pw = await async_playwright().start()
-        use_headless = _DEFAULT_HEADLESS if headless is None else headless
-        _browser = await _pw.chromium.launch(headless=use_headless)
-        _page = await _browser.new_page(viewport={"width": 1280, "height": 800})
+        try:
+            _pw = await async_playwright().start()
+            use_headless = _DEFAULT_HEADLESS if headless is None else headless
+            _browser = await _pw.chromium.launch(headless=use_headless)
+            _page = await _browser.new_page(viewport={"width": 1280, "height": 800})
+        except Exception:
+            # Reset all globals so the next call retries from scratch
+            _pw = _browser = _page = None
+            raise
 
 
 async def browser_open(url: str, headless: Optional[bool] = None) -> str:

@@ -8,7 +8,7 @@ import base64
 import io
 import shutil
 from pathlib import Path
-from typing import Any, Dict, Optional
+from typing import Any, Awaitable, Callable, Dict, Optional
 import mss
 from PIL import Image
 try:
@@ -26,9 +26,15 @@ class ToolExecutor:
         self.workspace = workspace.resolve()
         self.text_editor = TextEditorTool(workspace)
         self.plugin_registry = plugin_registry
-        import pyautogui
-        pyautogui.PAUSE = 0
-        pyautogui.FAILSAFE = False
+        self._bash_cwd = self.workspace
+        # Background browser for sandboxed GUI — set by AgentService
+        self._bg_browser = None
+        # Whether to run GUI actions in background (cowork) mode
+        self._background_mode = True
+
+    def set_background_browser(self, browser):
+        """Attach a BackgroundBrowser for sandboxed GUI actions."""
+        self._bg_browser = browser
 
     def _safe_path(self, value: str) -> Path:
         """Resolve a path, allowing workspace-relative or user-home-absolute paths."""
@@ -41,34 +47,72 @@ class ToolExecutor:
         raise ToolError(f"Path escapes allowed directories (workspace or home): {value}")
 
     def _scale(self, x: int, y: int, sw: int, sh: int):
+        """Scale coordinates — in background mode, use browser viewport directly."""
+        if self._background_mode and self._bg_browser:
+            # Background browser uses its own viewport, no scaling needed
+            return x, y
         import pyautogui
         screen_w, screen_h = pyautogui.size()
         rx = int(x * screen_w / sw)
         ry = int(y * screen_h / sh)
         return rx, ry
 
+    # ── mouse actions ────────────────────────────────────────────────────
+
+    async def _mouse_move_bg(self, x: int, y: int, sw=1280, sh=800):
+        await self._bg_browser.mouse_move(x, y)
+        return ToolResult(ok=True, output=f"Moved mouse to {x}, {y} (background)")
+
     def mouse_move(self, x: int, y: int, sw=1280, sh=800):
         import pyautogui
         rx, ry = self._scale(x, y, sw, sh)
-        pyautogui.moveTo(rx, ry)
+        # Smooth, human-like movement
+        pyautogui.moveTo(rx, ry, duration=0.6, tween=pyautogui.easeInOutQuad)
         return ToolResult(ok=True, output=f"Moved mouse to {rx}, {ry}")
+
+    async def _mouse_click_bg(self, x: int, y: int, button: str = "left", clicks=1, sw=1280, sh=800):
+        await self._bg_browser.mouse_click(x, y, button=button, click_count=clicks)
+        return ToolResult(ok=True, output=f"Clicked {button} {clicks} times at {x}, {y} (background)")
 
     def mouse_click(self, x: int, y: int, button: str = "left", clicks=1, sw=1280, sh=800):
         import pyautogui
         rx, ry = self._scale(x, y, sw, sh)
-        pyautogui.click(rx, ry, button=button, clicks=clicks)
+        # Move smoothly first, then click
+        pyautogui.moveTo(rx, ry, duration=0.4, tween=pyautogui.easeInOutQuad)
+        time.sleep(0.1)
+        pyautogui.click(button=button, clicks=clicks, interval=0.1)
         return ToolResult(ok=True, output=f"Clicked {button} {clicks} times at {rx}, {ry}")
+
+    async def _left_click_drag_bg(self, x: int, y: int, sw=1280, sh=800):
+        # Drag from current position to target
+        await self._bg_browser.mouse_drag(0, 0, x, y)
+        return ToolResult(ok=True, output=f"Dragged to {x}, {y} (background)")
 
     def left_click_drag(self, x: int, y: int, sw=1280, sh=800):
         import pyautogui
         rx, ry = self._scale(x, y, sw, sh)
-        pyautogui.dragTo(rx, ry, button="left")
+        # Smooth drag
+        pyautogui.dragTo(rx, ry, duration=0.8, tween=pyautogui.easeInOutQuad, button="left")
         return ToolResult(ok=True, output=f"Dragged to {rx}, {ry}")
+
+    # ── keyboard actions ─────────────────────────────────────────────────
+
+    async def _keyboard_type_bg(self, text: str):
+        await self._bg_browser.type_text(text)
+        return ToolResult(ok=True, output="Typed text (background)")
 
     def keyboard_type(self, text: str):
         import pyautogui
-        pyautogui.write(text, interval=0.01)
-        return ToolResult(ok=True, output="Typed text")
+        # Slightly randomized human-like typing speed (~40-80ms per char)
+        import random
+        for char in text:
+            pyautogui.write(char)
+            time.sleep(random.uniform(0.02, 0.08))
+        return ToolResult(ok=True, output="Typed text smoothly")
+
+    async def _key_bg(self, keys: str):
+        await self._bg_browser.press_key(keys)
+        return ToolResult(ok=True, output=f"Pressed hotkey: {keys} (background)")
 
     def key(self, keys: str):
         import pyautogui
@@ -76,12 +120,20 @@ class ToolExecutor:
         pyautogui.hotkey(*parts)
         return ToolResult(ok=True, output=f"Pressed hotkey: {keys}")
 
+    async def _hold_key_bg(self, key: str, duration: float = 0.5):
+        await self._bg_browser.hold_key(key, duration)
+        return ToolResult(ok=True, output=f"Held {key} for {duration}s (background)")
+
     def hold_key(self, key: str, duration: float = 0.5):
         import pyautogui
         pyautogui.keyDown(key)
         time.sleep(duration)
         pyautogui.keyUp(key)
         return ToolResult(ok=True, output=f"Held {key} for {duration}s")
+
+    async def _scroll_bg(self, amount: int, x: Optional[int] = None, y: Optional[int] = None, sw=1280, sh=800):
+        await self._bg_browser.scroll(delta_y=amount * 120, x=x, y=y)
+        return ToolResult(ok=True, output=f"Scrolled {amount} (background)")
 
     def scroll(self, amount: int, x: Optional[int] = None, y: Optional[int] = None, sw=1280, sh=800):
         import pyautogui
@@ -91,12 +143,79 @@ class ToolExecutor:
         pyautogui.scroll(amount)
         return ToolResult(ok=True, output=f"Scrolled {amount}")
 
+    async def _type_with_delay_bg(self, text: str, delay: float = 0.05):
+        await self._bg_browser.type_text(text, delay=delay)
+        return ToolResult(ok=True, output=f"Typed text with {delay}s delay (background)")
+
     def type_with_delay(self, text: str, delay: float = 0.05):
         import pyautogui
-        pyautogui.write(text, interval=delay)
+        for char in text:
+            pyautogui.write(char)
+            time.sleep(delay)
         return ToolResult(ok=True, output=f"Typed text with {delay}s delay")
 
+    # ── screenshot ───────────────────────────────────────────────────────
+
+    async def _screenshot_bg(self):
+        b64 = await self._bg_browser.screenshot_b64()
+        return ToolResult(ok=True, output="Screenshot captured (background browser)", base64_image=b64)
+
+    def screenshot(self):
+        import pyautogui
+        screen_w, screen_h = pyautogui.size()
+        with mss.mss() as sct:
+            monitor = {"left": 0, "top": 0, "width": screen_w, "height": screen_h}
+            shot = sct.grab(monitor)
+            img = Image.frombytes("RGB", shot.size, shot.rgb)
+            buf = io.BytesIO()
+            img.save(buf, format="PNG")
+            b64 = base64.b64encode(buf.getvalue()).decode("utf-8")
+            return ToolResult(ok=True, output="Screenshot captured", base64_image=b64)
+
+    async def _cursor_position_bg(self):
+        # Background browser doesn't track cursor in same way
+        return ToolResult(ok=True, output="Cursor position not applicable in background mode", data={"x": 0, "y": 0})
+
+    async def _computer_action_bg(self, action: str, **kwargs):
+        action = action.lower().strip()
+        if action == "screenshot":
+            return await self._screenshot_bg()
+        if action == "mouse_move":
+            return await self._mouse_move_bg(kwargs["x"], kwargs["y"], kwargs.get("sw", 1280), kwargs.get("sh", 800))
+        if action == "left_click":
+            return await self._mouse_click_bg(kwargs["x"], kwargs["y"], "left", 1, kwargs.get("sw", 1280), kwargs.get("sh", 800))
+        if action == "double_click":
+            return await self._mouse_click_bg(kwargs["x"], kwargs["y"], "left", 2, kwargs.get("sw", 1280), kwargs.get("sh", 800))
+        if action == "right_click":
+            return await self._mouse_click_bg(kwargs["x"], kwargs["y"], "right", 1, kwargs.get("sw", 1280), kwargs.get("sh", 800))
+        if action == "middle_click":
+            return await self._mouse_click_bg(kwargs["x"], kwargs["y"], "middle", 1, kwargs.get("sw", 1280), kwargs.get("sh", 800))
+        if action == "left_click_drag":
+            return await self._left_click_drag_bg(kwargs["x"], kwargs["y"], kwargs.get("sw", 1280), kwargs.get("sh", 800))
+        if action == "key":
+            return await self._key_bg(kwargs["keys"])
+        if action == "type":
+            return await self._keyboard_type_bg(kwargs["text"])
+        if action == "scroll":
+            return await self._scroll_bg(kwargs.get("amount", 0), kwargs.get("x"), kwargs.get("y"), kwargs.get("sw", 1280), kwargs.get("sh", 800))
+        if action == "cursor_position":
+            return await self._cursor_position_bg()
+        if action == "wait":
+            seconds = kwargs.get("seconds", 1.0)
+            await asyncio.sleep(seconds)
+            return ToolResult(ok=True, output=f"Waited {seconds} seconds (background)")
+        raise ToolError(f"Unsupported computer action: {action}")
+
+    def cursor_position(self):
+        import pyautogui
+        x, y = pyautogui.position()
+        return ToolResult(ok=True, output=f"Cursor at {x}, {y}", data={"x": x, "y": y})
+
+    # ── other tools (no pyautogui needed) ────────────────────────────────
+
     def find_on_screen(self, image_path: str):
+        if self._background_mode:
+            return ToolResult(ok=False, output="find_on_screen is not available in background mode. Use browser selectors instead.")
         import pyautogui
         try:
             p = self._safe_path(image_path)
@@ -125,23 +244,6 @@ class ToolExecutor:
         except ImportError:
             return ToolResult(ok=False, output="plyer not installed")
 
-    def screenshot(self):
-        import pyautogui
-        screen_w, screen_h = pyautogui.size()
-        with mss.mss() as sct:
-            monitor = {"left": 0, "top": 0, "width": screen_w, "height": screen_h}
-            shot = sct.grab(monitor)
-            img = Image.frombytes("RGB", shot.size, shot.rgb)
-            buf = io.BytesIO()
-            img.save(buf, format="PNG")
-            b64 = base64.b64encode(buf.getvalue()).decode("utf-8")
-            return ToolResult(ok=True, output="Screenshot captured", base64_image=b64)
-
-    def cursor_position(self):
-        import pyautogui
-        x, y = pyautogui.position()
-        return ToolResult(ok=True, output=f"Cursor at {x}, {y}", data={"x": x, "y": y})
-
     def wait_action(self, seconds: float):
         time.sleep(seconds)
         return ToolResult(ok=True, output=f"Waited {seconds} seconds")
@@ -149,6 +251,8 @@ class ToolExecutor:
     def ocr_image(self):
         if not pytesseract:
             return ToolResult(ok=False, output="pytesseract not installed")
+        if self._background_mode:
+            return ToolResult(ok=False, output="OCR not available in background mode. Use browser_get_text instead.")
         import pyautogui
         img = pyautogui.screenshot()
         text = pytesseract.image_to_string(img)
@@ -160,6 +264,117 @@ class ToolExecutor:
             return ToolResult(ok=res.returncode == 0, output=f"STDOUT:\n{res.stdout}\nSTDERR:\n{res.stderr}")
         except subprocess.TimeoutExpired:
             return ToolResult(ok=False, output="Command timed out after 120 seconds.")
+        except Exception as e:
+            return ToolResult(ok=False, output=str(e))
+
+    async def run_command_streaming(
+        self,
+        command: str,
+        on_chunk: Optional[Callable[[str], Awaitable[None]]] = None,
+    ) -> ToolResult:
+        return await self._stream_subprocess(command, self.workspace, on_chunk)
+
+    def bash(self, command: str, restart: bool = False):
+        if restart:
+            self._bash_cwd = self.workspace
+
+        stripped = command.strip()
+        if stripped.lower() in {"pwd", "cd"}:
+            return ToolResult(ok=True, output=str(self._bash_cwd))
+
+        cd_match = None
+        try:
+            import re
+            cd_match = re.fullmatch(r'cd\s+["\']?(.+?)["\']?', stripped, flags=re.IGNORECASE)
+        except Exception:
+            cd_match = None
+
+        if cd_match:
+            target = self._safe_path(cd_match.group(1))
+            if not target.is_dir():
+                return ToolResult(ok=False, output=f"Not a directory: {target}")
+            self._bash_cwd = target
+            return ToolResult(ok=True, output=f"Changed directory to {target}")
+
+        try:
+            res = subprocess.run(
+                command,
+                shell=True,
+                capture_output=True,
+                text=True,
+                timeout=120,
+                cwd=self._bash_cwd,
+            )
+            output = f"STDOUT:\n{res.stdout}\nSTDERR:\n{res.stderr}\nCWD:\n{self._bash_cwd}"
+            return ToolResult(ok=res.returncode == 0, output=output)
+        except subprocess.TimeoutExpired:
+            return ToolResult(ok=False, output="Bash command timed out after 120 seconds.")
+        except Exception as e:
+            return ToolResult(ok=False, output=str(e))
+
+    async def bash_streaming(
+        self,
+        command: str,
+        restart: bool = False,
+        on_chunk: Optional[Callable[[str], Awaitable[None]]] = None,
+    ) -> ToolResult:
+        if restart:
+            self._bash_cwd = self.workspace
+
+        stripped = command.strip()
+        if stripped.lower() in {"pwd", "cd"}:
+            return ToolResult(ok=True, output=str(self._bash_cwd))
+
+        try:
+            import re
+            cd_match = re.fullmatch(r'cd\s+["\']?(.+?)["\']?', stripped, flags=re.IGNORECASE)
+        except Exception:
+            cd_match = None
+
+        if cd_match:
+            target = self._safe_path(cd_match.group(1))
+            if not target.is_dir():
+                return ToolResult(ok=False, output=f"Not a directory: {target}")
+            self._bash_cwd = target
+            return ToolResult(ok=True, output=f"Changed directory to {target}")
+
+        return await self._stream_subprocess(command, self._bash_cwd, on_chunk, include_cwd=True)
+
+    async def _stream_subprocess(
+        self,
+        command: str,
+        cwd: Path,
+        on_chunk: Optional[Callable[[str], Awaitable[None]]] = None,
+        include_cwd: bool = False,
+    ) -> ToolResult:
+        try:
+            proc = await asyncio.create_subprocess_shell(
+                command,
+                cwd=str(cwd),
+                stdout=asyncio.subprocess.PIPE,
+                stderr=asyncio.subprocess.PIPE,
+            )
+
+            chunks: list[str] = []
+
+            async def _pump(stream):
+                while True:
+                    line = await stream.readline()
+                    if not line:
+                        break
+                    text = line.decode("utf-8", errors="replace")
+                    chunks.append(text)
+                    if on_chunk:
+                        await on_chunk(text)
+
+            await asyncio.gather(_pump(proc.stdout), _pump(proc.stderr))
+            returncode = await proc.wait()
+            output = "".join(chunks)
+            if include_cwd:
+                output = f"{output}\nCWD:\n{cwd}"
+            return ToolResult(ok=returncode == 0, output=output or "(no output)")
+        except asyncio.TimeoutError:
+            return ToolResult(ok=False, output="Command timed out.")
         except Exception as e:
             return ToolResult(ok=False, output=str(e))
 
@@ -196,6 +411,7 @@ class ToolExecutor:
             "cwd": str(Path.cwd()),
             "user": os.environ.get("USERNAME", os.environ.get("USER", "unknown")),
             "python": "python" if platform.system() == "Windows" else "python3",
+            "background_mode": self._background_mode,
         }
         return ToolResult(ok=True, output=json.dumps(info, indent=2))
 
@@ -224,14 +440,204 @@ class ToolExecutor:
         if not entries:
             entries = ["(empty directory)"]
         header = f"Directory: {p}\n{'─' * 40}"
-        return ToolResult(ok=True, output=header + "\n" + "\n".join(entries[:100]))
+        return ToolResult(ok=True, output=f"{header}\n" + "\n".join(entries))
+
+    def file_glob(self, pattern: str):
+        import glob
+        # Execute relative to workspace
+        matches = glob.glob(str(self.workspace / pattern), recursive=True)
+        rel_matches = [str(Path(m).relative_to(self.workspace)) for m in matches]
+        return ToolResult(ok=True, output="\n".join(rel_matches) if rel_matches else "No matches found.")
+
+    def file_grep(self, pattern: str, directory: str = "."):
+        import re
+        p = self._safe_path(directory)
+        matches = []
+        regex = re.compile(pattern)
+        for root, _, files in os.walk(p):
+            for file in files:
+                filepath = Path(root) / file
+                try:
+                    content = filepath.read_text(encoding="utf-8")
+                    for i, line in enumerate(content.splitlines(), 1):
+                        if regex.search(line):
+                            rel_path = filepath.relative_to(self.workspace) if self.workspace in filepath.parents else filepath
+                            matches.append(f"{rel_path}:{i}: {line.strip()}")
+                except Exception:
+                    pass
+        return ToolResult(ok=True, output="\n".join(matches) if matches else "No matches found.")
+
+    def web_fetch(self, url: str):
+        try:
+            import urllib.request
+            req = urllib.request.Request(url, headers={'User-Agent': 'Mozilla/5.0 (AI Computer Agent)'})
+            with urllib.request.urlopen(req, timeout=10) as response:
+                html = response.read().decode('utf-8')
+            # Extract basic text
+            import re
+            text = re.sub(r'<script[^>]*>.*?</script>', '', html, flags=re.DOTALL|re.IGNORECASE)
+            text = re.sub(r'<style[^>]*>.*?</style>', '', text, flags=re.DOTALL|re.IGNORECASE)
+            text = re.sub(r'<[^>]+>', ' ', text)
+            text = ' '.join(text.split())
+            return ToolResult(ok=True, output=text[:20000]) # Cap length
+        except Exception as e:
+            return ToolResult(ok=False, output=str(e))
+
+    def web_search(self, query: str, max_results: int = 5):
+        try:
+            import html
+            import re
+            import urllib.parse
+            import urllib.request
+
+            encoded = urllib.parse.quote_plus(query)
+            url = f"https://html.duckduckgo.com/html/?q={encoded}"
+            req = urllib.request.Request(url, headers={"User-Agent": "Mozilla/5.0 (AI Computer Agent)"})
+            with urllib.request.urlopen(req, timeout=10) as response:
+                page = response.read().decode("utf-8", errors="replace")
+
+            results = []
+            pattern = re.compile(
+                r'<a[^>]*class="result__a"[^>]*href="(?P<href>[^"]+)"[^>]*>(?P<title>.*?)</a>.*?'
+                r'<a[^>]*class="result__snippet"[^>]*>(?P<snippet>.*?)</a>',
+                flags=re.IGNORECASE | re.DOTALL,
+            )
+            for match in pattern.finditer(page):
+                href = html.unescape(re.sub(r"<.*?>", "", match.group("href"))).strip()
+                title = html.unescape(re.sub(r"<.*?>", "", match.group("title"))).strip()
+                snippet = html.unescape(re.sub(r"<.*?>", "", match.group("snippet"))).strip()
+                if href and title:
+                    results.append(f"{title}\n{href}\n{snippet}")
+                if len(results) >= max_results:
+                    break
+
+            if not results:
+                return ToolResult(ok=False, output=f"No search results found for: {query}")
+            return ToolResult(ok=True, output="\n\n".join(results))
+        except Exception as e:
+            return ToolResult(ok=False, output=str(e))
+
+    def text_editor_action(self, command: str, path: str, **kwargs):
+        command = command.lower().strip()
+        if command == "view":
+            return self.text_editor.view(path, kwargs.get("view_range"))
+        if command == "create":
+            return self.text_editor.create(path, kwargs.get("file_text", ""))
+        if command == "str_replace":
+            return self.text_editor.str_replace(path, kwargs["old_str"], kwargs["new_str"])
+        if command == "insert":
+            return self.text_editor.insert(path, kwargs["insert_line"], kwargs["new_str"])
+        if command == "undo_edit":
+            return self.text_editor.undo_edit(path)
+        raise ToolError(f"Unsupported text_editor command: {command}")
+
+    def computer_action(self, action: str, **kwargs):
+        action = action.lower().strip()
+        if action == "screenshot":
+            return self.screenshot()
+        if action == "mouse_move":
+            return self.mouse_move(kwargs["x"], kwargs["y"], kwargs.get("sw", 1280), kwargs.get("sh", 800))
+        if action == "left_click":
+            return self.mouse_click(kwargs["x"], kwargs["y"], "left", 1, kwargs.get("sw", 1280), kwargs.get("sh", 800))
+        if action == "double_click":
+            return self.mouse_click(kwargs["x"], kwargs["y"], "left", 2, kwargs.get("sw", 1280), kwargs.get("sh", 800))
+        if action == "right_click":
+            return self.mouse_click(kwargs["x"], kwargs["y"], "right", 1, kwargs.get("sw", 1280), kwargs.get("sh", 800))
+        if action == "middle_click":
+            return self.mouse_click(kwargs["x"], kwargs["y"], "middle", 1, kwargs.get("sw", 1280), kwargs.get("sh", 800))
+        if action == "left_click_drag":
+            return self.left_click_drag(kwargs["x"], kwargs["y"], kwargs.get("sw", 1280), kwargs.get("sh", 800))
+        if action == "key":
+            return self.key(kwargs["keys"])
+        if action == "type":
+            return self.keyboard_type(kwargs["text"])
+        if action == "scroll":
+            return self.scroll(kwargs.get("amount", 0), kwargs.get("x"), kwargs.get("y"), kwargs.get("sw", 1280), kwargs.get("sh", 800))
+        if action == "cursor_position":
+            return self.cursor_position()
+        if action == "wait":
+            return self.wait_action(kwargs.get("seconds", 1.0))
+        raise ToolError(f"Unsupported computer action: {action}")
+
+    def list_processes(self):
+        try:
+            import psutil
+            processes = []
+            for proc in psutil.process_iter(['pid', 'name', 'username', 'cpu_percent', 'memory_info']):
+                try:
+                    pinfo = proc.info
+                    mem_mb = pinfo['memory_info'].rss / (1024 * 1024) if pinfo.get('memory_info') else 0
+                    processes.append(f"PID: {pinfo['pid']} | Name: {pinfo['name']} | User: {pinfo['username']} | CPU: {pinfo['cpu_percent']}% | Mem: {mem_mb:.1f} MB")
+                except (psutil.NoSuchProcess, psutil.AccessDenied, psutil.ZombieProcess):
+                    pass
+            return ToolResult(ok=True, output="\n".join(processes))
+        except ImportError:
+            return ToolResult(ok=False, output="psutil not installed. Use run_command('tasklist' or 'ps').")
+
+    def kill_process(self, pid: int, force: bool = False):
+        try:
+            import psutil
+            proc = psutil.Process(pid)
+            if force:
+                proc.kill()
+            else:
+                proc.terminate()
+            return ToolResult(ok=True, output=f"Terminated process {pid} ({proc.name()})")
+        except psutil.NoSuchProcess:
+            return ToolResult(ok=False, output=f"No process with PID {pid}")
+        except ImportError:
+            return ToolResult(ok=False, output="psutil not installed.")
+        except Exception as e:
+            return ToolResult(ok=False, output=str(e))
 
     def api_call(self, method: str, url: str, headers: dict = None, body: dict = None):
         import httpx
         resp = httpx.request(method, url, headers=headers or {}, json=body)
         return ToolResult(ok=True, output=resp.text)
 
-    async def run_action(self, action: Action, sw=1280, sh=800) -> ToolResult:
+    async def run_action(self, action: Action, sw=1280, sh=800, on_stream: Optional[Callable[[str], Awaitable[None]]] = None) -> ToolResult:
+        use_bg = self._background_mode and self._bg_browser and self._bg_browser.is_running
+
+        # Background browser handlers for GUI actions
+        if use_bg:
+            bg_handlers = {
+                ActionType.mouse_move: lambda a: self._mouse_move_bg(a.args["x"], a.args["y"], sw, sh),
+                ActionType.mouse_click: lambda a: self._mouse_click_bg(a.args["x"], a.args["y"], a.args.get("button", "left"), 1, sw, sh),
+                ActionType.double_click: lambda a: self._mouse_click_bg(a.args["x"], a.args["y"], "left", 2, sw, sh),
+                ActionType.right_click: lambda a: self._mouse_click_bg(a.args["x"], a.args["y"], "right", 1, sw, sh),
+                ActionType.middle_click: lambda a: self._mouse_click_bg(a.args["x"], a.args["y"], "middle", 1, sw, sh),
+                ActionType.left_click_drag: lambda a: self._left_click_drag_bg(a.args["x"], a.args["y"], sw, sh),
+                ActionType.keyboard_type: lambda a: self._keyboard_type_bg(a.args["text"]),
+                ActionType.key_combo: lambda a: self._key_bg(a.args["keys"]),
+                ActionType.hold_key: lambda a: self._hold_key_bg(a.args["key"], a.args.get("duration", 0.5)),
+                ActionType.scroll: lambda a: self._scroll_bg(a.args.get("amount", 0), a.args.get("x"), a.args.get("y"), sw, sh),
+                ActionType.type_with_delay: lambda a: self._type_with_delay_bg(a.args["text"], a.args.get("delay", 0.05)),
+                ActionType.screenshot: lambda a: self._screenshot_bg(),
+                ActionType.cursor_position: lambda a: self._cursor_position_bg(),
+                ActionType.computer: lambda a: self._computer_action_bg(
+                    a.args["action"],
+                    **{k: v for k, v in a.args.items() if k != "action"},
+                ),
+            }
+            if action.type in bg_handlers:
+                try:
+                    return await bg_handlers[action.type](action)
+                except Exception as e:
+                    return ToolResult(ok=False, output=f"Background browser error ({action.type}): {str(e)}")
+
+        # Standard (non-GUI) handlers — always available
+        if action.type == ActionType.run_command and on_stream:
+            try:
+                return await self.run_command_streaming(action.args["command"], on_stream)
+            except Exception as e:
+                return ToolResult(ok=False, output=f"Error executing {action.type}: {str(e)}")
+
+        if action.type == ActionType.bash and on_stream:
+            try:
+                return await self.bash_streaming(action.args["command"], action.args.get("restart", False), on_stream)
+            except Exception as e:
+                return ToolResult(ok=False, output=f"Error executing {action.type}: {str(e)}")
+
         handlers = {
             ActionType.mouse_move: lambda a: self.mouse_move(a.args["x"], a.args["y"], sw, sh),
             ActionType.mouse_click: lambda a: self.mouse_click(a.args["x"], a.args["y"], a.args.get("button", "left"), 1, sw, sh),
@@ -253,6 +659,7 @@ class ToolExecutor:
             ActionType.wait_action: lambda a: self.wait_action(a.args.get("seconds", 1.0)),
             ActionType.ocr_image: lambda a: self.ocr_image(),
             ActionType.run_command: lambda a: self.run_command(a.args["command"]),
+            ActionType.bash: lambda a: self.bash(a.args["command"], a.args.get("restart", False)),
             ActionType.read_file: lambda a: self.read_file(a.args["path"]),
             ActionType.write_file: lambda a: self.write_file(a.args["path"], a.args["content"]),
             ActionType.move_file: lambda a: self.move_file(a.args["source"], a.args["destination"]),
@@ -268,16 +675,31 @@ class ToolExecutor:
                 a.args["path"], a.args["insert_line"], a.args["new_str"]
             ),
             ActionType.text_undo_edit: lambda a: self.text_editor.undo_edit(a.args["path"]),
+            ActionType.text_editor: lambda a: self.text_editor_action(
+                a.args["command"],
+                a.args["path"],
+                **{k: v for k, v in a.args.items() if k not in {"command", "path"}},
+            ),
+            ActionType.computer: lambda a: self.computer_action(
+                a.args["action"],
+                **{k: v for k, v in a.args.items() if k != "action"},
+            ),
             ActionType.finish: lambda a: ToolResult(ok=True, output=a.args.get("reason", "Task marked complete by agent.")),
             ActionType.system_info: lambda a: self.system_info(),
             ActionType.list_directory: lambda a: self.list_directory(a.args.get("path", "."), a.args.get("max_depth", 2)),
+            ActionType.file_glob: lambda a: self.file_glob(a.args["pattern"]),
+            ActionType.file_grep: lambda a: self.file_grep(a.args["pattern"], a.args.get("directory", ".")),
+            ActionType.web_fetch: lambda a: self.web_fetch(a.args["url"]),
+            ActionType.web_search: lambda a: self.web_search(a.args["query"], a.args.get("max_results", 5)),
+            ActionType.list_processes: lambda a: self.list_processes(),
+            ActionType.kill_process: lambda a: self.kill_process(a.args["pid"], a.args.get("force", False)),
             # request_permission is normally intercepted by the agent, but stub
             # it here so ActionType enum coverage is complete.
             ActionType.request_permission: lambda a: ToolResult(ok=True, output=f"Permission request for '{a.args.get('scope','')}' noted."),
         }
         if action.type in handlers:
             try:
-                return handlers[action.type](action)
+                return await asyncio.to_thread(handlers[action.type], action)
             except Exception as e:
                 return ToolResult(ok=False, output=f"Error executing {action.type}: {str(e)}")
 
@@ -289,7 +711,7 @@ class ToolExecutor:
                     if asyncio.iscoroutinefunction(handler):
                         result = await handler(**action.args)
                     else:
-                        result = handler(**action.args)
+                        result = await asyncio.to_thread(handler, **action.args)
                     return ToolResult(ok=True, output=str(result))
                 except Exception as e:
                     return ToolResult(ok=False, output=f"Plugin error: {str(e)}")
