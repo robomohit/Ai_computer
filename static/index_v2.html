@@ -643,10 +643,10 @@
     font-size: 12px;
     line-height: 1.6;
     color: #302a24;
-    background: rgba(27, 22, 18, 0.028);
-    border: 1px solid rgba(27, 22, 18, 0.05);
-    border-radius: 14px;
-    padding: 11px 13px;
+    background: rgba(255,255,255,0.52);
+    border: 1px solid rgba(27, 22, 18, 0.04);
+    border-radius: 10px;
+    padding: 10px 12px;
     overflow: auto;
     max-height: 340px;
   }
@@ -657,9 +657,9 @@
   }
 
   .detail-row {
-    border-left: 1px solid rgba(27, 22, 18, 0.12);
+    border-left: 1px solid rgba(27, 22, 18, 0.08);
     background: transparent;
-    padding: 8px 0 8px 14px;
+    padding: 6px 0 6px 12px;
   }
 
   .detail-row-head {
@@ -702,21 +702,26 @@
   }
 
   .tool-card {
-    padding-left: 12px;
-    border-left: 1px solid rgba(28, 26, 23, 0.12);
+    padding-left: 10px;
+    border-left: 1px solid rgba(28, 26, 23, 0.1);
   }
 
   .reasoning-note {
-    padding-left: 12px;
-    border-left: 1px solid rgba(46, 99, 211, 0.2);
+    padding-left: 10px;
+    border-left: 1px solid rgba(46, 99, 211, 0.18);
   }
 
   .reasoning-note .card-title {
-    font-size: 14px;
+    font-size: 13px;
+    font-weight: 600;
+    display: flex;
+    align-items: baseline;
+    gap: 8px;
   }
 
   .reasoning-note .card-subtitle {
     font-size: 12px;
+    margin-top: 2px;
   }
 
   .tool-card .card-head,
@@ -789,8 +794,8 @@
   }
 
   .status-row {
-    padding: 7px 0 7px 12px;
-    border-left: 1px solid rgba(46, 99, 211, 0.24);
+    padding: 6px 0 6px 10px;
+    border-left: 1px solid rgba(46, 99, 211, 0.22);
     display: flex;
     align-items: center;
     gap: 12px;
@@ -842,9 +847,9 @@
   }
 
   .screenshot-img {
-    width: 100%;
+    width: min(100%, 560px);
     display: block;
-    border-radius: 18px;
+    border-radius: 14px;
     border: 1px solid rgba(27, 22, 18, 0.06);
     box-shadow: 0 8px 20px rgba(20, 17, 12, 0.06);
     background: #e9e2d7;
@@ -861,6 +866,54 @@
     color: var(--ink);
     font-size: 12px;
     font-weight: 600;
+  }
+
+  .preview-wrap {
+    margin-top: 8px;
+  }
+
+  .preview-toggle {
+    display: inline-flex;
+    align-items: center;
+    gap: 6px;
+    padding: 0;
+    border: 0;
+    background: transparent;
+    color: var(--muted);
+    font-size: 11px;
+    font-weight: 700;
+    letter-spacing: 0.06em;
+    text-transform: uppercase;
+    cursor: pointer;
+  }
+
+  .preview-wrap[open] .preview-toggle {
+    color: var(--ink);
+  }
+
+  .terminal-channel {
+    display: inline-flex;
+    align-items: center;
+    gap: 4px;
+    margin-left: 8px;
+    color: var(--muted-soft);
+    font-size: 10px;
+    font-weight: 700;
+    letter-spacing: 0.07em;
+    text-transform: uppercase;
+  }
+
+  .phase-chip {
+    display: inline-flex;
+    align-items: center;
+    padding: 2px 7px;
+    border-radius: 999px;
+    background: rgba(46, 99, 211, 0.08);
+    color: var(--accent);
+    font-size: 10px;
+    font-weight: 700;
+    letter-spacing: 0.07em;
+    text-transform: uppercase;
   }
 
   .composer-wrap {
@@ -1639,12 +1692,15 @@
     finalizeLiveStatus();
     const card = createFeedCard('reasoning-note');
     const bits = createCardHead({
-      eyebrow: 'Thinking',
+      eyebrow: note.stage || 'Thinking',
       title: summary,
       subtitle: detail,
       stateLabel: age
     });
     card.appendChild(bits.head);
+    if (note.stage) {
+      bits.titleEl.innerHTML = `<span class="phase-chip">${note.stage}</span><span>${summary}</span>`;
+    }
   };
 
   const renderPlan = (plan) => {
@@ -1730,7 +1786,7 @@
       titleEl: parts.titleEl,
       subtitleEl: parts.subtitleEl,
       stateEl: parts.stateEl,
-      terminalPre: null
+      terminalRows: {}
     };
 
     if (actionId) actionCards[actionId] = entry;
@@ -1741,6 +1797,29 @@
     if (!entry || !entry.stateEl) return;
     entry.stateEl.className = `state-chip ${cls}`.trim();
     entry.stateEl.textContent = label;
+  };
+
+  const appendPreviewBlock = (container, preview, className = 'detail-preview') => {
+    if (!preview) return;
+    if (preview.length <= 360) {
+      const code = document.createElement('pre');
+      code.className = className;
+      code.textContent = preview;
+      container.appendChild(code);
+      return;
+    }
+
+    const wrap = document.createElement('details');
+    wrap.className = 'preview-wrap';
+    const summary = document.createElement('summary');
+    summary.className = 'preview-toggle';
+    summary.textContent = `Open preview (${preview.length} chars)`;
+    const code = document.createElement('pre');
+    code.className = className;
+    code.textContent = preview;
+    wrap.appendChild(summary);
+    wrap.appendChild(code);
+    container.appendChild(wrap);
   };
 
   const appendDetailRow = (entry, eyebrow, title, copy = '', preview = '') => {
@@ -1763,10 +1842,7 @@
     }
 
     if (preview) {
-      const code = document.createElement('pre');
-      code.className = 'detail-preview';
-      code.textContent = preview;
-      row.appendChild(code);
+      appendPreviewBlock(row, preview);
     }
 
     entry.details.appendChild(row);
@@ -1774,10 +1850,11 @@
     return row;
   };
 
-  const appendTerminalOutput = (entry, command, output, ok) => {
+  const appendTerminalOutput = (entry, command, output, ok, channel = 'stdout') => {
     if (!entry) return;
 
-    if (!entry.terminalPre) {
+    const key = `${command || 'Command output'}:${channel}`;
+    if (!entry.terminalRows[key]) {
       const row = document.createElement('div');
       row.className = 'detail-row';
       row.innerHTML = `
@@ -1788,18 +1865,19 @@
           </div>
         </div>
       `;
-      row.querySelector('.detail-title').textContent = command || 'Command output';
+      row.querySelector('.detail-title').innerHTML = `${command || 'Command output'}<span class="terminal-channel">${channel}</span>`;
       const pre = document.createElement('pre');
       pre.className = 'detail-preview';
       row.appendChild(pre);
       entry.details.appendChild(row);
-      entry.terminalPre = pre;
+      entry.terminalRows[key] = pre;
     }
 
-    entry.terminalPre.textContent += output || '';
-    if (!ok) entry.terminalPre.style.color = '#8d261f';
-    if (entry.terminalPre.textContent.length > 12000) {
-      entry.terminalPre.textContent = entry.terminalPre.textContent.slice(-12000);
+    const pre = entry.terminalRows[key];
+    pre.textContent += output || '';
+    if (!ok) pre.style.color = '#8d261f';
+    if (pre.textContent.length > 12000) {
+      pre.textContent = pre.textContent.slice(-12000);
     }
     scrollFeed();
   };
@@ -1814,10 +1892,7 @@
     });
     card.appendChild(bits.head);
     if (preview) {
-      const pre = document.createElement('pre');
-      pre.className = 'artifact-preview';
-      pre.textContent = preview;
-      card.appendChild(pre);
+      appendPreviewBlock(card, preview, 'artifact-preview');
     }
     return card;
   };
@@ -1969,13 +2044,6 @@
     if (event.type === 'status') {
       if (event.heartbeat) return;
 
-      if (/executing sub-task:/i.test(event.message || '') && planSubtasks[currentSubtaskIdx]) {
-        if (currentSubtaskIdx > 0 && planSubtasks[currentSubtaskIdx - 1]) {
-          markSubtask(planSubtasks[currentSubtaskIdx - 1].id, 'done');
-        }
-        markSubtask(planSubtasks[currentSubtaskIdx].id, 'running');
-      }
-
       if (shouldReuseLiveStatus(event.message || '')) {
         setLiveStatus(statusPhase(event.message || ''), event.message || '', Number.isFinite(event.elapsed_seconds) ? `${event.elapsed_seconds}s` : '');
       } else {
@@ -1998,9 +2066,22 @@
       const entry = ensureActionCard(event.action_id, event.action_type, event.args_summary || '');
       setActionState(entry, event.ok ? 'OK' : 'Fail', event.ok ? 'ok' : 'fail');
       if (event.args_summary) entry.subtitleEl.textContent = event.args_summary;
-      if (event.output) {
+      if (event.output && !event.action_type?.match(/run_command|bash/)) {
         entry.output.classList.remove('hidden');
         entry.output.textContent = truncate(event.output, 1400);
+      }
+      return;
+    }
+
+    if (event.type === 'subtask') {
+      if (event.status === 'running') {
+        markSubtask(event.subtask_id, 'running');
+      } else if (event.status === 'done') {
+        markSubtask(event.subtask_id, 'done');
+        const idx = planSubtasks.findIndex((subtask) => subtask.id === event.subtask_id);
+        if (idx >= 0) currentSubtaskIdx = Math.max(currentSubtaskIdx, idx + 1);
+      } else if (event.status === 'failed') {
+        markSubtask(event.subtask_id, 'failed');
       }
       return;
     }
@@ -2040,7 +2121,7 @@
           ? actionCards[lastActionId]
           : ensureActionCard(event.action_id || `terminal-${Date.now()}`, 'run_command', event.command || '');
       if (event.command && !target.subtitleEl.textContent) target.subtitleEl.textContent = event.command;
-      appendTerminalOutput(target, event.command || 'Command output', event.output || '', event.ok !== false);
+      appendTerminalOutput(target, event.command || 'Command output', event.output || '', event.ok !== false, event.channel || 'stdout');
       return;
     }
 
@@ -2199,12 +2280,18 @@
       if (task !== listenTask) return;
       reconnectAttempts = 0;
       const data = JSON.parse(message.data);
-      streamCursor += 1;
+      if (Number.isFinite(data.seq)) {
+        streamCursor = Math.max(streamCursor, data.seq + 1);
+      } else {
+        streamCursor += 1;
+      }
       processTaskEvent(data, { taskId: listenTask });
     };
     sse.onerror = () => {
       if (task !== listenTask || streamClosedManually) return;
-      toast(`Stream interrupted. Reconnecting (attempt ${reconnectAttempts + 1}).`, 'warn', 2200);
+      if (reconnectAttempts < 2) {
+        toast(`Stream interrupted. Reconnecting (attempt ${reconnectAttempts + 1}).`, 'warn', 2200);
+      }
       scheduleReconnect(listenTask);
     };
   };

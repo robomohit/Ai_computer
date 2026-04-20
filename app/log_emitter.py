@@ -1,5 +1,6 @@
 from __future__ import annotations
 import asyncio
+from datetime import datetime, timezone
 from typing import Dict, List
 
 import json
@@ -9,6 +10,7 @@ class LogEmitter:
     """Simple pub/sub bus for SSE task log streaming."""
     def __init__(self):
         self._queues: Dict[str, List[asyncio.Queue]] = {}
+        self._seqs: Dict[str, int] = {}
         self.log_dir = Path("workspace/logs")
         self.log_dir.mkdir(parents=True, exist_ok=True)
 
@@ -41,7 +43,11 @@ class LogEmitter:
                 if not line:
                     continue
                 try:
-                    events.append(json.loads(line))
+                    msg = json.loads(line)
+                    if isinstance(msg, dict):
+                        msg.setdefault("task_id", task_id)
+                        msg.setdefault("seq", index)
+                    events.append(msg)
                 except json.JSONDecodeError:
                     continue
         return events
@@ -57,7 +63,17 @@ class LogEmitter:
         return sorted(path.stem for path in self.log_dir.glob("*.jsonl"))
 
     def emit(self, task_id: str, event_type: str, payload: dict):
-        msg = {"type": event_type, **payload}
+        seq = self._seqs.get(task_id)
+        if seq is None:
+            seq = self.count_events(task_id)
+        msg = {
+            "type": event_type,
+            "task_id": task_id,
+            "seq": seq,
+            "ts": datetime.now(timezone.utc).isoformat(),
+            **payload,
+        }
+        self._seqs[task_id] = seq + 1
         
         # Persistent logging
         log_file = self.log_path(task_id)

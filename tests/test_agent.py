@@ -234,6 +234,9 @@ def test_sse_event_fields():
     log_emitter.emit("test_task", "status", {"message": "test"})
     msg = q.get_nowait()
     assert msg["type"] == "status"
+    assert msg["task_id"] == "test_task"
+    assert isinstance(msg["seq"], int)
+    assert "ts" in msg
     assert msg["message"] == "test"
 
 
@@ -252,8 +255,28 @@ def test_sse_reasoning_event_fields():
     )
     msg = q.get_nowait()
     assert msg["type"] == "reasoning"
+    assert msg["task_id"] == "reasoning_task"
     assert msg["stage"] == "Planning"
     assert msg["summary"] == "Plan ready"
+
+
+@pytest.mark.asyncio
+async def test_run_task_cleans_up_active_tasks_on_blocked_plan():
+    from app.log_emitter import log_emitter
+    from app.models import HierarchicalPlan
+
+    service = AgentService(workspace, log_emitter=log_emitter)
+    service._active_tasks["cleanup_task"] = MagicMock()
+
+    with patch("app.providers.PlannerProvider.plan_hierarchical") as mock_plan:
+        mock_plan.return_value = HierarchicalPlan(
+            reasoning="This request is disallowed under policy.",
+            sub_tasks=[],
+            overall_complete=False,
+        )
+        await service.run_task("cleanup_task", "blocked goal")
+
+    assert "cleanup_task" not in service._active_tasks
 
 # FastAPI TestClient
 client = TestClient(app)

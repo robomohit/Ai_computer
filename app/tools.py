@@ -270,7 +270,7 @@ class ToolExecutor:
     async def run_command_streaming(
         self,
         command: str,
-        on_chunk: Optional[Callable[[str], Awaitable[None]]] = None,
+        on_chunk: Optional[Callable[[Dict[str, Any]], Awaitable[None]]] = None,
     ) -> ToolResult:
         return await self._stream_subprocess(command, self.workspace, on_chunk)
 
@@ -316,7 +316,7 @@ class ToolExecutor:
         self,
         command: str,
         restart: bool = False,
-        on_chunk: Optional[Callable[[str], Awaitable[None]]] = None,
+        on_chunk: Optional[Callable[[Dict[str, Any]], Awaitable[None]]] = None,
     ) -> ToolResult:
         if restart:
             self._bash_cwd = self.workspace
@@ -344,7 +344,7 @@ class ToolExecutor:
         self,
         command: str,
         cwd: Path,
-        on_chunk: Optional[Callable[[str], Awaitable[None]]] = None,
+        on_chunk: Optional[Callable[[Dict[str, Any]], Awaitable[None]]] = None,
         include_cwd: bool = False,
     ) -> ToolResult:
         try:
@@ -357,17 +357,17 @@ class ToolExecutor:
 
             chunks: list[str] = []
 
-            async def _pump(stream):
+            async def _pump(stream, channel: str):
                 while True:
-                    line = await stream.readline()
-                    if not line:
+                    chunk = await stream.read(512)
+                    if not chunk:
                         break
-                    text = line.decode("utf-8", errors="replace")
+                    text = chunk.decode("utf-8", errors="replace")
                     chunks.append(text)
                     if on_chunk:
-                        await on_chunk(text)
+                        await on_chunk({"channel": channel, "output": text})
 
-            await asyncio.gather(_pump(proc.stdout), _pump(proc.stderr))
+            await asyncio.gather(_pump(proc.stdout, "stdout"), _pump(proc.stderr, "stderr"))
             returncode = await proc.wait()
             output = "".join(chunks)
             if include_cwd:
@@ -595,7 +595,7 @@ class ToolExecutor:
         resp = httpx.request(method, url, headers=headers or {}, json=body)
         return ToolResult(ok=True, output=resp.text)
 
-    async def run_action(self, action: Action, sw=1280, sh=800, on_stream: Optional[Callable[[str], Awaitable[None]]] = None) -> ToolResult:
+    async def run_action(self, action: Action, sw=1280, sh=800, on_stream: Optional[Callable[[Dict[str, Any]], Awaitable[None]]] = None) -> ToolResult:
         use_bg = self._background_mode and self._bg_browser and self._bg_browser.is_running
 
         # Background browser handlers for GUI actions

@@ -106,7 +106,7 @@ class AgentService:
         )
         work = asyncio.create_task(asyncio.to_thread(fn, *args))
         start = asyncio.get_running_loop().time()
-        last_heartbeat = start
+        last_heartbeat = start - heartbeat_interval
         while not work.done():
             await asyncio.sleep(heartbeat_interval)
             if work.done():
@@ -305,6 +305,15 @@ class AgentService:
             while plan.sub_tasks:
                 sub_task = plan.sub_tasks.pop(0)
                 await self._emit(task_id, "status", {"message": f"Executing sub-task: {sub_task.description}"})
+                await self._emit(
+                    task_id,
+                    "subtask",
+                    {
+                        "subtask_id": sub_task.id,
+                        "description": sub_task.description,
+                        "status": "running",
+                    },
+                )
                 await self._emit_reasoning(
                     task_id,
                     "Execution",
@@ -415,12 +424,13 @@ class AgentService:
 
                     # Longer timeout for coding commands (builds can be slow)
                     timeout = 300.0 if is_coding else 120.0
-                    async def _stream_chunk(chunk: str):
+                    async def _stream_chunk(chunk: Dict[str, Any]):
                         await self._emit(task_id, "terminal_output", {
                             "command": action.args.get("command", ""),
-                            "output": chunk,
+                            "output": chunk.get("output", ""),
                             "ok": True,
                             "stream": True,
+                            "channel": chunk.get("channel", "stdout"),
                             "action_id": action.id,
                         })
                     try:
@@ -525,6 +535,16 @@ class AgentService:
                 await self._emit(task_id, "reflection", reflection)
 
                 if not reflection.get("success", True):
+                    await self._emit(
+                        task_id,
+                        "subtask",
+                        {
+                            "subtask_id": sub_task.id,
+                            "description": sub_task.description,
+                            "status": "failed",
+                            "reason": reflection.get("reason", ""),
+                        },
+                    )
                     consecutive_fails += 1
                     retry_actions = reflection.get("retry_actions", [])
                     for retry_data in retry_actions:
@@ -580,6 +600,16 @@ class AgentService:
                         await self._emit(task_id, "plan", plan.model_dump())
                         consecutive_fails = 0
                 else:
+                    await self._emit(
+                        task_id,
+                        "subtask",
+                        {
+                            "subtask_id": sub_task.id,
+                            "description": sub_task.description,
+                            "status": "done",
+                            "reason": reflection.get("reason", ""),
+                        },
+                    )
                     consecutive_fails = 0
 
             # Final Evaluation — run sync LLM in thread
@@ -610,8 +640,6 @@ class AgentService:
             # Store goal outcome in memory
             self.memory.add("task_outcome", f"Goal: {goal} | Outcome: {eval_res.get('complete')} | Reason: {eval_res.get('reason')}")
             
-            self._active_tasks.pop(task_id, None)
-
         except asyncio.CancelledError:
             self._finalize(task_id, "cancelled", "task cancelled")
             await self._emit_reasoning(
@@ -639,6 +667,8 @@ class AgentService:
             await self._emit(task_id, "done", {"complete": False, "reason": msg, "finished_at": _ts})
 
         finally:
+            self._active_tasks.pop(task_id, None)
+            self._paused_tasks.discard(task_id)
             # Clean up background browser for this task
             browser = self._bg_browsers.pop(task_id, None)
             if browser:

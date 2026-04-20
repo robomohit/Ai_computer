@@ -507,7 +507,9 @@ async def stream_task(task_id: str, request: Request, token: Optional[str] = Non
         terminal_seen = False
         total_events = log_emitter.count_events(task_id)
         for ev in log_emitter.read_log(task_id, since=max(0, since)):
-            yield f"data: {json.dumps(ev)}\n\n"
+            event_id = ev.get("seq")
+            prefix = f"id: {event_id}\n" if event_id is not None else ""
+            yield f"{prefix}data: {json.dumps(ev)}\n\n"
             if ev.get("type") in ("done", "error", "cancelled"):
                 terminal_seen = True
         if terminal_seen:
@@ -524,7 +526,9 @@ async def stream_task(task_id: str, request: Request, token: Optional[str] = Non
                     break
                 try:
                     msg = await asyncio.wait_for(q.get(), timeout=30.0)
-                    yield f"data: {json.dumps(msg)}\n\n"
+                    event_id = msg.get("seq")
+                    prefix = f"id: {event_id}\n" if event_id is not None else ""
+                    yield f"{prefix}data: {json.dumps(msg)}\n\n"
                     if msg.get("type") in ("done", "error", "cancelled"):
                         await asyncio.sleep(0.5) # Give ASGI server time to flush to the client
                         break
