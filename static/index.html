@@ -1325,11 +1325,11 @@
     </div>
 
     <div class="sidebar-footer">
-      <div class="footer-label">Model</div>
+      <label for="model-id" class="footer-label">Model</label>
       <div class="model-select-wrap">
         <select id="model-id"></select>
       </div>
-      <div class="footer-label" style="margin-top:10px;">Mode</div>
+      <label for="mode-id" class="footer-label" style="margin-top:10px;">Mode</label>
       <div class="model-select-wrap">
         <select id="mode-id">
           <option value="auto">Auto (detect from goal)</option>
@@ -1383,8 +1383,8 @@
     <div class="composer-wrap">
       <div class="composer-inner">
         <div class="composer">
-          <textarea id="input" rows="1" placeholder="What should the agent do?"></textarea>
-          <button id="send" class="composer-send" aria-label="Send">
+          <textarea id="input" rows="1" placeholder="What should the agent do?" aria-label="Agent instruction input"></textarea>
+          <button id="send" class="composer-send" aria-label="Send instruction" title="Send instruction">
             <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2.4" stroke-linecap="round" stroke-linejoin="round"><path d="M5 12l14 0M13 6l6 6-6 6"/></svg>
           </button>
         </div>
@@ -2522,7 +2522,7 @@
   <div class="cmdk">
     <div class="cmdk-input-wrap">
       <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round"><circle cx="11" cy="11" r="7"/><path d="m21 21-4.3-4.3"/></svg>
-      <input id="cmdk-input" class="cmdk-input" placeholder="Search tasks, run commands, switch model…" autocomplete="off" spellcheck="false"/>
+      <input id="cmdk-input" class="cmdk-input" placeholder="Search tasks, run commands, switch model…" autocomplete="off" spellcheck="false" aria-label="Search and commands"/>
       <span class="cmdk-hint">⎋</span>
     </div>
     <div id="cmdk-list" class="cmdk-list"></div>
