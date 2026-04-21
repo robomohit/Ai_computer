@@ -111,6 +111,14 @@
     border: 1px solid var(--line);
     background: var(--panel-strong);
     box-shadow: var(--shadow-soft);
+    color: var(--muted);
+    transition: all 0.2s ease;
+  }
+
+  .nav-toggle:hover {
+    color: var(--ink);
+    background: #fff;
+    box-shadow: var(--shadow);
   }
 
   .brand-mark {
@@ -512,9 +520,9 @@
     width: min(720px, 100%);
     padding: 14px 18px;
     border-radius: 18px;
-    background: rgba(255, 255, 255, 0.82);
-    border: 1px solid rgba(28, 26, 23, 0.1);
-    box-shadow: 0 2px 8px rgba(28, 26, 23, 0.05);
+    background: rgba(234, 230, 222, 0.7);
+    border: none;
+    box-shadow: none;
     font-weight: 500;
   }
 
@@ -552,7 +560,7 @@
 
   .feed-card {
     width: 100%;
-    padding: 10px 0;
+    padding: 8px 0;
     border: 0;
     background: transparent;
     box-shadow: none;
@@ -638,10 +646,10 @@
     font-size: 12px;
     line-height: 1.6;
     color: #302a24;
-    background: rgba(255,255,255,0.52);
-    border: 1px solid rgba(27, 22, 18, 0.04);
-    border-radius: 10px;
-    padding: 10px 12px;
+    background: rgba(255,255,255,0.4);
+    border: none;
+    border-radius: 12px;
+    padding: 12px 14px;
     overflow: auto;
     max-height: 340px;
   }
@@ -704,6 +712,7 @@
   .reasoning-note {
     padding-left: 0;
     border-left: none;
+    margin-bottom: -4px;
   }
 
   .reasoning-note .card-title {
@@ -1026,6 +1035,13 @@
     background: #111111;
     color: #f8f3ea;
     font-weight: 700;
+    transition: all 0.2s ease;
+  }
+
+  .send-btn:hover {
+    background: #2a2a2a;
+    transform: translateY(-1px);
+    box-shadow: 0 4px 12px rgba(17, 17, 17, 0.2);
   }
 
   .char-count {
@@ -1164,6 +1180,15 @@
     background: rgba(255,255,255,0.12);
     color: #fff;
     font-size: 20px;
+    display: flex;
+    align-items: center;
+    justify-content: center;
+    transition: all 0.2s ease;
+  }
+
+  .lightbox-close:hover {
+    background: rgba(255,255,255,0.2);
+    transform: scale(1.05);
   }
 
   .hidden {
@@ -1288,7 +1313,9 @@
         <h2 id="task-title">Clean stream</h2>
       </div>
       <div class="topbar-pills">
-        <button class="nav-toggle" id="nav-toggle" type="button">=</button>
+        <button class="nav-toggle" id="nav-toggle" type="button" aria-label="Toggle navigation" title="Toggle navigation">
+          <svg width="20" height="20" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><line x1="3" y1="12" x2="21" y2="12"></line><line x1="3" y1="6" x2="21" y2="6"></line><line x1="3" y1="18" x2="21" y2="18"></line></svg>
+        </button>
         <div class="pill status-ready" id="status-pill"><strong>Ready</strong></div>
         <div class="pill" id="mode-pill"><strong>Mode:</strong> coding</div>
         <div class="pill" id="background-pill"><strong>Run:</strong> background</div>
@@ -1340,7 +1367,9 @@
               <button class="control-btn hidden" id="btn-copy-log" type="button">Copy log</button>
               <button class="control-btn hidden" id="btn-download-log" type="button">Download log</button>
             </div>
-            <button class="send-btn" id="send" type="button">Start task</button>
+            <button class="send-btn" id="send" type="button">Start task
+              <svg width="16" height="16" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2.5" stroke-linecap="round" stroke-linejoin="round"><line x1="22" y1="2" x2="11" y2="13"></line><polygon points="22 2 15 22 11 13 2 9 22 2"></polygon></svg>
+            </button>
           </div>
         </div>
       </div>
@@ -1375,7 +1404,9 @@
 </div>
 
 <div class="lightbox" id="lightbox">
-  <button class="lightbox-close" id="lightbox-close" type="button">x</button>
+  <button class="lightbox-close" id="lightbox-close" type="button" aria-label="Close lightbox" title="Close lightbox">
+    <svg width="24" height="24" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><line x1="18" y1="6" x2="6" y2="18"></line><line x1="6" y1="6" x2="18" y2="18"></line></svg>
+  </button>
   <div class="lightbox-inner">
     <img id="lightbox-img" alt="Screenshot preview">
     <div class="lightbox-caption" id="lightbox-caption">Screenshot</div>
