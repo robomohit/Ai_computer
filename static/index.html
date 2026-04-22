@@ -1296,7 +1296,7 @@
       <span class="brand-ver" id="version-tag">v1.0.0</span>
     </div>
 
-    <button class="new-task-btn" onclick="location.reload()">
+    <button class="new-task-btn" aria-label="New task" onclick="location.reload()">
       <span>＋ New task</span>
       <kbd>⌘N</kbd>
     </button>
@@ -1304,7 +1304,9 @@
     <div style="padding: 15px 18px 5px;">
       <div class="footer-label" style="display:flex; justify-content:space-between; align-items:center;">
         MODEL
-        <button onclick="hydrateModelSelect()" style="background:transparent; border:none; color:var(--text-3); cursor:pointer; font-size:10px;">↻</button>
+        <button onclick="hydrateModelSelect()" aria-label="Refresh models" style="background:transparent; border:none; color:var(--text-3); cursor:pointer; font-size:10px; display:inline-flex; align-items:center; justify-content:center;">
+          <svg width="12" height="12" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><path d="M21.5 2v6h-6M21.34 15.57a10 10 0 1 1-.59-11.83l5.67-5.67"/></svg>
+        </button>
       </div>
       <div class="model-select-wrap">
         <select id="model-id">
@@ -2506,7 +2508,7 @@
         const host = $('toast-stack');
         const el = document.createElement('div');
         el.className = `toast ${kind}`;
-        el.innerHTML = `<span class="t-icon">${TOAST_ICONS[kind] || TOAST_ICONS.info}</span><span class="t-body"></span><button class="t-close" aria-label="Close">×</button>`;
+        el.innerHTML = `<span class="t-icon">${TOAST_ICONS[kind] || TOAST_ICONS.info}</span><span class="t-body"></span><button class="t-close" aria-label="Close"><svg width="14" height="14" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round"><path d="M18 6 6 18M6 6l12 12"/></svg></button>`;
         el.querySelector('.t-body').innerText = msg;
         el.querySelector('.t-close').onclick = () => dismiss();
         host.appendChild(el);
