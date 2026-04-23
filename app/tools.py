@@ -31,10 +31,15 @@ class ToolExecutor:
         self._bg_browser = None
         # Whether to run GUI actions in background (cowork) mode
         self._background_mode = True
+        self._isolated_hwnd = None
 
     def set_background_browser(self, browser):
         """Attach a BackgroundBrowser for sandboxed GUI actions."""
         self._bg_browser = browser
+
+    def set_isolated_hwnd(self, hwnd: Optional[int]):
+        """Set the target HWND for isolated control. None reverts to normal mode."""
+        self._isolated_hwnd = hwnd
 
     def _safe_path(self, value: str) -> Path:
         """Resolve a path, allowing workspace-relative or user-home-absolute paths."""
@@ -75,6 +80,8 @@ class ToolExecutor:
         return ToolResult(ok=True, output=f"Clicked {button} {clicks} times at {x}, {y} (background)")
 
     def mouse_click(self, x: int, y: int, button: str = "left", clicks=1, sw=1280, sh=800):
+        if self._isolated_hwnd:
+            return self._mouse_click_isolated(x, y, button, clicks, sw, sh)
         import pyautogui
         rx, ry = self._scale(x, y, sw, sh)
         # Move smoothly first, then click
@@ -82,6 +89,46 @@ class ToolExecutor:
         time.sleep(0.1)
         pyautogui.click(button=button, clicks=clicks, interval=0.1)
         return ToolResult(ok=True, output=f"Clicked {button} {clicks} times at {rx}, {ry}")
+
+
+    def _mouse_click_isolated(self, x: int, y: int, button: str, clicks: int, sw: int, sh: int):
+        import win32gui, win32api, win32con
+        try:
+            if not (0 <= x <= sw and 0 <= y <= sh):
+                return ToolResult(ok=False, output=f"Coordinates {x},{y} are out of bounds ({sw}x{sh})")
+            
+            if not win32gui.IsWindow(self._isolated_hwnd):
+                return ToolResult(ok=False, output="Target window no longer exists.")
+
+            import pyautogui
+            screen_w, screen_h = pyautogui.size()
+            abs_x = int(x * screen_w / sw)
+            abs_y = int(y * screen_h / sh)
+            client_pt = win32gui.ScreenToClient(self._isolated_hwnd, (abs_x, abs_y))
+            lparam = win32api.MAKELONG(client_pt[0], client_pt[1])
+            msg_down = win32con.WM_LBUTTONDOWN if button == 'left' else win32con.WM_RBUTTONDOWN
+            msg_up = win32con.WM_LBUTTONUP if button == 'left' else win32con.WM_RBUTTONUP
+            for _ in range(clicks):
+                win32gui.PostMessage(self._isolated_hwnd, msg_down, win32con.MK_LBUTTON if button == 'left' else win32con.MK_RBUTTON, lparam)
+                time.sleep(0.05)
+                win32gui.PostMessage(self._isolated_hwnd, msg_up, 0, lparam)
+                time.sleep(0.1)
+            return ToolResult(ok=True, output=f'Sent {button} click to window (Isolated)')
+        except Exception as e:
+            return ToolResult(ok=False, output=f'Isolated click failed: {str(e)}')
+
+    def _keyboard_type_isolated(self, text: str):
+        import win32gui, win32con
+        try:
+            if not win32gui.IsWindow(self._isolated_hwnd):
+                return ToolResult(ok=False, output="Target window no longer exists.")
+
+            for char in text:
+                win32gui.PostMessage(self._isolated_hwnd, win32con.WM_CHAR, ord(char), 0)
+                time.sleep(0.05) # Rate limited for stability
+            return ToolResult(ok=True, output='Sent keys to window (Isolated)')
+        except Exception as e:
+            return ToolResult(ok=False, output=f'Isolated typing failed: {str(e)}')
 
     async def _left_click_drag_bg(self, x: int, y: int, sw=1280, sh=800):
         # Drag from current position to target
@@ -102,6 +149,8 @@ class ToolExecutor:
         return ToolResult(ok=True, output="Typed text (background)")
 
     def keyboard_type(self, text: str):
+        if self._isolated_hwnd:
+            return self._keyboard_type_isolated(text)
         import pyautogui
         # Slightly randomized human-like typing speed (~40-80ms per char)
         import random
@@ -115,6 +164,8 @@ class ToolExecutor:
         return ToolResult(ok=True, output=f"Pressed hotkey: {keys} (background)")
 
     def key(self, keys: str):
+        if self._isolated_hwnd:
+            return self._isolated_key(keys)
         import pyautogui
         parts = [p.strip() for p in keys.split("+") if p.strip()]
         pyautogui.hotkey(*parts)
@@ -161,6 +212,8 @@ class ToolExecutor:
         return ToolResult(ok=True, output="Screenshot captured (background browser)", base64_image=b64)
 
     def screenshot(self):
+        if self._isolated_hwnd:
+            return self._isolated_screenshot()
         import pyautogui
         screen_w, screen_h = pyautogui.size()
         with mss.mss() as sct:
@@ -171,6 +224,45 @@ class ToolExecutor:
             img.save(buf, format="PNG")
             b64 = base64.b64encode(buf.getvalue()).decode("utf-8")
             return ToolResult(ok=True, output="Screenshot captured", base64_image=b64)
+
+    def _isolated_screenshot(self) -> ToolResult:
+        from .providers import _capture_hwnd_screenshot_b64
+        b64 = _capture_hwnd_screenshot_b64(self._isolated_hwnd)
+        return ToolResult(ok=True, output="Isolated screenshot (HWND crop)", base64_image=b64)
+
+    def _isolated_key(self, keys: str) -> ToolResult:
+        """Send a key combo via WM_KEYDOWN/WM_KEYUP to the isolated HWND."""
+        import win32api, win32con  # type: ignore
+        hwnd = self._isolated_hwnd
+        VK_MAP = {
+            "enter": win32con.VK_RETURN, "return": win32con.VK_RETURN,
+            "escape": win32con.VK_ESCAPE, "esc": win32con.VK_ESCAPE,
+            "tab": win32con.VK_TAB, "backspace": win32con.VK_BACK,
+            "delete": win32con.VK_DELETE, "space": win32con.VK_SPACE,
+            "up": win32con.VK_UP, "down": win32con.VK_DOWN,
+            "left": win32con.VK_LEFT, "right": win32con.VK_RIGHT,
+            "home": win32con.VK_HOME, "end": win32con.VK_END,
+            "ctrl": win32con.VK_CONTROL, "shift": win32con.VK_SHIFT,
+            "alt": win32con.VK_MENU,
+            "f1": win32con.VK_F1, "f2": win32con.VK_F2, "f3": win32con.VK_F3,
+            "f4": win32con.VK_F4, "f5": win32con.VK_F5, "f6": win32con.VK_F6,
+            "f7": win32con.VK_F7, "f8": win32con.VK_F8, "f9": win32con.VK_F9,
+            "f10": win32con.VK_F10, "f11": win32con.VK_F11, "f12": win32con.VK_F12,
+        }
+        parts = [p.strip().lower() for p in keys.split("+") if p.strip()]
+        vk_codes = []
+        for p in parts:
+            if p in VK_MAP:
+                vk_codes.append(VK_MAP[p])
+            elif len(p) == 1:
+                vk_codes.append(ord(p.upper()))
+        for vk in vk_codes:
+            win32api.PostMessage(hwnd, win32con.WM_KEYDOWN, vk, 0)
+            time.sleep(0.02)
+        for vk in reversed(vk_codes):
+            win32api.PostMessage(hwnd, win32con.WM_KEYUP, vk, 0)
+            time.sleep(0.02)
+        return ToolResult(ok=True, output=f"Isolated key: {keys}")
 
     async def _cursor_position_bg(self):
         # Background browser doesn't track cursor in same way
@@ -529,7 +621,37 @@ class ToolExecutor:
             return self.text_editor.insert(path, kwargs["insert_line"], kwargs["new_str"])
         if command == "undo_edit":
             return self.text_editor.undo_edit(path)
+        if command == "lint":
+            return self.lint_file(path)
         raise ToolError(f"Unsupported text_editor command: {command}")
+
+    def lint_file(self, path: str):
+        """Run a basic syntax check on a file."""
+        import subprocess
+        abs_path = (self.workspace / path).resolve()
+        if not str(abs_path).startswith(str(self.workspace)):
+            return ToolResult(ok=False, output="Access denied: path is outside workspace.")
+        if not abs_path.exists():
+            return ToolResult(ok=False, output="File not found")
+        
+        ext = abs_path.suffix.lower()
+        cmd = []
+        if ext == '.py':
+            cmd = ["python", "-m", "py_compile", str(abs_path)]
+        elif ext in ('.js', '.ts'):
+            cmd = ["node", "--check", str(abs_path)]
+        
+        if not cmd:
+            return ToolResult(ok=True, output="No linter available for this file type.")
+            
+        try:
+            res = subprocess.run(cmd, capture_output=True, text=True, timeout=5)
+            if res.returncode == 0:
+                return ToolResult(ok=True, output="No syntax errors found.")
+            else:
+                return ToolResult(ok=False, output=res.stderr or res.stdout)
+        except Exception as e:
+            return ToolResult(ok=False, output=f"Linter failed: {str(e)}")
 
     def computer_action(self, action: str, **kwargs):
         action = action.lower().strip()
@@ -693,6 +815,10 @@ class ToolExecutor:
             ActionType.web_search: lambda a: self.web_search(a.args["query"], a.args.get("max_results", 5)),
             ActionType.list_processes: lambda a: self.list_processes(),
             ActionType.kill_process: lambda a: self.kill_process(a.args["pid"], a.args.get("force", False)),
+            ActionType.virtual_input: lambda a: self.computer_action(
+                a.args.get("action", "type"),
+                **{k: v for k, v in a.args.items() if k != "action"},
+            ),
             # request_permission is normally intercepted by the agent, but stub
             # it here so ActionType enum coverage is complete.
             ActionType.request_permission: lambda a: ToolResult(ok=True, output=f"Permission request for '{a.args.get('scope','')}' noted."),

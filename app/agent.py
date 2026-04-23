@@ -22,7 +22,7 @@ from .models import (
     ToolResult,
 )
 from .permissions import PermissionStore, scope_for_action
-from .providers import PlannerProvider, _capture_screenshot_b64, detect_task_mode
+from .providers import PlannerProvider, _capture_screenshot_b64, _get_active_window_rect, _get_hwnd_for_title, detect_task_mode, classify_task_complexity
 from .safety import SafetyManager
 from .text_editor import TextEditorTool
 from .tools import ToolExecutor
@@ -52,6 +52,7 @@ class SubTaskWorker:
         agent_service: AgentService,
         mode: str,
         screen_dims: tuple[int, int],
+        complexity: str = "complex",
     ):
         self.worker_id = worker_id
         self.task_id = task_id
@@ -59,6 +60,7 @@ class SubTaskWorker:
         self.agent_service = agent_service
         self.mode = mode
         self.screen_width, self.screen_height = screen_dims
+        self.complexity = complexity
         self.consecutive_fails = 0
         self.action_count = 0
         self.max_actions = 20 # sub-task limit
@@ -89,6 +91,7 @@ class SubTaskWorker:
         actions_taken: List[Dict[str, Any]] = []
         is_coding = self.mode == "coding"
         is_computer_use = self.mode == "computer_use"
+        is_isolated = self.mode == "computer" and bool(self.agent_service.tools._isolated_hwnd)
 
         try:
             for action_data in self.sub_task.actions:
@@ -177,31 +180,48 @@ class SubTaskWorker:
                         })
                 elif not is_computer_use:
                     if action.type in _SCREENSHOT_ACTIONS or action.type == ActionType.screenshot:
-                        screenshot = res.base64_image or _capture_screenshot_b64(self.screen_width, self.screen_height)
-                        await self._emit("screenshot", {"data": screenshot})
+                        if is_isolated:
+                            from .providers import _capture_hwnd_screenshot_b64
+                            hwnd = self.agent_service.tools._isolated_hwnd
+                            screenshot = res.base64_image or _capture_hwnd_screenshot_b64(hwnd)
+                            shot_payload: Dict[str, Any] = {"data": screenshot, "isolated": True}
+                        else:
+                            screenshot = res.base64_image or _capture_screenshot_b64(self.screen_width, self.screen_height)
+                            shot_payload = {"data": screenshot}
+                            window_rect = _get_active_window_rect(self.screen_width, self.screen_height)
+                            if window_rect:
+                                shot_payload["window_rect"] = window_rect
+                        await self._emit("screenshot", shot_payload)
 
             # Reflection
-            reflect_screenshot = None if (is_coding or is_computer_use) else _capture_screenshot_b64(self.screen_width, self.screen_height)
-            reflection = await self.agent_service._run_with_phase_updates(
-                self.task_id,
-                f"Worker {self.worker_id} reflecting...",
-                "Reflection",
-                provider.reflect_on_subtask,
-                self.sub_task.description,
-                actions_taken,
-                results,
-                reflect_screenshot,
-                self.mode,
-            )
+            if self.complexity != "atomic":
+                reflect_screenshot = None if (is_coding or is_computer_use) else _capture_screenshot_b64(self.screen_width, self.screen_height)
+                reflection = await self.agent_service._run_with_phase_updates(
+                    self.task_id,
+                    f"Worker {self.worker_id} reflecting...",
+                    "Reflection",
+                    provider.reflect_on_subtask,
+                    self.sub_task.description,
+                    actions_taken,
+                    results,
+                    reflect_screenshot,
+                    self.mode,
+                )
+                success = reflection.get("success", True)
+                reason = reflection.get("reason")
+            else:
+                # Atomic tasks skip reflection
+                success = True
+                reason = "Atomic fast-path success"
+
             
-            success = reflection.get("success", True)
             self.sub_task.status = TaskStatus.done if success else TaskStatus.failed
-            self.sub_task.error = reflection.get("reason") if not success else None
+            self.sub_task.error = reason if not success else None
             
             await self._emit("subtask", {
                 "subtask_id": self.sub_task.id,
                 "status": "done" if success else "failed",
-                "reason": reflection.get("reason"),
+                "reason": reason,
             })
             
             return success
@@ -247,7 +267,7 @@ class AgentService:
         await self._emit(task_id, "reasoning", payload)
 
     async def _run_with_phase_updates(
-        self, task_id: str, waiting_message: str, progress_label: str, fn: Callable[..., Any], *args: Any, timeout: float = 120.0, heartbeat_interval: float = 1.0,
+        self, task_id: str, waiting_message: str, progress_label: str, fn: Callable[..., Any], *args: Any, timeout: float = 180.0, heartbeat_interval: float = 1.0,
     ) -> Any:
         await self._emit(task_id, "status", {"message": waiting_message})
         await self._emit_reasoning(task_id, progress_label, waiting_message, live=True, elapsed_seconds=0)
@@ -262,46 +282,129 @@ class AgentService:
             await self._emit(task_id, "status", {"message": f"{progress_label}... {elapsed}s", "elapsed_seconds": elapsed, "heartbeat": True})
         return await work
 
-    def init_task(self, task_id: str, goal: str, screen_width: int = 1280, screen_height: int = 800, model: str = "claude-3-5-sonnet-20241022", mode: str = "auto") -> TaskRecord:
+    def init_task(self, task_id: str, goal: str, screen_width: int = 1280, screen_height: int = 800, model: str = "claude-3-5-sonnet-20241022", mode: str = "auto", isolated_app: Optional[str] = None) -> TaskRecord:
         detected_mode = detect_task_mode(goal, mode if mode != "auto" else None)
-        context = AgentContext(goal=goal, screen_width=screen_width, screen_height=screen_height)
+        context = AgentContext(goal=goal, screen_width=screen_width, screen_height=screen_height, isolated_app=isolated_app)
         record = TaskRecord(id=task_id, status="running", context=context, goal=goal, model=model, mode=detected_mode)
-        self._active_tasks[task_id] = asyncio.create_task(self.run_task(task_id, goal, screen_width, screen_height, model, detected_mode))
+        self._active_tasks[task_id] = asyncio.create_task(self.run_task(task_id, goal, screen_width, screen_height, model, detected_mode, isolated_app=isolated_app))
         return record
 
-    async def run_task(self, task_id: str, goal: str, screen_width: int = 1280, screen_height: int = 800, model: str = "claude-3-5-sonnet-20241022", mode: str = "coding"):
+    async def run_task(self, task_id: str, goal: str, screen_width: int = 1280, screen_height: int = 800, model: str = "claude-3-5-sonnet-20241022", mode: str = "coding", isolated_app: Optional[str] = None):
         provider = PlannerProvider(model=model)
         is_coding = mode == "coding"
         is_computer_use = mode == "computer_use"
-        runs_in_background = is_coding or is_computer_use
+        is_isolated = mode == "computer_isolated"
+        runs_in_background = is_coding or is_computer_use or is_isolated
 
         await asyncio.sleep(0.3)
         await self._emit(task_id, "status", {"message": f"Initializing {mode} mode..."})
-        
-        # Setup Browser
-        bg_browser: Optional[BackgroundBrowser] = None
-        if is_computer_use:
-            bg_browser = BackgroundBrowser(width=screen_width, height=screen_height, headless=True)
-            await bg_browser.start()
-            self._bg_browsers[task_id] = bg_browser
-            self.tools.set_background_browser(bg_browser)
-            self.tools._background_mode = True
-        else:
-            self.tools._background_mode = runs_in_background
 
         try:
+            # Setup Browser
+            bg_browser: Optional[BackgroundBrowser] = None
+            if is_computer_use:
+                try:
+                    bg_browser = BackgroundBrowser(width=screen_width, height=screen_height, headless=True)
+                    await bg_browser.start()
+                    self._bg_browsers[task_id] = bg_browser
+                    self.tools.set_background_browser(bg_browser)
+                    self.tools._background_mode = True
+                except Exception as browser_err:
+                    raise Exception(f"Failed to start background browser: {str(browser_err)}. Make sure playwright browsers are installed.")
+            else:
+                self.tools._background_mode = runs_in_background
+
+            # Isolated App Control: find HWND and wire it up for computer mode
+            isolated_hwnd: Optional[int] = None
+            if mode == "computer_isolated":
+                if isolated_app:
+                    isolated_hwnd = _get_hwnd_for_title(isolated_app)
+                
+                if not isolated_hwnd:
+                    # Try to grab the current foreground window if it's not a common system/shell window
+                    import win32gui
+                    hwnd = win32gui.GetForegroundWindow()
+                    if hwnd and win32gui.IsWindowVisible(hwnd):
+                        title = win32gui.GetWindowText(hwnd).lower()
+                        # Avoid locking to the browser or the dashboard itself
+                        if not any(kw in title for kw in ("chrome", "edge", "clean stream", "dash")):
+                            isolated_hwnd = hwnd
+                            isolated_app = win32gui.GetWindowText(hwnd)
+
+                if isolated_hwnd:
+                    self.tools.set_isolated_hwnd(isolated_hwnd)
+                    await self._emit(task_id, "mode", {"mode": mode, "isolated": True, "isolated_app": isolated_app or "Active Window"})
+                    _log.info(f"Isolated mode: HWND {isolated_hwnd} for '{isolated_app}'")
+                else:
+                    _log.warning(f"No suitable target window found for isolated mode.")
+                    await self._emit(task_id, "mode", {"mode": mode, "isolated": False})
+            else:
+                self.tools.set_isolated_hwnd(None)
+                await self._emit(task_id, "mode", {"mode": mode, "isolated": False})
+
+            # Classify task complexity
+            complexity = classify_task_complexity(goal)
+            if is_isolated:
+                # Isolated mode: always use the fast path to avoid LLM planning latency
+                complexity = "atomic"
+
             # Planning
+            _goal_needs_tree = any(kw in goal.lower() for kw in ("file", "directory", "project", "folder"))
             env_context = ""
             if is_coding:
-                env_res = self.tools.system_info()
-                env_context = f"\n\nSystem environment:\n{env_res.output}"
+                if complexity == "atomic":
+                    env_context = f"\n\nWorkspace directory: {self.workspace.absolute()}"
+                else:
+                    env_res = self.tools.system_info()
+                    env_context = f"\n\nSystem environment:\n{env_res.output}"
+                    if _goal_needs_tree:
+                        env_context += _workspace_tree(self.workspace, depth=2)
+
             
             screenshot_b64 = None if runs_in_background else _capture_screenshot_b64(screen_width, screen_height)
             memories = self.memory.search(goal, limit=5)
             mem_context = "\n".join(f"- {m.content}" for m in memories) if memories else None
 
-            plan = await self._run_with_phase_updates(task_id, "Planning...", "Planning", provider.plan_hierarchical, goal + env_context, screenshot_b64, mem_context, mode)
+            if screenshot_b64:
+                from .providers import _get_active_window_rect
+                await self._emit(task_id, "screenshot", {
+                    "data": screenshot_b64,
+                    "window_rect": _get_active_window_rect() if is_isolated else None,
+                    "isolated": is_isolated,
+                    "worker_id": "planner"
+                })
+
+            if complexity == "atomic":
+                # Fast-path: direct execution plan
+                from .providers import _extract_json, CODING_SYSTEM_PROMPT, HIERARCHICAL_SYSTEM_PROMPT, COMPUTER_USE_SYSTEM_PROMPT
+                direct_system = CODING_SYSTEM_PROMPT if is_coding else (COMPUTER_USE_SYSTEM_PROMPT if is_computer_use else HIERARCHICAL_SYSTEM_PROMPT)
+                win_info = f"\nTarget window locked: {isolated_app}" if is_isolated else ""
+                direct_prompt = (
+                    f"Goal: {goal}{env_context}{win_info}\n\n"
+                    "This is a simple, direct task. Use exactly 1 sub-task with the minimum actions needed. "
+                    "Do NOT over-decompose. Do NOT add verification steps. Just do it."
+                )
+                if mem_context:
+                    direct_prompt = f"Relevant past experience:\n{mem_context}\n\n{direct_prompt}"
+
+                try:
+                    raw = await self._run_with_phase_updates(
+                        task_id, "Executing directly...", "Planning",
+                        provider._call_llm, direct_system, direct_prompt, None
+                    )
+                    from .models import HierarchicalPlan
+                    plan = HierarchicalPlan.model_validate(_extract_json(raw))
+                    plan.sub_tasks = plan.sub_tasks[:2]  # safety cap
+                except Exception as atomic_err:
+                    _log.warning(f"Atomic plan extraction failed ({atomic_err}); falling back to hierarchical planning.")
+                    complexity = "complex"
+                    plan = await self._run_with_phase_updates(task_id, "Planning...", "Planning", provider.plan_hierarchical, goal + env_context + win_info, screenshot_b64, mem_context, mode)
+            else:
+                win_info = f"\nTarget window locked: {isolated_app}" if is_isolated else ""
+                plan = await self._run_with_phase_updates(task_id, "Planning...", "Planning", provider.plan_hierarchical, goal + env_context + win_info, screenshot_b64, mem_context, mode)
+            
             await self._emit(task_id, "plan", plan.model_dump())
+            
             
             if not plan.sub_tasks:
                 self._finalize(task_id, "failed", "No plan produced.")
@@ -325,7 +428,7 @@ class AgentService:
                 for st in ready_to_start:
                     del pending_tasks[st.id]
                     worker_id = f"worker-{len(completed_tasks) + len(running_tasks) + 1}"
-                    worker = SubTaskWorker(worker_id, task_id, st, self, mode, (screen_width, screen_height))
+                    worker = SubTaskWorker(worker_id, task_id, st, self, mode, (screen_width, screen_height), complexity=complexity)
                     running_tasks[st.id] = asyncio.create_task(worker.run(provider, history))
 
                 if not running_tasks and pending_tasks:
@@ -344,22 +447,36 @@ class AgentService:
                             completed_tasks.add(st_id)
                             del running_tasks[st_id]
                         else:
-                            # Sub-task failed — we currently stop the whole goal
-                            self._finalize(task_id, "failed", f"Sub-task {st_id} failed.")
-
-                            # Evaluation
+                            # Sub-task failed — we run an evaluation to see if we can recover or if it's a hard fail
+                            await self._emit(task_id, "status", {"message": f"Sub-task {st_id} failed. Evaluating situation..."})
+                            
                             eval_screenshot = None if runs_in_background else _capture_screenshot_b64(screen_width, screen_height)
-                            eval_res = await self._run_with_phase_updates(task_id, "Evaluating...", "Evaluation", provider.evaluate, goal, history, eval_screenshot, mode)
-                            self.memory.add("task_outcome", f"Goal: {goal} | Outcome: {eval_res.get('complete')} | Reason: {eval_res.get('reason')}")
-
-                            return
+                            eval_res = await self._run_with_phase_updates(task_id, "Evaluating failure...", "Evaluation", provider.evaluate, goal, history, eval_screenshot, mode)
+                            
+                            if eval_res.get("complete"):
+                                # Somehow it's done anyway?
+                                completed_tasks.add(st_id)
+                                del running_tasks[st_id]
+                            else:
+                                # Hard fail — emit done so the frontend exits the Evaluating state
+                                reason = f"Sub-task {st_id} failed: {eval_res.get('reason')}"
+                                self._finalize(task_id, "failed", reason)
+                                self.memory.add("task_outcome", f"Goal: {goal} | Outcome: failed | Reason: {eval_res.get('reason')}")
+                                await self._emit(task_id, "done", {"complete": False, "reason": reason, "finished_at": datetime.now(timezone.utc).isoformat()})
+                                return
 
             # Ensure evaluation runs for ALL tasks
+            if complexity == "atomic":
+                # Fast-path: assume success if atomic worker finished without error
+                self._finalize(task_id, "done", "Atomic task completed successfully.")
+                return
+
             eval_screenshot = None if runs_in_background else _capture_screenshot_b64(screen_width, screen_height)
             eval_res = await self._run_with_phase_updates(task_id, "Evaluating...", "Evaluation", provider.evaluate, goal, history, eval_screenshot, mode)
             
             status = "done" if eval_res.get("complete") else "failed"
             self._finalize(task_id, status, eval_res.get("reason", ""))
+
             await self._emit(task_id, "done", {**eval_res, "finished_at": datetime.now(timezone.utc).isoformat()})
             self.memory.add("task_outcome", f"Goal: {goal} | Outcome: {eval_res.get('complete')} | Reason: {eval_res.get('reason')}")
 
@@ -371,6 +488,7 @@ class AgentService:
             self._active_tasks.pop(task_id, None)
             browser = self._bg_browsers.pop(task_id, None)
             if browser: await browser.stop()
+
 
     def _finalize(self, task_id: str, status: str, reason: str = ""):
         if self._on_task_complete: self._on_task_complete(task_id, status, reason)
@@ -413,3 +531,30 @@ def _summarize_args(action_type: str, args: dict) -> str:
     if action_type == "text_editor": return f"{args.get('command','')} {args.get('path','')}"
     if action_type in ("read_file", "write_file", "move_file"): return args.get("path") or args.get("src") or ""
     return ""
+
+_SKIP_DIRS = frozenset({'__pycache__', 'node_modules', '.gemini', '.claude', '.git', 'venv', '.venv', 'dist', 'build', '.tempmediaStorage'})
+
+def _workspace_tree(root: Path, depth: int = 2) -> str:
+    if not root.exists():
+        return ""
+    lines = [f"\n\nWorkspace layout ({root}):"]
+    try:
+        def _walk(directory: Path, current_depth: int):
+            if current_depth > depth:
+                return
+            try:
+                entries = sorted(directory.iterdir(), key=lambda p: (p.is_file(), p.name))
+            except PermissionError:
+                return
+            for entry in entries:
+                if entry.name.startswith('.') or entry.name in _SKIP_DIRS:
+                    continue
+                indent = "  " * (current_depth - 1)
+                lines.append(f"{indent}{'/' if entry.is_dir() else ''}{entry.name}")
+                if entry.is_dir():
+                    _walk(entry, current_depth + 1)
+        _walk(root, 1)
+    except Exception:
+        pass
+    return "\n".join(lines)
+

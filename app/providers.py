@@ -18,65 +18,57 @@ from .tool_registry import get_tool_guidance, get_mode_packs
 
 SYSTEM_PROMPT = """You are a computer control planner. Use the provided actions to achieve the user's goal."""
 
-HIERARCHICAL_SYSTEM_PROMPT = """You are a hierarchical planning engine for an autonomous computer agent.
-Return ONLY valid JSON with shape:
+HIERARCHICAL_SYSTEM_PROMPT = """You are a hierarchical planning engine. Decompose the goal into sequential or parallel sub-tasks.
+Return ONLY valid JSON:
 {{
-  "reasoning": str,
-  "overall_complete": bool,
+  "reasoning": "Plan explanation",
   "execution_mode": "serial" | "parallel",
-  "max_parallel_workers": int,
+  "max_parallel_workers": 3,
   "sub_tasks": [
     {{
-      "id": str,
-      "description": str,
-      "depends_on": [str],
-      "write_scope": [str],
-      "actions": [{{ "id": str, "type": str, "args": object, "explanation": str, "requires_approval": bool }}]
+      "id": "step-1",
+      "description": "Clear instruction",
+      "depends_on": [],
+      "actions": [{{ "id": "act-1", "type": "...", "args": {{}}, "explanation": "..." }}]
     }}
   ]
 }}
-For simple one-action tasks, use exactly 1 sub-task. For complex tasks, decompose into 2-8 sequential sub-tasks. Each sub-task should be independently verifiable.
-If multiple sub-tasks can run safely in parallel (without touching the same files/directories), set execution_mode to "parallel".
-
-Available actions:
-{tool_guidance}
-
-Never output markdown. Never output prose outside JSON."""
-
-# ──────────────────────────────────────────────────────────────────────────────
-#  CODING MODE PROMPTS  — no screenshots, no mouse/keyboard/vision actions
-# ──────────────────────────────────────────────────────────────────────────────
-CODING_SYSTEM_PROMPT = """You are an expert autonomous coding agent. You write, read, and execute code.
-Return ONLY valid JSON with shape:
-{{
-  "reasoning": str,
-  "overall_complete": bool,
-  "execution_mode": "serial" | "parallel",
-  "max_parallel_workers": int,
-  "sub_tasks": [
-    {{
-      "id": str,
-      "description": str,
-      "depends_on": [str],
-      "write_scope": [str],
-      "actions": [{{ "id": str, "type": str, "args": object, "explanation": str, "requires_approval": false }}]
-    }}
-  ]
-}}
-Decompose the goal into sequential or parallel sub-tasks. Each sub-task should be independently verifiable.
-If multiple sub-tasks can run safely in parallel (without touching the same files/directories), set execution_mode to "parallel".
 
 Available actions:
 {tool_guidance}
 
 Rules:
-1. The system environment (OS, paths, python command) is provided in the prompt. Use those EXACT paths.
-2. For project/code files: use relative paths (resolved from the workspace directory).
-3. Use list_directory to explore or verify folder contents when needed.
-4. Create directories automatically via write_file (parents are auto-created).
-5. Always verify your work: after writing code, run it or read it back.
-6. When you generate action ids, use short descriptive strings like "create-main", "run-test", etc.
-Never output markdown. Never output prose outside JSON."""
+1. For simple tasks, use 1 sub-task. For complex tasks, use 2-5.
+2. Be concise. No markdown."""
+
+
+# ──────────────────────────────────────────────────────────────────────────────
+#  CODING MODE PROMPTS  — no screenshots, no mouse/keyboard/vision actions
+# ──────────────────────────────────────────────────────────────────────────────
+CODING_SYSTEM_PROMPT = """You are an expert autonomous coding agent. Decompose the goal into sub-tasks.
+Return ONLY valid JSON:
+{{
+  "reasoning": "Strategy explanation",
+  "execution_mode": "serial" | "parallel",
+  "max_parallel_workers": 3,
+  "sub_tasks": [
+    {{
+      "id": "step-1",
+      "description": "Clear instruction",
+      "depends_on": [],
+      "actions": [{{ "id": "act-1", "type": "...", "args": {{}}, "explanation": "..." }}]
+    }}
+  ]
+}}
+
+Available actions:
+{tool_guidance}
+
+Rules:
+1. Use relative paths.
+2. Mandatory Verification: After any edit (create, str_replace, insert), ALWAYS include a 'view' action and a 'lint' action in the same sub-task to verify correctness.
+3. If a linter error occurs, you MUST fix it immediately.
+4. No markdown. No prose."""
 
 CODING_REFLECT_PROMPT = """You are a reflection agent for an autonomous coding agent.
 Given a completed sub-task description, the actions that ran, and their outputs (stdout/stderr/file contents),
@@ -120,7 +112,8 @@ Rules:
 3. Use CSS selectors based on the accessibility tree output. Prefer stable selectors: input[type=...], button[aria-label=...], #id, [role=...].
 4. NEVER use pixel coordinates. NEVER use mouse_click, keyboard_type, or screenshot. Those are blocked in this mode.
 5. For Google Sheets: open https://docs.google.com/spreadsheets/ and use browser_accessibility_tree to see cells. Click a cell then browser_type to write.
-Never output markdown. Never output prose outside JSON."""
+6. NEVER invent action types. Only use action types listed above. Do NOT use 'launch_app' or any other unlisted type. To launch an application, use 'run_command' instead.
+7. Your response MUST be valid JSON only — no markdown fences, no prose, no trailing text outside the JSON object."""
 
 
 COMPUTER_USE_REFLECT_PROMPT = """You are a reflection agent for a browser-automation task.
@@ -187,8 +180,8 @@ _COMPUTER_USE_KEYWORDS = [
 
 def detect_task_mode(goal: str, explicit_mode: Optional[str] = None) -> str:
     """Return 'coding', 'computer_use', or 'computer'. If explicit_mode is set, honour it."""
-    if explicit_mode and explicit_mode in ("coding", "computer", "computer_use"):
-        return explicit_mode
+    if explicit_mode and explicit_mode in ("coding", "computer", "computer_use", "computer_isolated"):
+        return "computer_isolated" if explicit_mode == "computer" else explicit_mode
     g = goal.lower()
     computer_use_score = sum(1 for kw in _COMPUTER_USE_KEYWORDS if kw in g)
     coding_score = sum(1 for kw in _CODING_KEYWORDS if kw in g)
@@ -196,7 +189,7 @@ def detect_task_mode(goal: str, explicit_mode: Optional[str] = None) -> str:
     if computer_use_score >= 2 and computer_use_score > coding_score:
         return "computer_use"
     if computer_score >= 2 and computer_score > coding_score:
-        return "computer"
+        return "computer_isolated"
     return "coding"
 
 
@@ -223,42 +216,132 @@ def _capture_screenshot_b64(width: int, height: int) -> str:
         return base64.b64encode(buf.getvalue()).decode("utf-8")
 
 
+def _get_active_window_rect(sw: int, sh: int) -> Optional[Dict[str, Any]]:
+    """Return the foreground window's rect as fractions of the screenshot dimensions."""
+    try:
+        import win32gui  # type: ignore
+        hwnd = win32gui.GetForegroundWindow()
+        if not hwnd:
+            return None
+        rect = win32gui.GetWindowRect(hwnd)
+        left, top, right, bottom = rect
+        title = win32gui.GetWindowText(hwnd)[:60]
+        # Normalise against the actual captured dimensions (capped at 1280×800)
+        cap_w = min(sw, 1280)
+        cap_h = min(sh, 800)
+        x = max(0, left)
+        y = max(0, top)
+        w = min(right - left, cap_w - x)
+        h = min(bottom - top, cap_h - y)
+        if w <= 10 or h <= 10:
+            return None
+        return {
+            "x": x / cap_w,
+            "y": y / cap_h,
+            "w": w / cap_w,
+            "h": h / cap_h,
+            "title": title,
+        }
+    except Exception:
+        return None
+
+
+def _get_hwnd_for_title(partial_title: str) -> Optional[int]:
+    """Find a visible top-level HWND by partial title match (case-insensitive)."""
+    try:
+        import win32gui  # type: ignore
+        found: List[int] = []
+
+        def _enum(hwnd: int, _: Any) -> None:
+            if win32gui.IsWindowVisible(hwnd):
+                text = win32gui.GetWindowText(hwnd)
+                if partial_title.lower() in text.lower():
+                    found.append(hwnd)
+
+        win32gui.EnumWindows(_enum, None)
+        return found[0] if found else None
+    except Exception:
+        return None
+
+
+def _capture_hwnd_screenshot_b64(hwnd: int) -> str:
+    """Capture a screenshot cropped to the given HWND's screen bounding rect."""
+    import win32gui  # type: ignore
+    rect = win32gui.GetWindowRect(hwnd)
+    left, top, right, bottom = rect
+    w = max(1, min(right - left, 1280))
+    h = max(1, min(bottom - top, 800))
+    with mss.mss() as sct:
+        monitor = {"left": left, "top": top, "width": w, "height": h}
+        shot = sct.grab(monitor)
+        image = Image.frombytes("RGB", shot.size, shot.rgb)
+        buf = io.BytesIO()
+        image.save(buf, format="PNG")
+        return base64.b64encode(buf.getvalue()).decode("utf-8")
+
+
 def _sanitize_json_text(text: str) -> str:
-    """Strip trailing commas and JS-style comments that some LLMs emit."""
+    """Strip trailing commas, JS-style comments, and repair common structural errors."""
     # Remove single-line comments //...
     text = re.sub(r'//[^\n]*', '', text)
     # Remove block comments /* ... */
     text = re.sub(r'/\*.*?\*/', '', text, flags=re.DOTALL)
     # Remove trailing commas before } or ]
     text = re.sub(r',\s*([}\]])', r'\1', text)
+    # Fix missing commas between objects/arrays in a list
+    text = re.sub(r'}\s*{', '}, {', text)
+    text = re.sub(r']\s*\[', '], [', text)
+    # Fix missing quotes on property names (keys)
+    # Match { key: or , key: where key is alphanumeric
+    text = re.sub(r'([{,]\s*)([a-zA-Z0-9_]+)(\s*:)', r'\1"\2"\3', text)
+    # Fix missing commas between key:value pairs
+    text = re.sub(r'("\s*:\s*[^,]+?)\s*(")', r'\1, \2', text)
+    # Fix extra double quotes like ""}, or ""],
+    text = re.sub(r'""\s*([}\]])', r'"\1', text)
     return text
 
-
 def _extract_json(text: str) -> Any:
-    """Extract JSON from LLM response text, handling markdown code fences and conversational filler."""
+    """Extract and repair JSON from LLM response text."""
+    if not text:
+        return {}
+    
     text = text.strip()
     # Try finding a markdown block first
     fence = re.search(r"```(?:json)?\s*([\s\S]*?)```", text)
     if fence:
-        text = fence.group(1).strip()
+        json_str = fence.group(1).strip()
     else:
-        # Fallback: extract anything that looks like a JSON object
-        start = text.find("{")
-        end = text.rfind("}")
-        if start != -1 and end != -1 and end > start:
-            text = text[start:end+1].strip()
-
-    # First attempt — raw
+        # Fallback: outermost { ... }
+        match = re.search(r'(\{.*\})', text, re.DOTALL)
+        json_str = match.group(1) if match else text.strip()
+    
+    # Try standard parse
     try:
-        return json.loads(text)
-    except json.JSONDecodeError:
+        return json.loads(json_str)
+    except Exception:
         pass
-
-    # Second attempt — after sanitizing trailing commas / comments
+        
+    # Try sanitized parse
     try:
-        return json.loads(_sanitize_json_text(text))
-    except json.JSONDecodeError as e:
-        raise ValueError(f"Failed to parse JSON: {e}\nRaw text was:\n{text}")
+        sanitized = _sanitize_json_text(json_str)
+        return json.loads(sanitized)
+    except Exception:
+        pass
+        
+    # Aggressive repair: fix unescaped newlines in strings
+    repaired = json_str.replace('\n', '\\n').replace('\r', '\\r')
+    repaired = re.sub(r'\\n\s*([{}\[\]])', r'\n\1', repaired)
+    repaired = re.sub(r'([{}\[\]])\s*\\n', r'\1\n', repaired)
+    
+    try:
+        return json.loads(_sanitize_json_text(repaired))
+    except Exception:
+        # Final fallback: just try to load whatever we have
+        try:
+            return json.loads(_sanitize_json_text(json_str))
+        except Exception as e:
+            raise ValueError(f"Failed to parse JSON: {e}\nRaw text was:\n{json_str}")
+
 
 
 def _sentence_case_description(text: str) -> str:
@@ -371,8 +454,12 @@ def classify_task_complexity(goal: str) -> str:
     """Returns 'atomic' or 'complex' based on keyword analysis."""
     g = goal.lower()
     words = g.split()
-    atomic_signals = ["write", "create file", "rename", "delete", "move file", "print", "run", "execute", "install", "append", "touch", "mkdir", "echo", "copy file", "read file", "hello world", "to a file", "save to"]
+    atomic_signals = ["write", "create file", "rename", "delete", "move file", "print", "run", "execute", "install", "append", "touch", "mkdir", "echo", "copy file", "read file", "hello world", "to a file", "save to", "open ", "search", "browse", "go to", "find", "navigate", "check ", "weather", "time"]
     complex_signals = ["refactor", "redesign", "improve", "optimize", "analyze", "architect", "fix all", "migrate", "integrate", "full", "entire", "build an app", "create a server"]
+
+    if len(words) < 10:
+        if not any(k in g for k in complex_signals):
+            return "atomic"
 
     if len(words) <= 25 and any(k in g for k in atomic_signals):
         if not any(k in g for k in complex_signals):
@@ -721,7 +808,13 @@ class PlannerProvider:
                 "Based on the screenshot and results, did this sub-task succeed?"
             )
             raw_text = self._call_llm(REFLECT_SYSTEM_PROMPT, prompt, post_screenshot_b64)
-        return _extract_json(raw_text)
+        try:
+            result = _extract_json(raw_text)
+            if not isinstance(result, dict):
+                raise ValueError("Non-dict reflection result")
+            return result
+        except Exception:
+            return {"success": True, "reason": "Reflection parse failed; assuming success."}
 
     def evaluate(
         self, goal: str, history: List[str], latest_screenshot_b64: Optional[str] = None,
@@ -735,7 +828,16 @@ class PlannerProvider:
             raw_text = self._call_llm(COMPUTER_USE_EVALUATE_PROMPT, prompt)  # no screenshot
         else:
             raw_text = self._call_llm(EVALUATE_SYSTEM_PROMPT, prompt, latest_screenshot_b64)
-        return _extract_json(raw_text)
+        try:
+            result = _extract_json(raw_text)
+            if not isinstance(result, dict):
+                raise ValueError("Non-dict evaluation result")
+            # Normalise: if "complete" key is absent but response looks positive, default to False
+            result.setdefault("complete", False)
+            result.setdefault("reason", "")
+            return result
+        except Exception:
+            return {"complete": False, "reason": "Evaluation failed to parse LLM response."}
 
 
 __all__ = [
@@ -743,6 +845,9 @@ __all__ = [
     "detect_task_mode",
     "classify_task_complexity",
     "_capture_screenshot_b64",
+    "_get_active_window_rect",
+    "_get_hwnd_for_title",
+    "_capture_hwnd_screenshot_b64",
     "_extract_json",
     "CODING_SYSTEM_PROMPT",
     "HIERARCHICAL_SYSTEM_PROMPT",

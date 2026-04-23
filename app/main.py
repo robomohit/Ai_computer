@@ -38,7 +38,7 @@ async def verify_token(credentials: HTTPAuthorizationCredentials = Security(bear
     if credentials is None or credentials.credentials != API_KEY:
         raise HTTPException(status_code=401, detail="Unauthorized")
 
-workspace_dir = Path("workspace")
+workspace_dir = Path(".")
 workspace_dir.mkdir(parents=True, exist_ok=True)
 (workspace_dir / "logs").mkdir(parents=True, exist_ok=True)
 task_store_dir = workspace_dir / "tasks"
@@ -175,9 +175,10 @@ class TaskIn(BaseModel):
     task_id: str
     goal: str = Field(..., min_length=5, max_length=2000)
     model: Optional[str] = None  # None = auto-pick from available keys
-    mode: Literal["auto", "coding", "computer", "computer_use"] = "auto"
+    mode: Literal["auto", "coding", "computer", "computer_use", "computer_isolated"] = "auto"
     screen_width: int = 1280
     screen_height: int = 800
+    isolated_app: Optional[str] = None  # partial window title to target in isolated mode
 
 @app.middleware("http")
 async def limit_request_size(request: Request, call_next):
@@ -381,6 +382,7 @@ async def create_task(body: TaskIn):
             screen_height=body.screen_height,
             model=selected_model,
             mode=body.mode or "auto",
+            isolated_app=body.isolated_app,
         )
         _tasks[body.task_id] = record
         _save_task_record(record)

@@ -44,6 +44,7 @@ class ActionType(str, Enum):
     wait_action = "wait_action"
     cursor_position = "cursor_position"
     text_view = "text_view"
+    virtual_input = "virtual_input"
     text_create = "text_create"
     text_str_replace = "text_str_replace"
     text_insert = "text_insert"
@@ -108,6 +109,7 @@ class AgentContext(BaseModel):
     history: List[str] = Field(default_factory=list)
     screen_width: int = 1280
     screen_height: int = 800
+    isolated_app: Optional[str] = None
 
 
 class TaskRecord(BaseModel):

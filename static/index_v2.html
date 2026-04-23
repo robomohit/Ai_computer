@@ -387,8 +387,26 @@
     letter-spacing: 0.01em;
   }
 
-  .pill strong {
-    color: var(--muted);
+  .thinking-dot {
+    width: 6px;
+    height: 6px;
+    background: var(--accent);
+    border-radius: 50%;
+    display: inline-block;
+    margin-right: 8px;
+    animation: pulse-ring 1.8s infinite;
+  }
+
+  @keyframes pulse-ring {
+    0% { transform: scale(0.85); box-shadow: 0 0 0 0 rgba(46, 99, 211, 0.7); }
+    70% { transform: scale(1); box-shadow: 0 0 0 10px rgba(46, 99, 211, 0); }
+    100% { transform: scale(0.85); box-shadow: 0 0 0 0 rgba(46, 99, 211, 0); }
+  }
+
+  .live-status-card .card-subtitle {
+    display: flex;
+    align-items: center;
+    color: var(--accent);
     font-weight: 500;
   }
 
@@ -452,6 +470,18 @@
     flex: 1;
     overflow: auto;
     padding: 0 24px;
+    scroll-behavior: smooth;
+  }
+
+  .feed-scroll::-webkit-scrollbar {
+    width: 6px;
+  }
+  .feed-scroll::-webkit-scrollbar-thumb {
+    background: var(--line-strong);
+    border-radius: 999px;
+  }
+  .feed-scroll::-webkit-scrollbar-track {
+    background: transparent;
   }
 
   .feed {
@@ -464,23 +494,26 @@
   }
 
   .welcome {
-    padding: 28px 0 10px;
+    padding: 60px 0 20px;
+    text-align: center;
+    max-width: 680px;
+    margin: 0 auto;
   }
 
   .welcome h3 {
-    margin: 0 0 10px;
-    font-size: 38px;
+    margin: 0 0 14px;
+    font-size: 52px;
     font-family: 'Instrument Serif', serif;
     font-weight: 400;
-    letter-spacing: -0.04em;
+    letter-spacing: -0.05em;
+    line-height: 1.1;
   }
 
   .welcome p {
-    max-width: 700px;
-    margin: 0 0 18px;
+    margin: 0 auto 32px;
     color: var(--muted);
     line-height: 1.7;
-    font-size: 15px;
+    font-size: 17px;
   }
 
   .example-grid {
@@ -491,20 +524,32 @@
 
   .example-btn {
     text-align: left;
-    padding: 16px;
-    border-radius: 18px;
+    padding: 20px;
+    border-radius: 24px;
     border: 1px solid var(--line);
-    background: rgba(255,255,255,0.68);
+    background: rgba(255,255,255,0.5);
+    backdrop-filter: blur(8px);
     color: var(--ink);
     line-height: 1.5;
-    box-shadow: var(--shadow-soft);
+    transition: all 0.25s cubic-bezier(0.4, 0, 0.2, 1);
+    box-shadow: 0 4px 12px rgba(28, 26, 23, 0.03);
+    font-size: 14px;
+    font-weight: 500;
+  }
+
+  .example-btn:hover {
+    background: rgba(255,255,255,0.9);
+    border-color: var(--line-strong);
+    transform: translateY(-2px);
+    box-shadow: 0 12px 24px rgba(28, 26, 23, 0.08);
   }
 
   .example-btn span {
     display: block;
-    margin-top: 6px;
+    margin-top: 8px;
     color: var(--muted);
     font-size: 12px;
+    font-weight: 400;
   }
 
   .message {
@@ -560,10 +605,16 @@
 
   .feed-card {
     width: 100%;
-    padding: 8px 0;
+    padding: 12px 0;
     border: 0;
     background: transparent;
     box-shadow: none;
+    animation: card-appear 0.45s cubic-bezier(0.16, 1, 0.3, 1) forwards;
+  }
+
+  @keyframes card-appear {
+    from { opacity: 0; transform: translateY(14px); }
+    to { opacity: 1; transform: translateY(0); }
   }
 
   .card-head {
@@ -651,7 +702,7 @@
     border-radius: 12px;
     padding: 12px 14px;
     overflow: auto;
-    max-height: 340px;
+    max-height: 240px;
   }
 
   .detail-list {
@@ -893,6 +944,12 @@
     opacity: 0.8;
   }
 
+  .screenshot-wrap {
+    position: relative;
+    display: inline-block;
+    line-height: 0;
+  }
+
   .screenshot-img {
     width: min(100%, 560px);
     display: block;
@@ -900,6 +957,16 @@
     border: 1px solid rgba(27, 22, 18, 0.06);
     box-shadow: 0 8px 20px rgba(20, 17, 12, 0.06);
     background: #e9e2d7;
+  }
+
+  .screenshot-glow-canvas {
+    position: absolute;
+    top: 0;
+    left: 0;
+    width: 100%;
+    height: 100%;
+    pointer-events: none;
+    border-radius: 14px;
   }
 
   .screenshot-btn {
@@ -1299,9 +1366,15 @@
         <select id="mode-id">
           <option value="auto">Auto detect</option>
           <option value="coding">Coding</option>
-          <option value="computer">Desktop control</option>
+          <option value="computer_isolated">Isolated App control</option>
           <option value="computer_use">Browser cowork</option>
         </select>
+      </div>
+      <div class="selector-wrap" id="isolated-app-wrap" style="display:none">
+        <div class="selector-label">Target App (Locked)</div>
+        <input id="isolated-app-id" type="text" placeholder="e.g. Chrome, Notepad..."
+          style="width:100%;border-radius:14px;border:1px solid var(--line);background:rgba(255,255,255,0.82);padding:11px 13px;color:var(--ink);outline:none;font:inherit">
+        <p style="font-size:10px;color:var(--muted);margin-top:6px">The agent will only see and control this app.</p>
       </div>
     </div>
   </aside>
@@ -1449,24 +1522,24 @@
 
   const WELCOME_HTML = `
     <section class="welcome" id="welcome">
-      <h3>Everything in one clean stream.</h3>
-      <p>This version keeps the left history rail, but collapses plans, thinking, tools, file edits, terminal output, screenshots, and approvals into a single timeline so the agent feels more like one conversation and less like three separate dashboards.</p>
+      <h3>The ultimate computer agent.</h3>
+      <p>A unified stream for complex planning, parallel sub-tasks, and isolated application control. Powered by Claude 3.5 Sonnet and Gemini 2.0 Flash.</p>
       <div class="example-grid">
-        <button class="example-btn" type="button" data-example="Create a FastAPI app with CRUD endpoints and tests.">
+        <button class="example-btn" type="button" data-example="Create a premium FastAPI dashboard with SQLite and JWT auth.">
           Build a coding task
-          <span>Plans, file writes, terminal output, and reflections render inline.</span>
+          <span>Parallel workers will handle files, tests, and documentation.</span>
         </button>
-        <button class="example-btn" type="button" data-example="Open example.com in browser cowork mode, summarize the page, and save notes to the workspace.">
-          Try browser cowork
-          <span>Browser actions and screenshots stay in the same stream.</span>
+        <button class="example-btn" type="button" data-example="Open Notepad in isolated mode and type a summary of the current workspace architecture.">
+          Isolated App Control
+          <span>Control local apps in the background while you stay productive.</span>
         </button>
-        <button class="example-btn" type="button" data-example="Inspect the existing workspace, explain the architecture, and suggest two cleanup tasks.">
-          Review a project
-          <span>Good for comparing the old UI to this simpler feed.</span>
+        <button class="example-btn" type="button" data-example="Search the web for the latest AI coding trends and save a markdown report.">
+          Web Research
+          <span>Browser Cowork mode uses sandboxed Playwright for high reliability.</span>
         </button>
-        <button class="example-btn" type="button" data-example="Update the frontend to a lighter premium style and show me each file change.">
-          Ship a UI change
-          <span>File rewrites, tool calls, and thinking all stay visible without extra panels.</span>
+        <button class="example-btn" type="button" data-example="Analyze this project and suggest 3 ways to optimize agent performance.">
+          System Analysis
+          <span>The agent reads your workspace and suggests structural improvements.</span>
         </button>
       </div>
     </section>
@@ -1574,9 +1647,15 @@
     $('status-pill').innerHTML = `<strong>${map[key] || humanize(key)}</strong>`;
   };
 
-  const setMode = (mode) => {
+  const setMode = (mode, isolated = false, isolatedApp = '') => {
     currentMode = mode || 'coding';
-    $('mode-pill').innerHTML = `<strong>Mode:</strong> ${humanize(currentMode)}`;
+    const modeLabels = { computer: 'Desktop', computer_use: 'Browser', computer_isolated: 'Isolated' };
+    let label = modeLabels[currentMode] ?? humanize(currentMode);
+    if (isolated && currentMode === 'computer') {
+      const appName = isolatedApp ? ` · ${isolatedApp}` : '';
+      label += `<span style="font-size:10px;font-weight:700;letter-spacing:.06em;text-transform:uppercase;color:var(--accent);margin-left:6px;vertical-align:middle">Isolated${appName}</span>`;
+    }
+    $('mode-pill').innerHTML = `<strong>Mode:</strong> ${label}`;
   };
 
   const setBackgroundMode = (background, message = '') => {
@@ -1675,13 +1754,12 @@
     if (!dot) return;
     dot.className = `history-dot ${state}`;
   };
-
   const ensureStatusCard = () => {
     if (liveStatusCard && liveStatusCard.isConnected) return liveStatusCard;
     const row = document.createElement('div');
     row.className = 'status-row active';
     row.innerHTML = `
-      <div class="status-dot"></div>
+      <div class="status-dot thinking-dot"></div>
       <div class="status-copy">
         <div class="status-line">
           <div class="status-title">Agent update</div>
@@ -2003,6 +2081,8 @@
     if (pre.textContent.length > 12000) {
       pre.textContent = pre.textContent.slice(-12000);
     }
+    // Auto-scroll terminal block to bottom
+    pre.scrollTop = pre.scrollHeight;
     scrollFeed();
   };
 
@@ -2038,36 +2118,93 @@
     card.appendChild(bits.head);
   };
 
+  const screenshotStore = new Map();
+  let screenshotIdCounter = 0;
+
   const renderScreenshot = (payload) => {
     finalizeLiveStatus();
-    screenshots.push({ data: payload.data, createdAt: Date.now() });
-    const index = screenshots.length - 1;
+    const sid = ++screenshotIdCounter;
+    screenshotStore.set(sid, { data: payload.data, window_rect: payload.window_rect || null, createdAt: Date.now() });
+    if (screenshotStore.size > 30) {
+      const firstKey = screenshotStore.keys().next().value;
+      screenshotStore.delete(firstKey);
+    }
+
     const card = createFeedCard('screenshot-card');
+    const wr = payload.window_rect;
+    const isIsolated = payload.isolated || false;
     const bits = createCardHead({
       eyebrow: 'Preview',
-      title: currentMode === 'computer_use' ? 'Browser snapshot' : 'Screen snapshot',
-      subtitle: 'Captured inline so the whole run stays in one timeline.',
-      stateLabel: `Frame ${index + 1}`
+      title: isIsolated ? 'Isolated snapshot' : (currentMode === 'computer_use' ? 'Browser snapshot' : 'Screen snapshot'),
+      stateLabel: 'Shot',
+      stateClass: 'ok'
     });
+    addWorkerTag(bits.eyebrowEl, payload.worker_id);
     card.appendChild(bits.head);
+
     const img = document.createElement('img');
-    img.className = 'screenshot-img';
-    img.src = `data:image/png;base64,${payload.data}`;
-    img.alt = 'Agent screenshot';
+    img.className = 'screenshot-preview';
+    img.src = payload.data.startsWith('data:') ? payload.data : `data:image/png;base64,${payload.data}`;
+    img.loading = 'lazy';
+    img.onclick = () => {
+      const data = screenshotStore.get(sid);
+      if (data) openLightbox(data.data, data.window_rect);
+    };
     card.appendChild(img);
-    const button = document.createElement('button');
-    button.className = 'screenshot-btn';
-    button.type = 'button';
-    button.textContent = 'Open full screenshot';
-    button.onclick = () => openLightbox(index);
-    card.appendChild(button);
   };
 
-  const openLightbox = (index) => {
-    const shot = screenshots[index];
-    if (!shot) return;
-    $('lightbox-img').src = `data:image/png;base64,${shot.data}`;
-    $('lightbox-caption').textContent = `Screenshot ${index + 1} of ${screenshots.length}`;
+  function _roundRect(ctx, x, y, w, h, r) {
+    ctx.beginPath();
+    ctx.moveTo(x + r, y);
+    ctx.lineTo(x + w - r, y);
+    ctx.quadraticCurveTo(x + w, y, x + w, y + r);
+    ctx.lineTo(x + w, y + h - r);
+    ctx.quadraticCurveTo(x + w, y + h, x + w - r, y + h);
+    ctx.lineTo(x + r, y + h);
+    ctx.quadraticCurveTo(x, y + h, x, y + h - r);
+    ctx.lineTo(x, y + r);
+    ctx.quadraticCurveTo(x, y, x + r, y);
+    ctx.closePath();
+  }
+
+  const openLightbox = (data, window_rect) => {
+    $('lightbox-img').src = data.startsWith('data:') ? data : `data:image/png;base64,${data}`;
+    
+    // Clear old canvases
+    const oldCanvases = $('lightbox').querySelectorAll('canvas');
+    oldCanvases.forEach(c => c.remove());
+
+    if (window_rect) {
+      const img = $('lightbox-img');
+      const drawGlow = () => {
+        const canvas = document.createElement('canvas');
+        canvas.className = 'lightbox-glow-canvas';
+        canvas.style.position = 'absolute';
+        canvas.style.top = img.offsetTop + 'px';
+        canvas.style.left = img.offsetLeft + 'px';
+        canvas.style.width = img.offsetWidth + 'px';
+        canvas.style.height = img.offsetHeight + 'px';
+        canvas.width = img.naturalWidth;
+        canvas.height = img.naturalHeight;
+        img.parentNode.appendChild(canvas);
+
+        const ctx = canvas.getContext('2d');
+        const px = window_rect.x * canvas.width;
+        const py = window_rect.y * canvas.height;
+        const pw = window_rect.w * canvas.width;
+        const ph = window_rect.h * canvas.height;
+
+        ctx.shadowColor = 'rgba(46, 99, 211, 0.65)';
+        ctx.shadowBlur = 40;
+        ctx.strokeStyle = 'rgba(46, 99, 211, 1)';
+        ctx.lineWidth = 4;
+        ctx.strokeRect(px, py, pw, ph);
+        ctx.fillStyle = 'rgba(46, 99, 211, 0.08)';
+        ctx.fillRect(px, py, pw, ph);
+      };
+      if (img.complete) drawGlow();
+      else img.onload = drawGlow;
+    }
     $('lightbox').classList.add('show');
   };
 
@@ -2093,13 +2230,13 @@
     planSubtasks = [];
     currentSubtaskIdx = 0;
     subtaskEls = {};
-    screenshots = [];
+    screenshotStore.clear();
     lastActionId = null;
     terminalStateKey = null;
     Object.keys(actionCards).forEach((key) => delete actionCards[key]);
 
     setStatus('ready');
-    setMode('coding');
+    setMode($('mode-id').value || 'coding');
     $('background-pill').innerHTML = '<strong>Run:</strong> background';
     $('elapsed-time').textContent = replay ? '--:--' : '00:00';
     $('btn-pause').classList.add('hidden');
@@ -2138,7 +2275,9 @@
     $('btn-retry').classList.remove('hidden');
     $('btn-copy-log').classList.remove('hidden');
     $('btn-download-log').classList.remove('hidden');
+    $('send').classList.remove('hidden');
   };
+
 
   const statusPhase = (message = '') => {
     if (/reflecting/i.test(message)) return 'Reflecting';
@@ -2219,7 +2358,7 @@
     }
 
     if (event.type === 'mode') {
-      setMode(event.mode);
+      setMode(event.mode, !!event.isolated, event.isolated_app || '');
       return;
     }
 
@@ -2289,6 +2428,32 @@
       const entry = ensureActionCard(event.action_id, event.action?.type || 'approval', reason);
       setActionState(entry, 'Waiting', 'waiting');
       appendDetailRow(entry, 'Approval', humanize(event.action?.type || 'Action'), reason, JSON.stringify(event.action?.args || {}, null, 2));
+      
+      // Fixed: Injecting buttons into card head for permanent visibility
+      const wrap = document.createElement('div');
+      wrap.style.cssText = 'display:flex;gap:8px;margin-top:10px;width:100%';
+      const btnApprove = document.createElement('button');
+      btnApprove.className = 'modal-btn primary';
+      btnApprove.style.cssText = 'padding:6px 12px;font-size:12px;flex:1';
+      btnApprove.textContent = 'Approve';
+      const btnDeny = document.createElement('button');
+      btnDeny.className = 'modal-btn';
+      btnDeny.style.cssText = 'padding:6px 12px;font-size:12px;flex:1';
+      btnDeny.textContent = 'Deny';
+      
+      const doApp = (approve) => {
+        api('/api/approvals', 'POST', { task_id: taskId, action_id: event.action_id, approve }).catch(() => {});
+        setActionState(entry, approve ? 'Approved' : 'Denied', approve ? 'ok' : 'fail');
+        wrap.remove();
+        $('approval').classList.remove('show');
+      };
+      btnApprove.onclick = (e) => { e.stopPropagation(); doApp(true); };
+      btnDeny.onclick = (e) => { e.stopPropagation(); doApp(false); };
+      wrap.appendChild(btnDeny);
+      wrap.appendChild(btnApprove);
+      entry.details.appendChild(wrap);
+      entry.body.classList.remove('collapsed');
+
       if (!replay) {
         $('app-title').textContent = `${humanize(event.action?.type || 'Action')} needs approval`;
         $('app-reason').textContent = reason;
@@ -2307,6 +2472,32 @@
       const entry = ensureActionCard(event.action_id, 'request_permission', detail);
       setActionState(entry, 'Waiting', 'waiting');
       appendDetailRow(entry, 'Permission', event.scope || 'Requested scope', detail, JSON.stringify({ scope: event.scope, explanation: event.explanation || '' }, null, 2));
+      
+      // Fixed: Injecting buttons into card for permanent visibility
+      const pWrap = document.createElement('div');
+      pWrap.style.cssText = 'display:flex;gap:8px;margin-top:10px;width:100%';
+      const btnAllow = document.createElement('button');
+      btnAllow.className = 'modal-btn primary';
+      btnAllow.style.cssText = 'padding:6px 12px;font-size:12px;flex:1';
+      btnAllow.textContent = 'Allow';
+      const btnDenyP = document.createElement('button');
+      btnDenyP.className = 'modal-btn';
+      btnDenyP.style.cssText = 'padding:6px 12px;font-size:12px;flex:1';
+      btnDenyP.textContent = 'Deny';
+      
+      const doP = (grant) => {
+        api('/api/permissions', 'POST', { task_id: taskId, action_id: event.action_id, grant, scope: event.scope }).catch(() => {});
+        setActionState(entry, grant ? 'Allowed' : 'Denied', grant ? 'ok' : 'fail');
+        pWrap.remove();
+        $('permission').classList.remove('show');
+      };
+      btnAllow.onclick = (e) => { e.stopPropagation(); doP(true); };
+      btnDenyP.onclick = (e) => { e.stopPropagation(); doP(false); };
+      pWrap.appendChild(btnDenyP);
+      pWrap.appendChild(btnAllow);
+      entry.details.appendChild(pWrap);
+      entry.body.classList.remove('collapsed');
+
       if (!replay) {
         $('perm-title').textContent = `Allow ${event.scope || 'access'}?`;
         $('perm-reason').textContent = detail;
@@ -2330,6 +2521,8 @@
       if (!replay) {
         markHistoryFinal('failed');
         stopEverything();
+      } else {
+        showPostRunControls();
       }
       return;
     }
@@ -2346,6 +2539,8 @@
           markHistoryFinal('done');
           stopEverything();
           if (!suppressToasts) toast('Task complete.', 'ok');
+        } else {
+          showPostRunControls();
         }
       } else {
         setStatus('failed');
@@ -2354,6 +2549,8 @@
           markHistoryFinal('failed');
           stopEverything();
           if (!suppressToasts) toast('Task failed.', 'err');
+        } else {
+          showPostRunControls();
         }
       }
       return;
@@ -2443,6 +2640,8 @@
     setStatus('running');
     $('btn-pause').classList.remove('hidden');
     $('btn-cancel').classList.remove('hidden');
+    $('send').classList.add('hidden');
+
     $('btn-retry').classList.add('hidden');
     $('btn-copy-log').classList.add('hidden');
     $('btn-download-log').classList.add('hidden');
@@ -2457,14 +2656,16 @@
       await keyReady;
       const model = $('model-id').value;
       const mode = $('mode-id').value;
+      const isolated_app = ($('isolated-app-id').value || '').trim() || null;
       streamClosedManually = false;
       openStream(task);
-      await api('/api/tasks', 'POST', { task_id: task, goal, model, mode });
+      await api('/api/tasks', 'POST', { task_id: task, goal, model, mode, isolated_app });
       if (window.innerWidth <= 1080) document.body.classList.remove('nav-open');
     } catch (err) {
       finalizeLiveStatus();
       setStatus('error');
-      appendMessage(`Failed to start task: ${err.detail || 'Unknown error.'}`, 'system-error');
+      const detail = (typeof err.detail === 'object') ? JSON.stringify(err.detail) : (err.detail || 'Unknown error.');
+      appendMessage(`Failed to start task: ${detail}`, 'system-error');
       markHistoryFinal('failed');
       showPostRunControls();
     }
@@ -2515,6 +2716,8 @@
       setStatus('running');
       $('btn-pause').classList.remove('hidden');
       $('btn-cancel').classList.remove('hidden');
+      $('send').classList.add('hidden');
+
       activeHistoryItem = addActiveHistoryItem(title);
       startTime = Date.now();
       timer = setInterval(updateClock, 1000);
@@ -2638,6 +2841,7 @@
   const init = async () => {
     bindExamples();
     hydrateModelSelect();
+    setMode($('mode-id').value || 'auto');
 
     keyReady = fetch(`/api/config?cb=${Date.now()}`)
       .then((response) => response.json())
@@ -2681,6 +2885,12 @@
   $('app-deny').onclick = () => sendApproval(false);
   $('perm-approve').onclick = () => sendPermission(true);
   $('perm-deny').onclick = () => sendPermission(false);
+
+  $('mode-id').onchange = (e) => {
+    const val = e.target.value;
+    setMode(val, val === 'computer_isolated');
+    $('isolated-app-wrap').style.display = (val === 'computer_isolated') ? '' : 'none';
+  };
 
   $('input').addEventListener('input', () => {
     autoGrow();
