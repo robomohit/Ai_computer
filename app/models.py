@@ -66,6 +66,7 @@ class ActionType(str, Enum):
     get_clipboard = "get_clipboard"
     set_clipboard = "set_clipboard"
     notify = "notify"
+    focus_window = "focus_window"
     system_info = "system_info"
     list_directory = "list_directory"
     request_permission = "request_permission"

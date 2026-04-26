@@ -38,6 +38,7 @@ TOOL_DESCRIPTIONS = {
     ActionType.request_permission: "request_permission: {\"scope\": str, \"reason\": str} — ask user for permission.",
     ActionType.computer: "computer: {\"action\": str, \"x\": int, \"y\": int, \"text\": str, \"keys\": str} — high-level computer action (screenshot, mouse_move, left_click, right_click, double_click, key, type, scroll, cursor_position).",
     ActionType.virtual_input: "virtual_input: {\"action\": str, \"text\": str, \"keys\": str} — alias for high-level isolated input.",
+    ActionType.focus_window: "focus_window: {\"title\": str} — bring a desktop window whose title contains the provided text to the foreground.",
     ActionType.finish: "finish: {\"reason\": str} — complete the task.",
     ActionType.mcp_tool: "mcp_tool: {\"server_name\": str, \"tool_name\": str, \"tool_args\": dict} — call an MCP server tool dynamically.",
 }
@@ -48,7 +49,7 @@ TOOL_PACKS = {
     "terminal": [ActionType.run_command, ActionType.bash, ActionType.list_processes, ActionType.kill_process],
     "editing": [ActionType.text_view, ActionType.text_create, ActionType.text_str_replace, ActionType.text_insert, ActionType.text_undo_edit, ActionType.text_editor],
     "browser": [ActionType.browser_open, ActionType.browser_accessibility_tree, ActionType.browser_click, ActionType.browser_type, ActionType.browser_scroll, ActionType.browser_get_text, ActionType.browser_navigate_back, ActionType.browser_close, ActionType.wait_action],
-    "computer": [ActionType.mouse_click, ActionType.keyboard_type, ActionType.screenshot, ActionType.ocr_image, ActionType.scroll, ActionType.double_click, ActionType.right_click, ActionType.middle_click, ActionType.mouse_move, ActionType.left_click_drag, ActionType.key_combo, ActionType.hold_key, ActionType.cursor_position, ActionType.type_with_delay, ActionType.find_on_screen, ActionType.computer],
+    "computer": [ActionType.mouse_click, ActionType.keyboard_type, ActionType.screenshot, ActionType.ocr_image, ActionType.scroll, ActionType.double_click, ActionType.right_click, ActionType.middle_click, ActionType.mouse_move, ActionType.left_click_drag, ActionType.key_combo, ActionType.hold_key, ActionType.cursor_position, ActionType.type_with_delay, ActionType.find_on_screen, ActionType.focus_window, ActionType.computer],
     "web": [ActionType.web_fetch, ActionType.web_search],
     "utilities": [ActionType.api_call, ActionType.get_clipboard, ActionType.set_clipboard, ActionType.notify, ActionType.mcp_tool],
 }
@@ -72,3 +73,34 @@ def get_mode_packs(mode: str) -> List[str]:
     if mode == "computer":
         return ["core", "filesystem", "terminal", "computer", "web", "utilities"]
     return ["core"]
+
+
+_TOOL_SCHEMAS: Dict[ActionType, Dict[str, Any]] = {
+    action_type: {
+        "type": "function",
+        "function": {
+            "name": action_type.value,
+            "description": TOOL_DESCRIPTIONS.get(action_type, action_type.value),
+            "parameters": {
+                "type": "object",
+                "properties": {},
+                "additionalProperties": True,
+            },
+        },
+    }
+    for action_type in ActionType
+}
+
+
+def get_tool_schemas(packs: List[str]) -> List[Dict[str, Any]]:
+    schemas: List[Dict[str, Any]] = []
+    seen_actions = set()
+    for pack in packs:
+        for action_type in TOOL_PACKS.get(pack, []):
+            if action_type in seen_actions:
+                continue
+            schema = _TOOL_SCHEMAS.get(action_type)
+            if schema:
+                schemas.append(schema)
+                seen_actions.add(action_type)
+    return schemas
