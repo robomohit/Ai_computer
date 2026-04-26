@@ -6,11 +6,13 @@ from typing import Dict, List
 
 import json
 from pathlib import Path
+import re
 
 _log = logging.getLogger("log_emitter")
 
 MAX_LOG_FILE_BYTES = 20 * 1024 * 1024
 MAX_TEXT_FIELD_CHARS = 4_000
+TASK_ID_PATTERN = re.compile(r"^[A-Za-z0-9][A-Za-z0-9._-]{0,127}$")
 
 
 class LogEmitter:
@@ -33,8 +35,12 @@ class LogEmitter:
                 self._queues[task_id].remove(q)
             except ValueError:
                 pass
+            if not self._queues[task_id]:
+                self._queues.pop(task_id, None)
 
     def log_path(self, task_id: str) -> Path:
+        if not TASK_ID_PATTERN.fullmatch(task_id or ""):
+            raise ValueError("Invalid task id")
         return self.log_dir / f"{task_id}.jsonl"
 
     def read_log(self, task_id: str, since: int = 0) -> list[dict]:
@@ -136,13 +142,13 @@ class LogEmitter:
     def cleanup_task(self, task_id: str) -> None:
         """Release in-memory state for a completed/failed task.
 
-        Called after a task reaches a terminal state so the sequence counter
-        and disk-logging flag don't accumulate indefinitely across many runs.
-        Any live SSE subscriber queues are left alone — they manage their own
-        lifecycle via subscribe/unsubscribe.
+        Called after a task reaches a terminal state so per-task state does not
+        accumulate indefinitely across many runs.
         """
         self._seqs.pop(task_id, None)
         self._disk_logging_disabled.discard(task_id)
+        if not self._queues.get(task_id):
+            self._queues.pop(task_id, None)
 
 
 log_emitter = LogEmitter()

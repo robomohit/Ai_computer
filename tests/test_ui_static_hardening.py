@@ -1,0 +1,33 @@
+from pathlib import Path
+
+
+STATIC_HTML = Path(__file__).resolve().parents[1] / "static" / "index.html"
+
+
+def test_dynamic_lists_do_not_render_untrusted_api_data_with_innerhtml():
+    html = STATIC_HTML.read_text(encoding="utf-8")
+
+    assert "grid.innerHTML = allSkills.map" not in html
+    assert "grid.innerHTML = allMCPServers.map" not in html
+    assert "toolsContainer.innerHTML = server.tools.map" not in html
+    assert "addEventListener('click', () => toggleSkill(s.id))" in html
+    assert "name.textContent = s.name" in html
+    assert "pre.textContent = JSON.stringify(props, null, 2)" in html
+
+
+def test_terminal_and_subtask_dynamic_values_use_textcontent():
+    html = STATIC_HTML.read_text(encoding="utf-8")
+
+    assert "row.querySelector('.detail-title').innerHTML" not in html
+    assert "title.textContent = command || 'Command output'" in html
+    assert "channelEl.textContent = channel" in html
+    assert "row.querySelector('.subtask-text').innerHTML +=" not in html
+    assert "tag.textContent = event.worker_id" in html
+
+
+def test_command_palette_rows_do_not_interpolate_model_labels_as_html():
+    html = STATIC_HTML.read_text(encoding="utf-8")
+
+    assert 'row.innerHTML = `<span class="cmdk-icon">' not in html
+    assert "label.textContent = c.label" in html
+    assert "hint.textContent = c.hint" in html

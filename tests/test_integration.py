@@ -58,7 +58,8 @@ def run_test_stream(task_id: str):
     try:
         with httpx.stream(
             "GET",
-            f"{BASE}/api/tasks/{task_id}/stream?token={API_KEY}",
+            f"{BASE}/api/tasks/{task_id}/stream",
+            headers=header(),
             timeout=httpx.Timeout(connect=10, read=120, write=10, pool=10),
         ) as resp:
             for line in resp.iter_lines():

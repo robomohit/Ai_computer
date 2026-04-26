@@ -6,3 +6,7 @@ workspace/
 test_workspace/
 chroma_memory/
 *.log
+tasks/*.json
+workspace/logs/
+screenshots/
+tmp/

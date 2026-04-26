@@ -1,6 +1,7 @@
 import asyncio
 import json
 import pytest
+import sys
 import types
 import time
 
@@ -59,7 +60,7 @@ async def test_new_actions(monkeypatch, workspace):
     (workspace / "subdir").mkdir()
     (workspace / "subdir" / "marker.txt").write_text("ok", encoding="utf-8")
     bash_cd_run = await t.run_action(
-        Action(id="11b", type=ActionType.bash, args={"command": "cd subdir && python -c \"from pathlib import Path; print(Path('marker.txt').read_text())\""})
+        Action(id="11b", type=ActionType.bash, args={"command": f"cd subdir && {sys.executable} -c \"from pathlib import Path; print(Path('marker.txt').read_text())\""})
     )
     assert bash_cd_run.ok
     assert "ok" in bash_cd_run.output

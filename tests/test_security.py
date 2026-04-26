@@ -50,6 +50,34 @@ def test_query_token_is_not_accepted_for_sse(monkeypatch):
     assert r.status_code == 401
 
 
+def test_task_id_rejects_path_traversal(monkeypatch):
+    client, m = _client(monkeypatch)
+    r = client.post(
+        "/api/tasks",
+        json={"task_id": "../leak", "goal": "test goal"},
+        headers={"Authorization": "Bearer token123"},
+    )
+    assert r.status_code == 422
+    assert not (m.task_store_dir.parent / "leak.json").exists()
+
+
+def test_create_task_internal_error_does_not_leak_details(monkeypatch):
+    client, m = _client(monkeypatch)
+
+    def boom(*args, **kwargs):
+        raise RuntimeError("secret-provider-token")
+
+    monkeypatch.setattr(m.service, "init_task", boom)
+    r = client.post(
+        "/api/tasks",
+        json={"task_id": f"err-{uuid.uuid4().hex}", "goal": "test goal"},
+        headers={"Authorization": "Bearer token123"},
+    )
+    assert r.status_code == 500
+    assert r.json()["detail"] == "Internal server error"
+    assert "secret-provider-token" not in r.text
+
+
 def test_cors_reject(monkeypatch):
     client, _ = _client(monkeypatch, origins="http://allowed.local")
     r = client.options(

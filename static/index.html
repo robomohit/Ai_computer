@@ -3225,7 +3225,12 @@
           </div>
         </div>
       `;
-      row.querySelector('.detail-title').innerHTML = `${command || 'Command output'}<span class="terminal-channel">${channel}</span>`;
+      const title = row.querySelector('.detail-title');
+      title.textContent = command || 'Command output';
+      const channelEl = document.createElement('span');
+      channelEl.className = 'terminal-channel';
+      channelEl.textContent = channel;
+      title.appendChild(channelEl);
       const pre = document.createElement('pre');
       pre.className = 'detail-preview';
       row.appendChild(pre);
@@ -3437,9 +3442,14 @@
         markSubtask(event.subtask_id, 'running');
         if (event.worker_id) {
           const row = subtaskEls[event.subtask_id];
-          if (row) {
-            const workerNum = event.worker_id.split('-').pop();
-            row.querySelector('.subtask-text').innerHTML += ` <span class="worker-tag worker-${workerNum}">${event.worker_id}</span>`;
+          const textEl = row?.querySelector('.subtask-text');
+          if (textEl && !textEl.querySelector('.worker-tag')) {
+            const workerNum = String(event.worker_id).split('-').pop().replace(/[^A-Za-z0-9_-]/g, '');
+            textEl.appendChild(document.createTextNode(' '));
+            const tag = document.createElement('span');
+            tag.className = `worker-tag worker-${workerNum}`;
+            tag.textContent = event.worker_id;
+            textEl.appendChild(tag);
           }
         }
       } else if (event.status === 'done') markSubtask(event.subtask_id, 'done');
@@ -4012,15 +4022,28 @@
   const renderSkills = () => {
     const grid = $('skills-grid');
     if (!grid) return;
-    grid.innerHTML = allSkills.map(s => `
-      <div class="skill-item ${activeSkillIds.has(s.id) ? 'active' : ''}" onclick="toggleSkill('${s.id}')">
-        <div class="skill-info">
-          <div class="skill-name">${s.name}</div>
-          <div class="skill-desc">${s.description}</div>
-        </div>
-        <div class="skill-toggle"></div>
-      </div>
-    `).join('');
+    grid.innerHTML = '';
+    allSkills.forEach((s) => {
+      const item = document.createElement('button');
+      item.type = 'button';
+      item.className = `skill-item ${activeSkillIds.has(s.id) ? 'active' : ''}`;
+      item.addEventListener('click', () => toggleSkill(s.id));
+
+      const info = document.createElement('div');
+      info.className = 'skill-info';
+      const name = document.createElement('div');
+      name.className = 'skill-name';
+      name.textContent = s.name || s.id || 'Skill';
+      const desc = document.createElement('div');
+      desc.className = 'skill-desc';
+      desc.textContent = s.description || '';
+      info.append(name, desc);
+
+      const toggle = document.createElement('div');
+      toggle.className = 'skill-toggle';
+      item.append(info, toggle);
+      grid.appendChild(item);
+    });
     $('skill-count').textContent = activeSkillIds.size;
   };
 
@@ -4044,17 +4067,30 @@
   const renderMCP = () => {
     const grid = $('mcp-grid');
     if (!grid) return;
-    grid.innerHTML = allMCPServers.map((s, idx) => `
-      <div class="skill-item" onclick="openMCPModal(${idx})">
-        <div class="skill-info">
-          <div class="skill-name">${s.name}</div>
-          <div class="skill-desc">${s.tools.length} tools available</div>
-        </div>
-        <div class="skill-toggle" style="background:transparent; color:var(--muted); font-size:16px; display:flex; align-items:center; justify-content:flex-end;">
-          ▸
-        </div>
-      </div>
-    `).join('');
+    grid.innerHTML = '';
+    allMCPServers.forEach((s, idx) => {
+      const item = document.createElement('button');
+      item.type = 'button';
+      item.className = 'skill-item';
+      item.addEventListener('click', () => openMCPModal(idx));
+
+      const info = document.createElement('div');
+      info.className = 'skill-info';
+      const name = document.createElement('div');
+      name.className = 'skill-name';
+      name.textContent = s.name || 'MCP server';
+      const desc = document.createElement('div');
+      desc.className = 'skill-desc';
+      desc.textContent = `${(s.tools || []).length} tools available`;
+      info.append(name, desc);
+
+      const toggle = document.createElement('div');
+      toggle.className = 'skill-toggle';
+      toggle.style.cssText = 'background:transparent; color:var(--muted); font-size:16px; display:flex; align-items:center; justify-content:flex-end;';
+      toggle.textContent = '>';
+      item.append(info, toggle);
+      grid.appendChild(item);
+    });
     const countEl = $('mcp-count');
     if (countEl) countEl.textContent = allMCPServers.length;
   };
@@ -4064,13 +4100,26 @@
     if (!server) return;
     $('mcp-modal-title').textContent = server.name;
     const toolsContainer = $('mcp-modal-tools');
-    toolsContainer.innerHTML = server.tools.map(t => `
-      <div style="background: var(--bg-3); border: 1px solid var(--line-2); padding: 12px 14px; border-radius: var(--r-sm);">
-        <div style="font-weight: 600; color: var(--ink); font-size: var(--fs-sm); margin-bottom: 4px;">${t.name}</div>
-        <div style="font-size: var(--fs-micro); color: var(--muted); line-height: 1.5;">${t.description || 'No description provided.'}</div>
-        ${t.inputSchema && Object.keys(t.inputSchema.properties || {}).length > 0 ? `<pre style="font-size: 11px; color: var(--muted-2); margin-top: 8px; padding-top: 8px; border-top: 1px solid var(--line-2); overflow-x: auto; font-family: var(--font-mono);">${JSON.stringify(t.inputSchema.properties, null, 2)}</pre>` : ''}
-      </div>
-    `).join('');
+    toolsContainer.innerHTML = '';
+    (server.tools || []).forEach((t) => {
+      const card = document.createElement('div');
+      card.style.cssText = 'background: var(--bg-3); border: 1px solid var(--line-2); padding: 12px 14px; border-radius: var(--r-sm);';
+      const name = document.createElement('div');
+      name.style.cssText = 'font-weight: 600; color: var(--ink); font-size: var(--fs-sm); margin-bottom: 4px;';
+      name.textContent = t.name || 'Tool';
+      const desc = document.createElement('div');
+      desc.style.cssText = 'font-size: var(--fs-micro); color: var(--muted); line-height: 1.5;';
+      desc.textContent = t.description || 'No description provided.';
+      card.append(name, desc);
+      const props = t.inputSchema?.properties || {};
+      if (Object.keys(props).length > 0) {
+        const pre = document.createElement('pre');
+        pre.style.cssText = 'font-size: 11px; color: var(--muted-2); margin-top: 8px; padding-top: 8px; border-top: 1px solid var(--line-2); overflow-x: auto; font-family: var(--font-mono);';
+        pre.textContent = JSON.stringify(props, null, 2);
+        card.appendChild(pre);
+      }
+      toolsContainer.appendChild(card);
+    });
     $('mcp-overlay').classList.add('show');
   };
 
@@ -4223,7 +4272,19 @@
       const row = document.createElement('div');
       row.className = 'cmdk-item' + (i === cmdkIdx ? ' on' : '');
       row.dataset.i = i;
-      row.innerHTML = `<span class="cmdk-icon">›</span><span class="cmdk-label">${c.label}</span>${c.hint ? `<span class="cmdk-hint">${c.hint}</span>` : ''}`;
+      const icon = document.createElement('span');
+      icon.className = 'cmdk-icon';
+      icon.textContent = '>';
+      const label = document.createElement('span');
+      label.className = 'cmdk-label';
+      label.textContent = c.label;
+      row.append(icon, label);
+      if (c.hint) {
+        const hint = document.createElement('span');
+        hint.className = 'cmdk-hint';
+        hint.textContent = c.hint;
+        row.appendChild(hint);
+      }
       row.addEventListener('mousemove', () => { cmdkIdx = i; renderCmdk(); });
       row.addEventListener('click', () => { c.action(); closeCmdk(); });
       cmdkList.appendChild(row);

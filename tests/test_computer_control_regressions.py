@@ -2,6 +2,7 @@ import asyncio
 import sys
 import types
 import json
+from pathlib import Path
 
 import pytest
 import httpx
@@ -451,3 +452,70 @@ async def test_xml_stream_normalizes_tool_history_for_openrouter(monkeypatch):
     assert "browser_open" in sent_messages[1]["content"][0]["text"]
     assert sent_messages[2]["role"] == "user"
     assert "<observation>" in sent_messages[2]["content"][0]["text"]
+
+
+def test_log_emitter_rejects_path_like_task_ids_and_cleans_queues(tmp_path, monkeypatch):
+    monkeypatch.chdir(tmp_path)
+    emitter = LogEmitter()
+    q = emitter.subscribe("safe-task")
+
+    emitter.emit("safe-task", "status", {"message": "running"})
+    assert "safe-task" in emitter._queues
+
+    emitter.unsubscribe("safe-task", q)
+    assert "safe-task" not in emitter._queues
+
+    with pytest.raises(ValueError):
+        emitter.emit("../escape", "status", {"message": "bad"})
+    assert not (Path("workspace/logs") / "escape.jsonl").exists()
+
+
+@pytest.mark.asyncio
+async def test_killed_task_finalizes_as_cancelled_not_max_steps(monkeypatch, workspace):
+    service = AgentService(workspace, log_emitter=DummyLogEmitter())
+
+    monkeypatch.setattr("app.agent.AGENT_MAX_STEPS", 1)
+    monkeypatch.setattr("app.agent.classify_task_complexity", lambda goal: "atomic")
+    monkeypatch.setattr(service.memory, "search", lambda goal, limit=5: [])
+
+    class FakeProvider:
+        total_tokens = 0
+
+        async def stream_chat_with_tools(self, system, messages, tools, screenshot_b64=None):
+            service.kill_task("task-kill")
+            yield {"type": "tool_call", "id": "call-1", "name": "bogus_tool", "args": {}, "thought": ""}
+
+        async def stream_chat(self, system, messages, screenshot_b64=None):
+            service.kill_task("task-kill")
+            yield '<thought>stop</thought><action type="bogus_tool">{}</action>'
+
+    finalizations = []
+    events = []
+
+    async def capture_emit(task_id, event, data):
+        events.append((event, data))
+
+    async def noop_reasoning(*args, **kwargs):
+        return None
+
+    monkeypatch.setattr("app.agent.PlannerProvider", lambda model=None: FakeProvider())
+    monkeypatch.setattr(service, "_emit", capture_emit)
+    monkeypatch.setattr(service, "_emit_reasoning", noop_reasoning)
+    monkeypatch.setattr(service, "_finalize", lambda *args, **kwargs: finalizations.append(args))
+
+    await service.run_task("task-kill", "Keep working", mode="coding")
+
+    assert finalizations
+    assert finalizations[-1][1] == "cancelled"
+    assert "killed" in finalizations[-1][2].lower()
+    assert any(event == "cancelled" for event, _ in events)
+
+
+def test_static_ui_avoids_innerhtml_for_untrusted_dynamic_sections():
+    html = Path("static/index.html").read_text(encoding="utf-8")
+
+    assert "row.querySelector('.detail-title').innerHTML" not in html
+    assert "worker-tag worker-${workerNum}\">${event.worker_id}" not in html
+    assert "grid.innerHTML = allSkills.map" not in html
+    assert "grid.innerHTML = allMCPServers.map" not in html
+    assert "toolsContainer.innerHTML = server.tools.map" not in html

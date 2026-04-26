@@ -108,7 +108,7 @@ class SubTaskWorker:
         actions_taken: List[Dict[str, Any]] = []
         is_coding = self.mode == "coding"
         is_computer_use = self.mode == "computer_use"
-        is_isolated = self.mode == "computer" and bool(self.agent_service.tools._isolated_hwnd)
+        is_isolated = self.mode == "computer_isolated" or bool(self.agent_service.tools.resolve_isolated_hwnd())
 
         try:
             for action_data in self.sub_task.actions:
@@ -123,6 +123,10 @@ class SubTaskWorker:
                     break
 
                 while self.task_id in self.agent_service._paused_tasks:
+                    if self.agent_service.is_killed(self.task_id):
+                        _log.warning(f"Task {self.task_id} KILLED while paused. Worker {self.worker_id} stopping.")
+                        self.sub_task.status = TaskStatus.failed
+                        return False
                     await asyncio.sleep(0.5)
 
                 self.action_count += 1
@@ -336,6 +340,9 @@ class AgentService:
     def kill_task(self, task_id: str):
         """Mark a task for immediate termination."""
         self._killed_tasks.add(task_id)
+        task = self._active_tasks.get(task_id)
+        if task and not task.done():
+            task.cancel()
 
     def is_killed(self, task_id: str) -> bool:
         """Check if a task has been killed."""
@@ -753,7 +760,6 @@ class AgentService:
                     if self.is_killed(task_id):
                         break
                     while task_id in self._paused_tasks:
-                        await self._emit(task_id, "status", {"message": "Task paused; waiting to resume."})
                         await asyncio.sleep(0.5)
                         if self.is_killed(task_id):
                             break
@@ -1087,12 +1093,26 @@ class AgentService:
                         self.memory.add("task_outcome", f"Goal: {goal} | Outcome: True | Reason: {res.output}")
                         return
 
+                if self.is_killed(task_id):
+                    reason = "Task killed by user."
+                    self._finalize(task_id, "cancelled", reason)
+                    await self._emit(task_id, "cancelled", {"message": reason, "finished_at": datetime.now(timezone.utc).isoformat()})
+                    return
+
                 # If we loop max_steps times and don't finish
                 reason = f"Max steps reached ({max_steps}) without finish action."
                 self._finalize(task_id, "failed", reason)
                 await self._emit(task_id, "done", {"complete": False, "reason": reason, "finished_at": datetime.now(timezone.utc).isoformat()})
                 self.memory.add("task_outcome", f"Goal: {goal} | Outcome: False | Reason: {reason}")
 
+        except asyncio.CancelledError:
+            if self.is_killed(task_id):
+                reason = "Task killed by user."
+            else:
+                reason = "Task cancelled by user."
+            self._finalize(task_id, "cancelled", reason)
+            await self._emit(task_id, "cancelled", {"message": reason, "finished_at": datetime.now(timezone.utc).isoformat()})
+            raise
         except Exception as e:
             _log.exception("Task Execution Failed")
             await self._emit(task_id, "error", {"message": str(e)})
