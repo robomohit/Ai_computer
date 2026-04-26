@@ -1,11 +1,11 @@
 import time
+import os
 import requests
 
 def test_delegation():
     url = "http://localhost:8000/api/tasks"
-    
-    config_r = requests.get("http://localhost:8000/api/config")
-    api_key = config_r.json().get("api_key")
+
+    api_key = os.environ.get("AGENT_API_KEY", "test")
     headers = {"Authorization": f"Bearer {api_key}"}
     
     import uuid

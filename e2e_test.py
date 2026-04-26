@@ -51,7 +51,7 @@ def test_task_lifecycle(local_server):
 
     events = []
     try:
-        with httpx.stream("GET", f"{local_server}/api/tasks/{task_id}/stream?token={TOKEN}", timeout=6.0) as response:
+        with httpx.stream("GET", f"{local_server}/api/tasks/{task_id}/stream", headers=HEADERS, timeout=6.0) as response:
             start_time = time.time()
             for line in response.iter_lines():
                 if line.startswith("data: "):
