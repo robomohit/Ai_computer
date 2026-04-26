@@ -1,3 +1,7 @@
 ## 2026-04-21 - [Clean Stream UI]
 **Learning:** Text-based icons (`=` and `x`) paired with missing `aria-label`s hurt both aesthetic consistency and screen reader usability. Bulky box-shadows and thick borders on chat/stream UI components often contribute to cognitive overload.
 **Action:** Always replace purely structural text pseudo-icons with semantic SVGs that gracefully handle color-inversion and hover states. When updating streaming UIs (like chat), default to flatter layouts (removing heavy borders and drop shadows) to emulate modern clean patterns (e.g. Claude Code) while maintaining distinct backgrounds to separate context zones.
+
+## 2026-04-26 - [Form Input Accessibility]
+**Learning:** Custom UI components often use visually appealing non-semantic elements (like `<div>` or `<span>` with class names like `.selector-label` or `.t-label`) as input descriptions, or rely entirely on placeholder text without explicit labels. This hurts screen reader usability and keyboard navigation (e.g., clicking a label should focus the input).
+**Action:** Always replace non-semantic text elements acting as input labels with proper semantic `<label for="...">` elements that explicitly target the input's ID. For standalone inputs (like search bars or text areas) that only use placeholder text, provide an explicit `aria-label` attribute to guarantee context is available to assistive technologies.
