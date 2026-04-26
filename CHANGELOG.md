@@ -1,5 +1,21 @@
 # Changelog
 
+## Unreleased
+
+### Security
+- Hardened task identifiers to prevent path-like IDs from reaching task metadata or log file paths.
+- Removed API-key prefix/suffix logging and kept task initialization 500 responses generic.
+- Reworked dynamic UI rendering for skills, MCP tools, terminal rows, subtasks, and command palette entries so API/model-provided strings are inserted as text, not HTML.
+
+### Reliability
+- Added an explicit task kill endpoint and cancellation finalization path so killed tasks end as `cancelled` rather than falling through to max-step failure.
+- Cleaned task SSE queues and emitter state on unsubscribe, cancel, kill, and task completion.
+- Fixed isolated desktop worker detection so `computer_isolated` keeps cropped isolated screenshots in hierarchical flows.
+
+### Testing
+- Added regression tests for task ID containment, generic init errors, log emitter cleanup, kill finalization, and UI injection hardening.
+- Added `scripts/cleanup_resources.py` for repeatable low-RAM test hygiene and memory snapshots.
+
 ## [1.1.0] - Real-Time Streaming & Discovery Update
 
 ### Added

@@ -4,6 +4,7 @@ load_dotenv(dotenv_path=".env", override=True)
 import asyncio
 import json
 import os
+import re
 import secrets
 from datetime import datetime, timedelta, timezone
 from pathlib import Path
@@ -12,15 +13,13 @@ from fastapi import Depends, FastAPI, HTTPException, Request, Response, Security
 from fastapi.middleware.cors import CORSMiddleware
 from fastapi.responses import FileResponse, StreamingResponse
 from fastapi.security import HTTPAuthorizationCredentials, HTTPBearer
-from pydantic import BaseModel
 from .agent import AgentService
 from .log_emitter import log_emitter
 from .models import AgentContext, TaskRecord
 from .skills import skill_manager
 
 API_KEY = os.environ.get("AGENT_API_KEY") or secrets.token_hex(32)
-_masked = API_KEY[:6] + "***" + API_KEY[-4:] if len(API_KEY) > 10 else "***"
-print(f"[AI_Computer] Agent API Key: {_masked}", flush=True)
+print(f"[AI_Computer] Agent API key configured: {bool(os.environ.get('AGENT_API_KEY'))}", flush=True)
 SESSION_COOKIE_NAME = "ai_computer_session"
 SESSION_TTL_SECONDS = int(os.environ.get("SESSION_TTL_SECONDS", "43200"))
 _sessions: Dict[str, datetime] = {}
@@ -76,7 +75,18 @@ task_store_dir.mkdir(parents=True, exist_ok=True)
 service = AgentService(workspace_dir, log_emitter=log_emitter)
 
 
+TASK_ID_PATTERN = r"^[A-Za-z0-9][A-Za-z0-9._-]{0,127}$"
+_TASK_ID_RE = re.compile(TASK_ID_PATTERN)
+
+
+def _validate_task_id(task_id: str) -> str:
+    if not _TASK_ID_RE.fullmatch(task_id or ""):
+        raise HTTPException(status_code=422, detail="Invalid task_id. Use 1-128 letters, numbers, dots, underscores, or hyphens.")
+    return task_id
+
+
 def _task_store_path(task_id: str) -> Path:
+    _validate_task_id(task_id)
     return task_store_dir / f"{task_id}.json"
 
 
@@ -249,7 +259,7 @@ service._on_task_complete = _on_complete
 from pydantic import BaseModel, Field
 
 class TaskIn(BaseModel):
-    task_id: str
+    task_id: str = Field(..., min_length=1, max_length=128, pattern=TASK_ID_PATTERN)
     goal: str = Field(..., min_length=1, max_length=2000)
     model: Optional[str] = None  # None = auto-pick from available keys
     mode: Literal["auto", "coding", "computer", "computer_use", "computer_isolated"] = "auto"
@@ -442,6 +452,7 @@ async def get_all_tasks():
 
 @app.post("/api/tasks", dependencies=[Depends(verify_token)])
 async def create_task(body: TaskIn):
+    _validate_task_id(body.task_id)
     print(f"[API] create_task: {body.task_id} (model={body.model}, mode={body.mode})", flush=True)
     existing = _tasks.get(body.task_id)
     if existing and existing.status in {"running", "paused", "pending"}:
@@ -506,15 +517,18 @@ async def create_task(body: TaskIn):
         })
         print(f"[API] Task {body.task_id} initialized successfully", flush=True)
         return {"task_id": body.task_id, "status": "running"}
+    except HTTPException:
+        raise
     except Exception as e:
         print(f"[ERROR] Failed to init task {body.task_id}: {e}", flush=True)
         import traceback
         traceback.print_exc()
-        raise HTTPException(status_code=500, detail=str(e))
+        raise HTTPException(status_code=500, detail="Internal server error")
 
 
 @app.get("/api/tasks/{task_id}")
 async def get_task(task_id: str, request: Request, credentials: HTTPAuthorizationCredentials = Security(bearer)):
+    _validate_task_id(task_id)
     await verify_token(request, credentials)
     record = _get_task_record(task_id)
     if not record:
@@ -524,6 +538,7 @@ async def get_task(task_id: str, request: Request, credentials: HTTPAuthorizatio
 
 @app.delete("/api/tasks/{task_id}", dependencies=[Depends(verify_token)])
 async def cancel_task(task_id: str):
+    _validate_task_id(task_id)
     cancelled = service.cancel_task(task_id)
     if not cancelled:
         raise HTTPException(status_code=404, detail="Task not found or already complete")
@@ -532,12 +547,30 @@ async def cancel_task(task_id: str):
         _tasks[task_id].finished_at = datetime.now(timezone.utc).isoformat()
         _tasks[task_id].reason = "Task cancelled by user"
         _save_task_record(_tasks[task_id])
-    log_emitter.emit(task_id, "cancelled", {"message": "Task cancelled by user"})
+    log_emitter.emit(task_id, "cancelled", {"message": "Task cancelled by user", "finished_at": datetime.now(timezone.utc).isoformat()})
+    log_emitter.cleanup_task(task_id)
 
     return {"task_id": task_id, "status": "cancelled"}
 
+
+@app.post("/api/tasks/{task_id}/kill", dependencies=[Depends(verify_token)])
+async def kill_task(task_id: str):
+    _validate_task_id(task_id)
+    killed = service.cancel_task(task_id)
+    if not killed:
+        raise HTTPException(status_code=404, detail="Task not found or already complete")
+    if task_id in _tasks:
+        _tasks[task_id].status = "cancelled"
+        _tasks[task_id].finished_at = datetime.now(timezone.utc).isoformat()
+        _tasks[task_id].reason = "Task killed by user"
+        _save_task_record(_tasks[task_id])
+    log_emitter.emit(task_id, "cancelled", {"message": "Task killed by user", "finished_at": datetime.now(timezone.utc).isoformat()})
+    log_emitter.cleanup_task(task_id)
+    return {"task_id": task_id, "status": "cancelled", "reason": "Task killed by user"}
+
 @app.post("/api/tasks/{task_id}/pause", dependencies=[Depends(verify_token)])
 async def pause_task(task_id: str):
+    _validate_task_id(task_id)
     if task_id not in _tasks:
         raise HTTPException(status_code=404, detail="Task not found")
     _tasks[task_id].paused = True
@@ -548,6 +581,7 @@ async def pause_task(task_id: str):
 
 @app.post("/api/tasks/{task_id}/resume", dependencies=[Depends(verify_token)])
 async def resume_task(task_id: str):
+    _validate_task_id(task_id)
     if task_id not in _tasks:
         raise HTTPException(status_code=404, detail="Task not found")
     _tasks[task_id].paused = False
@@ -558,6 +592,7 @@ async def resume_task(task_id: str):
 
 @app.get("/api/tasks/{task_id}/log", dependencies=[Depends(verify_token)])
 async def get_task_log(task_id: str):
+    _validate_task_id(task_id)
     log_path = log_emitter.log_path(task_id)
     if not log_path.exists():
         return {"log": []}  # task exists without log (old task or pre-emit); return empty replay
@@ -566,6 +601,7 @@ async def get_task_log(task_id: str):
 
 @app.get("/api/tasks/{task_id}/log/download", dependencies=[Depends(verify_token)])
 async def download_task_log(task_id: str):
+    _validate_task_id(task_id)
     log_path = log_emitter.log_path(task_id)
     if not log_path.exists():
         raise HTTPException(status_code=404, detail="Log file not found")
@@ -574,6 +610,7 @@ async def download_task_log(task_id: str):
 
 @app.post("/api/tasks/{task_id}/retry", dependencies=[Depends(verify_token)])
 async def retry_task(task_id: str):
+    _validate_task_id(task_id)
     record = _get_task_record(task_id)
     if not record:
         raise HTTPException(status_code=404, detail="Task not found")
@@ -606,6 +643,7 @@ async def retry_task(task_id: str):
 
 @app.get("/api/tasks/{task_id}/stream")
 async def stream_task(task_id: str, request: Request, since: int = 0, credentials: HTTPAuthorizationCredentials = Security(bearer)):
+    _validate_task_id(task_id)
     if not _is_authorized(request, credentials):
         async def _bad_auth():
             yield 'data: {"type":"error","message":"unauthorized"}\n\n'
