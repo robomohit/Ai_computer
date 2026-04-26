@@ -5,7 +5,10 @@ import time
 from dataclasses import dataclass
 from typing import Any, Optional
 
-import webview
+try:
+    import webview  # type: ignore
+except ImportError:
+    webview = None  # type: ignore
 
 
 OVERLAY_ACCENT = "#ff8f2a"

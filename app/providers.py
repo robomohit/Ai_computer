@@ -108,7 +108,7 @@ Available actions:
 {tool_guidance}
 
 Rules:
-1. Your FIRST action in the first sub-task MUST be request_permission with the right scope (google_sheets if the task involves Google Sheets, otherwise browser).
+1. Start with browser_open for the target URL or web_search if you need to find a URL. Browser actions automatically request permission when needed.
 2. After browser_open or any click that navigates, wait 1-2 seconds then call browser_accessibility_tree to see the new page state.
 3. Use CSS selectors based on the accessibility tree output. Prefer stable selectors: input[type=...], button[aria-label=...], #id, [role=...].
 4. NEVER use pixel coordinates. NEVER use mouse_click, keyboard_type, or screenshot. Those are blocked in this mode.
@@ -516,6 +516,33 @@ def _normalize_hierarchical_plan(payload: Any) -> Any:
     if not isinstance(payload, dict):
         return payload
 
+    def _repair_action(action: Any) -> Any:
+        if not isinstance(action, dict):
+            return action
+        repaired_action = dict(action)
+        args = repaired_action.get("args") if isinstance(repaired_action.get("args"), dict) else {}
+        action_type = str(repaired_action.get("type") or "")
+        if not args:
+            command_value = (
+                repaired_action.get("command")
+                or repaired_action.get("cmd")
+                or repaired_action.get("shell_command")
+            )
+            if action_type in {"bash", "run_command", "run_tests", "git", "lint_code"} and isinstance(command_value, str):
+                args["command"] = command_value
+            if isinstance(repaired_action.get("path"), str):
+                args["path"] = repaired_action["path"]
+            if isinstance(repaired_action.get("content"), str):
+                args["content"] = repaired_action["content"]
+            if isinstance(repaired_action.get("file_text"), str):
+                args["file_text"] = repaired_action["file_text"]
+            if isinstance(repaired_action.get("old_str"), str):
+                args["old_str"] = repaired_action["old_str"]
+            if isinstance(repaired_action.get("new_str"), str):
+                args["new_str"] = repaired_action["new_str"]
+        repaired_action["args"] = args
+        return repaired_action
+
     normalized = dict(payload)
     raw_sub_tasks = normalized.get("sub_tasks")
     if not isinstance(raw_sub_tasks, list):
@@ -528,13 +555,13 @@ def _normalize_hierarchical_plan(payload: Any) -> Any:
             continue
 
         if "type" in item and "actions" not in item:
-            action = {
+            action = _repair_action({
                 "id": str(item.get("id", f"action-{index}")),
                 "type": item.get("type"),
                 "args": item.get("args") if isinstance(item.get("args"), dict) else {},
                 "explanation": item.get("explanation") or "",
                 "requires_approval": bool(item.get("requires_approval", False)),
-            }
+            })
             description = item.get("description") or item.get("explanation") or f"Run {action['type']}"
             fixed_sub_tasks.append(
                 {
@@ -548,6 +575,8 @@ def _normalize_hierarchical_plan(payload: Any) -> Any:
         repaired = dict(item)
         if isinstance(repaired.get("actions"), dict):
             repaired["actions"] = [repaired["actions"]]
+        if isinstance(repaired.get("actions"), list):
+            repaired["actions"] = [_repair_action(action) for action in repaired["actions"]]
 
         if not repaired.get("id"):
             repaired["id"] = f"subtask-{index}"
@@ -612,7 +641,7 @@ def classify_task_complexity(goal: str) -> str:
     """Returns 'atomic' or 'complex' based on keyword analysis."""
     g = goal.lower()
     words = g.split()
-    atomic_signals = ["write", "create file", "rename", "delete", "move file", "print", "run", "execute", "install", "append", "touch", "mkdir", "echo", "copy file", "read file", "hello world", "to a file", "save to", "open ", "search", "browse", "go to", "find", "navigate", "check ", "weather", "time"]
+    atomic_signals = ["write", "create file", "create a file", "rename", "delete", "move file", "print", "run", "execute", "install", "append", "touch", "mkdir", "echo", "copy file", "read file", "hello world", "to a file", "save to", "open ", "search", "browse", "go to", "find", "navigate", "check ", "weather", "time"]
     complex_signals = ["refactor", "redesign", "improve", "optimize", "analyze", "architect", "fix all", "migrate", "integrate", "full", "entire", "build an app", "create a server"]
 
     if len(words) < 10:
@@ -625,8 +654,11 @@ def classify_task_complexity(goal: str) -> str:
     return "complex"
 
 
+DEFAULT_OPENROUTER_MODEL = "openrouter/nvidia/nemotron-3-super-120b-a12b:free"
+
+
 class PlannerProvider:
-    def __init__(self, model: str = "claude-3-5-sonnet-20241022"):
+    def __init__(self, model: str = DEFAULT_OPENROUTER_MODEL):
         self.model = model
         self._anthropic_key: Optional[str] = os.environ.get("ANTHROPIC_API_KEY")
         self._openai_key: Optional[str] = os.environ.get("OPENAI_API_KEY")

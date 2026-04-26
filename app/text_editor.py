@@ -11,13 +11,11 @@ class TextEditorTool:
         self._history: dict[str, list[str]] = {}
 
     def _safe_path(self, value: str) -> Path:
-        """Resolve a path, allowing workspace-relative or user-home-absolute paths."""
+        """Resolve a path and require it to stay inside the workspace."""
         candidate = (self.workspace / value).resolve() if not Path(value).is_absolute() else Path(value).resolve()
-        home = Path.home().resolve()
-        if (self.workspace in candidate.parents or candidate == self.workspace
-                or home in candidate.parents or candidate == home):
+        if candidate == self.workspace or self.workspace in candidate.parents:
             return candidate
-        raise ToolError(f"Path escapes allowed directories (workspace or home): {value}")
+        raise ToolError(f"Path escapes workspace: {value}")
 
     def view(self, path: str, view_range: list[int] | None = None) -> ToolResult:
         p = self._safe_path(path)

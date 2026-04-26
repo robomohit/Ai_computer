@@ -8,6 +8,7 @@ import httpx
 
 from app.agent import AgentService
 from app.log_emitter import LogEmitter
+from app.models import Action, ActionType, HierarchicalPlan, SubTask
 from app.providers import PlannerProvider, detect_task_mode, infer_isolated_app_name
 
 
@@ -113,6 +114,59 @@ def test_single_app_desktop_goal_auto_selects_isolated_mode():
     assert infer_isolated_app_name("Open Notepad and write hello") == "Notepad"
     assert detect_task_mode("Open Notepad and write hello") == "computer_isolated"
     assert detect_task_mode("Open the Start menu and click the Settings button") == "computer"
+
+
+@pytest.mark.asyncio
+async def test_structured_desktop_finish_finalizes_without_reflection(monkeypatch, workspace):
+    service = AgentService(workspace, log_emitter=DummyLogEmitter())
+    monkeypatch.setattr("app.agent.classify_task_complexity", lambda goal: "complex")
+    monkeypatch.setattr("app.agent._capture_screenshot_b64", lambda sw, sh: "fake-shot")
+    monkeypatch.setattr("app.agent._get_active_window_rect", lambda sw, sh: None)
+    monkeypatch.setattr(service.memory, "search", lambda goal, limit=5: [])
+
+    class FakeProvider:
+        total_tokens = 0
+
+        def plan_hierarchical(self, *args, **kwargs):
+            return HierarchicalPlan(
+                reasoning="finish directly",
+                sub_tasks=[
+                    SubTask(
+                        id="step-1",
+                        description="Answer from observed screen",
+                        actions=[
+                            Action(
+                                id="finish-1",
+                                type=ActionType.finish,
+                                args={"reason": "Desktop task is complete."},
+                                explanation="Finish after verification",
+                            )
+                        ],
+                    )
+                ],
+            )
+
+        def reflect_on_subtask(self, *args, **kwargs):
+            raise AssertionError("finish should not enter reflection")
+
+        def evaluate(self, *args, **kwargs):
+            raise AssertionError("finish should not enter evaluation")
+
+    finalizations = []
+
+    async def noop_emit(*args, **kwargs):
+        return None
+
+    monkeypatch.setattr("app.agent.PlannerProvider", lambda model=None: FakeProvider())
+    monkeypatch.setattr(service, "_emit", noop_emit)
+    monkeypatch.setattr(service, "_emit_reasoning", noop_emit)
+    monkeypatch.setattr(service, "_finalize", lambda *args, **kwargs: finalizations.append(args))
+
+    await service.run_task("task-structured-finish", "Take a screenshot and finish", mode="computer")
+
+    assert finalizations
+    assert finalizations[-1][1] == "done"
+    assert finalizations[-1][2] == "Desktop task is complete."
 
 
 def test_persistent_logs_omit_raw_screenshot_payload(tmp_path, monkeypatch):

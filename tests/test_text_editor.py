@@ -31,3 +31,5 @@ def test_text_editor(workspace):
         t.undo_edit("d1/none.txt")
     with pytest.raises(ToolError):
         t.view("../escape.txt")
+    with pytest.raises(ToolError):
+        t.view(str((workspace.parent / "escape.txt").resolve()))

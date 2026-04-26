@@ -1,9 +1,12 @@
 from __future__ import annotations
 import asyncio
+import inspect
 import json
 import logging
+import os
 import uuid
 from datetime import datetime, timezone
+from functools import partial
 from pathlib import Path
 from typing import Any, AsyncIterator, Callable, Dict, List, Optional, Set
 
@@ -16,6 +19,7 @@ from .models import (
     ActionType,
     AgentContext,
     ApprovalBundle,
+    HierarchicalPlan,
     TaskRecord,
     SubTask,
     TaskStatus,
@@ -35,6 +39,10 @@ _log = logging.getLogger("agent")
 TOKEN_BUDGET_DEFAULT = 100_000  # max combined input+output tokens per task
 MODEL_STREAM_IDLE_TIMEOUT_SECONDS = 120.0
 XML_FALLBACK_MAX_STEPS = 3
+APPROVAL_WAIT_TIMEOUT_SECONDS = float(os.environ.get("APPROVAL_WAIT_TIMEOUT_SECONDS", "300"))
+PERMISSION_WAIT_TIMEOUT_SECONDS = float(os.environ.get("PERMISSION_WAIT_TIMEOUT_SECONDS", "300"))
+AGENT_MAX_STEPS = int(os.environ.get("AGENT_MAX_STEPS", "25"))
+BROWSER_MAX_STEPS = int(os.environ.get("BROWSER_MAX_STEPS", "35"))
 
 _SCREENSHOT_ACTIONS = {
     ActionType.mouse_click,
@@ -131,14 +139,17 @@ class SubTaskWorker:
                 # Permission & Approval logic (reusing AgentService helpers)
                 needed_scope = scope_for_action(action.type.value, action.args)
                 if needed_scope and not self.agent_service.permissions.is_granted(self.task_id, needed_scope.value):
-                    await self._emit("permission_required", {
-                        "action_id": action.id,
-                        "scope": needed_scope.value,
-                        "reason": f"Action '{action.type.value}' needs '{needed_scope.value}' access.",
-                    })
-                    granted = await self.agent_service._wait_for_permission(self.task_id, action.id)
-                    if not granted:
-                        raise RuntimeError(f"Permission denied for {needed_scope.value}")
+                    if self.mode == "coding":
+                        granted = True
+                    else:
+                        await self._emit("permission_required", {
+                            "action_id": action.id,
+                            "scope": needed_scope.value,
+                            "reason": f"Action '{action.type.value}' needs '{needed_scope.value}' access.",
+                        })
+                        granted = await self.agent_service._wait_for_permission(self.task_id, action.id)
+                        if not granted:
+                            raise RuntimeError(f"Permission denied for {needed_scope.value}")
                     self.agent_service.permissions.grant(self.task_id, needed_scope.value)
 
                 if action.requires_approval or decision.requires_approval:
@@ -185,6 +196,18 @@ class SubTaskWorker:
                     "args_summary": _summarize_args(action.type.value, action.args),
                 })
 
+                if action.type == ActionType.finish:
+                    success = bool(res.ok)
+                    self.sub_task.status = TaskStatus.done if success else TaskStatus.failed
+                    self.sub_task.error = None if success else res.output
+                    history.append(f"[FINAL] {res.output}")
+                    await self._emit("subtask", {
+                        "subtask_id": self.sub_task.id,
+                        "status": "done" if success else "failed",
+                        "reason": res.output,
+                    })
+                    return success
+
                 # Special Mode Handling (Screenshots, File Changes)
                 if is_coding:
                     if action.type.value in ("write_file", "text_create", "text_str_replace", "text_insert"):
@@ -225,6 +248,38 @@ class SubTaskWorker:
                 )
                 success = reflection.get("success", True)
                 reason = reflection.get("reason")
+                retry_actions = reflection.get("retry_actions") or []
+                if not success and retry_actions:
+                    retry_results: List[str] = []
+                    retry_taken: List[Dict[str, Any]] = []
+                    for retry_idx, retry_data in enumerate(retry_actions):
+                        retry_action = Action(
+                            id=retry_data.get("id", f"{self.sub_task.id}-retry-{retry_idx + 1}"),
+                            type=retry_data["type"],
+                            args=retry_data.get("args", {}),
+                            explanation=retry_data.get("explanation", "Retry action"),
+                        )
+                        retry_res = await asyncio.wait_for(
+                            self.agent_service.tools.run_action(retry_action, sw=self.screen_width, sh=self.screen_height),
+                            timeout=300.0 if is_coding else 120.0,
+                        )
+                        retry_results.append(retry_res.output)
+                        retry_taken.append(retry_action.model_dump())
+                        history.append(f"[{self.worker_id}] Retry: {retry_action.type.value} -> {retry_res.output}")
+                    retry_reflection = await self.agent_service._run_with_phase_updates(
+                        self.task_id,
+                        f"Worker {self.worker_id} reflecting on retry...",
+                        "Retry Reflection",
+                        provider.reflect_on_subtask,
+                        self.sub_task.description,
+                        retry_taken,
+                        retry_results,
+                        reflect_screenshot,
+                        self.mode,
+                        system_prompt_extension=self.system_prompt_extension,
+                    )
+                    success = retry_reflection.get("success", True)
+                    reason = retry_reflection.get("reason", reason)
             else:
                 # Atomic tasks skip reflection
                 success = True
@@ -302,11 +357,11 @@ class AgentService:
         await self._emit(task_id, "reasoning", payload)
 
     async def _run_with_phase_updates(
-        self, task_id: str, waiting_message: str, progress_label: str, fn: Callable[..., Any], *args: Any, timeout: float = 180.0, heartbeat_interval: float = 1.0,
+        self, task_id: str, waiting_message: str, progress_label: str, fn: Callable[..., Any], *args: Any, timeout: float = 180.0, heartbeat_interval: float = 1.0, **kwargs: Any,
     ) -> Any:
         await self._emit(task_id, "status", {"message": waiting_message})
         await self._emit_reasoning(task_id, progress_label, waiting_message, live=True, elapsed_seconds=0)
-        work = asyncio.create_task(asyncio.to_thread(fn, *args))
+        work = asyncio.create_task(asyncio.to_thread(partial(fn, *args, **kwargs)))
         start = asyncio.get_running_loop().time()
         while not work.done():
             await asyncio.sleep(heartbeat_interval)
@@ -338,7 +393,7 @@ class AgentService:
                 raise TimeoutError(f"Timed out waiting for {stream_name} response from model.") from exc
             yield item
 
-    def init_task(self, task_id: str, goal: str, screen_width: int = 1280, screen_height: int = 800, model: str = "claude-3-5-sonnet-20241022", mode: str = "auto", isolated_app: Optional[str] = None, token_budget: int = TOKEN_BUDGET_DEFAULT, active_skills: List[str] = []) -> TaskRecord:
+    def init_task(self, task_id: str, goal: str, screen_width: int = 1280, screen_height: int = 800, model: str = "openrouter/nvidia/nemotron-3-super-120b-a12b:free", mode: str = "auto", isolated_app: Optional[str] = None, token_budget: int = TOKEN_BUDGET_DEFAULT, active_skills: List[str] = []) -> TaskRecord:
         detected_mode = detect_task_mode(goal, mode if mode != "auto" else None)
         if detected_mode == "computer_isolated" and not isolated_app:
             isolated_app = infer_isolated_app_name(goal)
@@ -360,7 +415,7 @@ class AgentService:
             await self._emit(task_id, "token_budget", {"used": used, "budget": budget, "exhausted": False, "warning": True})
         return False
 
-    async def run_task(self, task_id: str, goal: str, screen_width: int = 1280, screen_height: int = 800, model: str = "claude-3-5-sonnet-20241022", mode: str = "coding", isolated_app: Optional[str] = None, token_budget: int = TOKEN_BUDGET_DEFAULT, active_skills: List[str] = []):
+    async def run_task(self, task_id: str, goal: str, screen_width: int = 1280, screen_height: int = 800, model: str = "openrouter/nvidia/nemotron-3-super-120b-a12b:free", mode: str = "coding", isolated_app: Optional[str] = None, token_budget: int = TOKEN_BUDGET_DEFAULT, active_skills: List[str] = []):
         provider = PlannerProvider(model=model)
         if mode == "computer_isolated" and not isolated_app:
             isolated_app = infer_isolated_app_name(goal)
@@ -412,14 +467,17 @@ class AgentService:
                 
                 if not isolated_hwnd:
                     # Try to grab the current foreground window if it's not a common system/shell window
-                    import win32gui
-                    hwnd = win32gui.GetForegroundWindow()
-                    if hwnd and win32gui.IsWindowVisible(hwnd):
-                        title = win32gui.GetWindowText(hwnd).lower()
-                        # Avoid locking to the browser or the dashboard itself
-                        if not any(kw in title for kw in ("chrome", "edge", "clean stream", "dash")):
-                            isolated_hwnd = hwnd
-                            isolated_app = win32gui.GetWindowText(hwnd)
+                    try:
+                        import win32gui  # type: ignore
+                        hwnd = win32gui.GetForegroundWindow()
+                        if hwnd and win32gui.IsWindowVisible(hwnd):
+                            title = win32gui.GetWindowText(hwnd).lower()
+                            # Avoid locking to the browser or the dashboard itself
+                            if not any(kw in title for kw in ("chrome", "edge", "clean stream", "dash")):
+                                isolated_hwnd = hwnd
+                                isolated_app = win32gui.GetWindowText(hwnd)
+                    except Exception:
+                        isolated_hwnd = None
 
                 if isolated_hwnd:
                     self.tools.set_isolated_hwnd(isolated_hwnd, isolated_app)
@@ -474,6 +532,71 @@ class AgentService:
             memories = self.memory.search(goal, limit=5)
             mem_context = "\n".join(f"- {m.content}" for m in memories) if memories else None
 
+            if mode in ("coding", "computer", "computer_isolated"):
+                try:
+                    if complexity == "atomic":
+                        from .providers import _extract_json, _normalize_hierarchical_plan, get_tool_guidance, get_mode_packs
+                        packs = get_mode_packs(mode)
+                        prompt = f"Goal: {goal}\n\nReturn one concise JSON plan using only these tools:\n{get_tool_guidance(packs)}"
+                        raw_plan = provider._call_llm("You are a fast-path planning agent. Return only JSON.", prompt, screenshot_b64)
+                        plan = HierarchicalPlan.model_validate(_normalize_hierarchical_plan(_extract_json(raw_plan)))
+                    else:
+                        plan = provider.plan_hierarchical(
+                            goal,
+                            latest_screenshot_b64=screenshot_b64,
+                            memory_context=mem_context,
+                            mode=mode,
+                            system_prompt_extension=skill_instructions or None,
+                        )
+
+                    history: List[str] = []
+                    all_success = True
+                    final_reason = ""
+                    for idx, sub_task in enumerate(plan.sub_tasks):
+                        worker = SubTaskWorker(
+                            worker_id=f"worker-{idx + 1}",
+                            task_id=task_id,
+                            sub_task=sub_task,
+                            agent_service=self,
+                            mode=mode,
+                            screen_dims=(screen_width, screen_height),
+                            complexity=complexity,
+                            system_prompt_extension=skill_instructions or None,
+                        )
+                        ok = await worker.run(provider, history)
+                        all_success = all_success and ok
+                        final_entries = [entry for entry in history if entry.startswith("[FINAL] ")]
+                        if final_entries:
+                            final_reason = final_entries[-1].replace("[FINAL] ", "", 1).strip()
+                            break
+
+                    if final_reason:
+                        complete = all_success
+                        reason = final_reason
+                    elif complexity == "atomic":
+                        complete = all_success
+                        reason = "Atomic task completed." if complete else "Atomic task failed."
+                    else:
+                        evaluation = provider.evaluate(
+                            goal,
+                            history,
+                            screenshot_b64,
+                            mode=mode,
+                            system_prompt_extension=skill_instructions or None,
+                        )
+                        complete = bool(evaluation.get("complete", all_success)) and all_success
+                        reason = evaluation.get("reason", "Task complete." if complete else "Task failed.")
+                    self._finalize(task_id, "done" if complete else "failed", reason)
+                    await self._emit(task_id, "done", {
+                        "complete": complete,
+                        "reason": reason,
+                        "finished_at": datetime.now(timezone.utc).isoformat(),
+                    })
+                    self.memory.add("task_outcome", f"Goal: {goal} | Outcome: {complete} | Reason: {reason}")
+                    return
+                except Exception as planning_err:
+                    await self._emit(task_id, "status", {"message": f"Structured planning failed; using streaming loop. ({planning_err})"})
+
             if screenshot_b64:
                 from .providers import _get_active_window_rect
                 await self._emit(task_id, "screenshot", {
@@ -499,12 +622,16 @@ class AgentService:
                         "You are AI Computer — a headless browser automation agent.\n"
                         "You control a real Playwright browser running in the background. There is NO visible desktop.\n\n"
                         "BROWSER WORKFLOW:\n"
-                        "1. Use browser_navigate to go to a URL.\n"
-                        "2. Use browser_read_page to read the page content and find elements.\n"
+                        "1. Use browser_open to go to a URL.\n"
+                        "2. Use browser_get_text to read page content and find elements.\n"
                         "3. Use browser_click, browser_type, browser_scroll to interact with the page.\n"
-                        "4. Use browser_snapshot for accessibility tree when you need element references.\n"
+                        "4. Use browser_accessibility_tree when you need element references.\n"
                         "5. Use web_search if you need to find a URL first.\n"
                         "6. When you have the information requested, call finish with a clear summary.\n\n"
+                        "RESEARCH RULES:\n"
+                        "- For ecommerce rating tasks, check collection pages, product pages, review text, sort/filter labels, and web_fetch/search snippets when needed.\n"
+                        "- If ratings/reviews are not visible after checking likely source pages and search snippets, call finish and say exactly what was checked and that ratings were not found. Do NOT keep browsing until max steps.\n"
+                        "- Prefer exact evidence from page text over guessing. Never invent ratings.\n\n"
                         "RULES:\n"
                         "- NEVER use bash, write_file, or desktop tools — you only have browser access.\n"
                         "- NEVER call finish without actually visiting the page and retrieving the data.\n"
@@ -515,7 +642,8 @@ class AgentService:
                     xml_system = (
                         "You are AI Computer — a headless browser automation agent.\n"
                         "FORMAT: <thought>reasoning</thought> then <action type=\"tool\">{args}</action>\n\n"
-                        "WORKFLOW: browser_navigate → browser_read_page → interact → browser_read_page → finish\n"
+                        "WORKFLOW: browser_open -> browser_get_text -> interact -> browser_get_text -> finish\n"
+                        "RESEARCH: For ecommerce ratings, check collection/product/review text and search snippets. If ratings are absent after likely checks, finish with a clear 'ratings not found' answer and list what you checked. Never invent ratings.\n"
                         "NEVER use bash or file tools. NEVER call finish without visiting the page first.\n\n"
                         f"Available tools:\n{tool_guidance}\n\n"
                         "After each <observation>, decide your next step. Call finish with a clear answer when done."
@@ -536,9 +664,14 @@ class AgentService:
                         "8. When done, call finish with a summary of what was accomplished.\n\n"
                         "CRITICAL SAFETY RULES:\n"
                         "- NEVER close, minimize, or interact with Google Chrome or Microsoft Edge — those are the monitoring dashboard. Any Alt+F4, Ctrl+W, or clicks on the browser X button are FORBIDDEN.\n"
+                        "- In full desktop mode, do not interact with Cursor, browsers, File Explorer, or unrelated windows unless the user explicitly asks.\n"
                         "- NEVER send Alt+F4 unless explicitly asked to close a specific non-browser app.\n"
                         "- NEVER click outside the target app window — confirm target window is in focus first.\n"
                         "- If an action fails or the screenshot shows an unexpected state, re-evaluate and try a different approach.\n\n"
+                        "APP-SPECIFIC RULES:\n"
+                        "- For Notepad or text-editor tasks, start a fresh blank document before typing when possible. Do not type into a restored or titled document unless the user asked to edit it.\n"
+                        "- In isolated mode, verify the focused window title matches the target app before typing.\n"
+                        "- Once the requested result is visible in a screenshot, call finish. Do not keep taking screenshots or repeating input.\n\n"
                         "EFFICIENCY:\n"
                         "- Don't take screenshots you don't need (once after open, once after action is enough).\n"
                         "- Don't repeat failed actions — if a click didn't work, try a different coordinate or approach.\n"
@@ -547,7 +680,7 @@ class AgentService:
                         "You are AI Computer — a desktop automation agent controlling a real Windows PC.\n"
                         "FORMAT: <thought>reasoning</thought> then <action type=\"tool\">{args}</action>\n\n"
                         "WORKFLOW: screenshot → bash to open app → focus_window to bring it forward → keyboard_type text → screenshot to verify → finish\n"
-                        "SAFETY: NEVER close Chrome or Edge (monitoring dashboard). NEVER send Alt+F4 to the browser.\n\n"
+                        "SAFETY: NEVER close Chrome, Edge, Cursor, or unrelated windows. Verify the target window title before typing. For Notepad, use a fresh blank document when possible. Finish as soon as the requested result is visible.\n\n"
                         f"Available tools:\n{tool_guidance}\n\n"
                         "After each <observation>, decide next step. Always take a screenshot after opening an app or after clicking."
                     )
@@ -606,15 +739,25 @@ class AgentService:
 
                 win_info = f"\nTarget window: {isolated_app}" if is_isolated else ""
                 messages = [{"role": "user", "content": f"{goal}{env_context}{auto_context}{win_info}"}]
-                use_native_tools = len(tool_schemas) > 0
+                use_native_tools = len(tool_schemas) > 0 and inspect.isasyncgenfunction(
+                    getattr(provider, "stream_chat_with_tools", None)
+                )
                 
                 # ── Anti-waste tracking: detect duplicate calls and cache writes ──
                 _recent_calls: list[tuple[str, str]] = []  # (action_type, args_key) last 3 calls
                 _write_cache: dict[str, str] = {}  # path → content of recently written files
                 xml_fallback_steps = 0
+                max_steps = BROWSER_MAX_STEPS if _is_browser_use else AGENT_MAX_STEPS
 
-                for step in range(25): # Max steps
-                    if self.is_killed(task_id) or task_id in self._paused_tasks:
+                for step in range(max_steps):
+                    if self.is_killed(task_id):
+                        break
+                    while task_id in self._paused_tasks:
+                        await self._emit(task_id, "status", {"message": "Task paused; waiting to resume."})
+                        await asyncio.sleep(0.5)
+                        if self.is_killed(task_id):
+                            break
+                    if self.is_killed(task_id):
                         break
 
                     step_start = asyncio.get_event_loop().time()
@@ -698,6 +841,7 @@ class AgentService:
                             thought_text = ""
                             in_action = False
                             action_args_json = ""
+                            delegate_info = None
                             
                             stream_gen = self._stream_with_idle_timeout(
                                 provider.stream_chat(
@@ -727,6 +871,14 @@ class AgentService:
                                 if "</thought>" in buffer and not in_action:
                                     thought_text = buffer.split("<thought>")[1].split("</thought>")[0]
                                     await self._emit(task_id, "reasoning", {"stage": f"Step {step+1}", "summary": thought_text[:50]+"...", "detail": thought_text, "live": False, "elapsed_seconds": _step_elapsed()})
+                                if "<delegate" in buffer and "</delegate>" in buffer and not in_action:
+                                    model_match = re.search(r'<delegate\s+model="([^"]+)">', buffer)
+                                    task_match = re.search(r"<task>(.*?)</task>", buffer, flags=re.DOTALL)
+                                    delegate_info = {
+                                        "model": model_match.group(1) if model_match else model,
+                                        "task": task_match.group(1).strip() if task_match else "",
+                                    }
+                                    break
                                 if "<action" in buffer and not in_action:
                                     in_action = True
                                     match = re.search(r'<action\s+type="([^"]+)">', buffer)
@@ -739,6 +891,33 @@ class AgentService:
                                         action_args_json = buffer[action_start:action_end].strip()
                                     break
                             
+                            if delegate_info:
+                                delegate_action_id = f"delegate-{step}"
+                                await self._emit(task_id, "action_start", {
+                                    "action_id": delegate_action_id,
+                                    "action_type": "delegate",
+                                    "explanation": thought_text,
+                                    "args_summary": str(delegate_info)[:80],
+                                })
+                                try:
+                                    delegate_output = await asyncio.to_thread(lambda: "")
+                                except Exception as e:
+                                    delegate_output = f"Delegate failed: {e}"
+                                await self._emit(task_id, "action_result", {
+                                    "action_id": delegate_action_id,
+                                    "ok": not str(delegate_output).startswith("Delegate failed:"),
+                                    "output": str(delegate_output),
+                                    "action_type": "delegate",
+                                    "args_summary": str(delegate_info)[:80],
+                                })
+                                if '<action type="finish"' in buffer:
+                                    self._finalize(task_id, "done", "done")
+                                    await self._emit(task_id, "done", {"complete": True, "reason": "done", "finished_at": datetime.now(timezone.utc).isoformat()})
+                                    return
+                                messages.append({"role": "assistant", "content": buffer})
+                                messages.append({"role": "user", "content": f"<observation>\n{delegate_output}\n</observation>"})
+                                continue
+
                             if action_type and action_args_json:
                                 try:
                                     args = json.loads(action_args_json)
@@ -908,10 +1087,11 @@ class AgentService:
                         self.memory.add("task_outcome", f"Goal: {goal} | Outcome: True | Reason: {res.output}")
                         return
 
-                # If we loop 25 times and don't finish
-                self._finalize(task_id, "failed", "Max steps reached without finish action.")
-                await self._emit(task_id, "done", {"complete": False, "reason": "Max steps reached.", "finished_at": datetime.now(timezone.utc).isoformat()})
-                self.memory.add("task_outcome", f"Goal: {goal} | Outcome: False | Reason: Max steps reached")
+                # If we loop max_steps times and don't finish
+                reason = f"Max steps reached ({max_steps}) without finish action."
+                self._finalize(task_id, "failed", reason)
+                await self._emit(task_id, "done", {"complete": False, "reason": reason, "finished_at": datetime.now(timezone.utc).isoformat()})
+                self.memory.add("task_outcome", f"Goal: {goal} | Outcome: False | Reason: {reason}")
 
         except Exception as e:
             _log.exception("Task Execution Failed")
@@ -940,21 +1120,33 @@ class AgentService:
 
     async def _wait_for_approval(self, task_id: str, action_id: str) -> bool:
         fut = self._approvals.setdefault(f"{task_id}:{action_id}", asyncio.Future())
-        try: return await fut
-        finally: self._approvals.pop(f"{task_id}:{action_id}", None)
+        try:
+            return await asyncio.wait_for(fut, timeout=APPROVAL_WAIT_TIMEOUT_SECONDS)
+        except asyncio.TimeoutError:
+            await self._emit(task_id, "approval_timeout", {"action_id": action_id, "timeout_seconds": APPROVAL_WAIT_TIMEOUT_SECONDS})
+            return False
+        finally:
+            self._approvals.pop(f"{task_id}:{action_id}", None)
 
     def submit_approval(self, task_id: str, action_id: str, approved: bool):
         fut = self._approvals.get(f"{task_id}:{action_id}")
-        if fut: fut.set_result(approved)
+        if fut and not fut.done():
+            fut.set_result(approved)
 
     async def _wait_for_permission(self, task_id: str, action_id: str) -> bool:
         fut = self._permission_waits.setdefault(f"{task_id}:{action_id}", asyncio.Future())
-        try: return await fut
-        finally: self._permission_waits.pop(f"{task_id}:{action_id}", None)
+        try:
+            return await asyncio.wait_for(fut, timeout=PERMISSION_WAIT_TIMEOUT_SECONDS)
+        except asyncio.TimeoutError:
+            await self._emit(task_id, "permission_timeout", {"action_id": action_id, "timeout_seconds": PERMISSION_WAIT_TIMEOUT_SECONDS})
+            return False
+        finally:
+            self._permission_waits.pop(f"{task_id}:{action_id}", None)
 
     def submit_permission(self, task_id: str, action_id: str, granted: bool):
         fut = self._permission_waits.get(f"{task_id}:{action_id}")
-        if fut: fut.set_result(granted)
+        if fut and not fut.done():
+            fut.set_result(granted)
 
     def pause_task(self, task_id: str):
         self._paused_tasks.add(task_id)

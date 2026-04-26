@@ -8,6 +8,7 @@ from app.models import Action, ActionType
 from app.safety import SafetyManager
 from app.text_editor import TextEditorTool
 from app.tools import ToolExecutor
+import app.tools as tools_module
 
 @pytest.mark.asyncio
 async def test_new_actions(monkeypatch, workspace):
@@ -55,6 +56,22 @@ async def test_new_actions(monkeypatch, workspace):
     bash_out = await t.run_action(Action(id="11", type=ActionType.bash, args={"command": "cd ."}))
     assert bash_out.ok
 
+    (workspace / "subdir").mkdir()
+    (workspace / "subdir" / "marker.txt").write_text("ok", encoding="utf-8")
+    bash_cd_run = await t.run_action(
+        Action(id="11b", type=ActionType.bash, args={"command": "cd subdir && python -c \"from pathlib import Path; print(Path('marker.txt').read_text())\""})
+    )
+    assert bash_cd_run.ok
+    assert "ok" in bash_cd_run.output
+
+    bash_mkdir = await t.run_action(Action(id="11c", type=ActionType.bash, args={"command": "mkdir -p nested/project"}))
+    assert bash_mkdir.ok
+    assert (workspace / "nested" / "project").is_dir()
+
+    run_mkdir = await t.run_action(Action(id="11d", type=ActionType.run_command, args={"command": "mkdir -p command_project"}))
+    assert run_mkdir.ok
+    assert (workspace / "command_project").is_dir()
+
     text_create_out = await t.run_action(
         Action(
             id="12",
@@ -89,10 +106,52 @@ def test_safety_key_combo():
     assert dec.danger.value == "high"
 
 
+def test_file_glob_stays_inside_workspace(workspace):
+    t = ToolExecutor(workspace, text_editor=TextEditorTool(workspace))
+    (workspace / "src").mkdir()
+    (workspace / "src" / "app.py").write_text("print('ok')", encoding="utf-8")
+
+    result = t.file_glob("**/*.py")
+    assert result.ok
+    assert "src" in result.output
+
+    with pytest.raises(Exception):
+        t.file_glob("../**/*")
+    with pytest.raises(Exception):
+        t.file_glob(str((workspace.parent / "*.py").resolve()))
+
+
 def test_safety_bash():
     s = SafetyManager()
     dec = s.evaluate(Action(id="2", type=ActionType.bash, args={"command": "echo hi"}))
     assert dec.danger.value == "high"
+
+
+def test_run_tests_rewrites_bare_pytest(workspace, monkeypatch):
+    t = ToolExecutor(workspace, text_editor=TextEditorTool(workspace))
+    seen = {}
+
+    def fake_run(command, **kwargs):
+        seen["command"] = command
+        return types.SimpleNamespace(returncode=0, stdout="1 passed in 0.01s", stderr="")
+
+    monkeypatch.setattr("subprocess.run", fake_run)
+    result = t.run_tests(command="pytest smoke_tests -q")
+
+    assert result.ok
+    assert seen["command"] == "python -m pytest smoke_tests -q"
+
+
+def test_hung_window_check_tolerates_missing_pywin32_helper(monkeypatch):
+    fake_user32 = types.SimpleNamespace(IsHungAppWindow=lambda hwnd: 0)
+    fake_windll = types.SimpleNamespace(user32=fake_user32)
+    fake_ctypes = types.SimpleNamespace(windll=fake_windll)
+    fake_win32gui = types.SimpleNamespace()
+
+    monkeypatch.setattr(tools_module, "ctypes", fake_ctypes)
+    monkeypatch.setattr(tools_module, "win32gui", fake_win32gui)
+
+    assert tools_module._is_hung_app_window(1234) is False
 
 
 @pytest.mark.asyncio

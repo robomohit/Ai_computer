@@ -5,10 +5,10 @@ import asyncio
 import json
 import os
 import secrets
-from datetime import datetime, timezone
+from datetime import datetime, timedelta, timezone
 from pathlib import Path
 from typing import Dict, Optional, List, Literal
-from fastapi import Depends, FastAPI, HTTPException, Request, Security
+from fastapi import Depends, FastAPI, HTTPException, Request, Response, Security
 from fastapi.middleware.cors import CORSMiddleware
 from fastapi.responses import FileResponse, StreamingResponse
 from fastapi.security import HTTPAuthorizationCredentials, HTTPBearer
@@ -20,7 +20,10 @@ from .skills import skill_manager
 
 API_KEY = os.environ.get("AGENT_API_KEY") or secrets.token_hex(32)
 _masked = API_KEY[:6] + "***" + API_KEY[-4:] if len(API_KEY) > 10 else "***"
-print(f"[AI_Computer] Agent API Key: {_masked} (use /api/config to retrieve full key)", flush=True)
+print(f"[AI_Computer] Agent API Key: {_masked}", flush=True)
+SESSION_COOKIE_NAME = "ai_computer_session"
+SESSION_TTL_SECONDS = int(os.environ.get("SESSION_TTL_SECONDS", "43200"))
+_sessions: Dict[str, datetime] = {}
 
 from contextlib import asynccontextmanager
 
@@ -38,8 +41,31 @@ app.add_middleware(CORSMiddleware, allow_origins=_allowed_origins, allow_credent
 bearer = HTTPBearer(auto_error=False)
 _tasks: Dict[str, TaskRecord] = {}
 
-async def verify_token(credentials: HTTPAuthorizationCredentials = Security(bearer)):
-    if credentials is None or credentials.credentials != API_KEY:
+def _prune_sessions(now: Optional[datetime] = None) -> None:
+    now = now or datetime.now(timezone.utc)
+    expired = [token for token, expires_at in _sessions.items() if expires_at <= now]
+    for token in expired:
+        _sessions.pop(token, None)
+
+
+def _valid_session_token(token: str) -> bool:
+    if not token:
+        return False
+    now = datetime.now(timezone.utc)
+    _prune_sessions(now)
+    expires_at = _sessions.get(token)
+    return bool(expires_at and expires_at > now)
+
+
+def _is_authorized(request: Request, credentials: Optional[HTTPAuthorizationCredentials]) -> bool:
+    bearer_token = credentials.credentials if credentials else ""
+    if bearer_token == API_KEY or _valid_session_token(bearer_token):
+        return True
+    return _valid_session_token(request.cookies.get(SESSION_COOKIE_NAME, ""))
+
+
+async def verify_token(request: Request, credentials: HTTPAuthorizationCredentials = Security(bearer)):
+    if not _is_authorized(request, credentials):
         raise HTTPException(status_code=401, detail="Unauthorized")
 
 workspace_dir = Path(".")
@@ -59,10 +85,14 @@ def _is_terminal_status(status: Optional[str]) -> bool:
 
 
 def _save_task_record(record: TaskRecord) -> None:
-    _task_store_path(record.id).write_text(
-        json.dumps(record.model_dump(), indent=2),
-        encoding="utf-8",
-    )
+    path = _task_store_path(record.id)
+    tmp_path = path.with_name(f".{path.name}.{secrets.token_hex(4)}.tmp")
+    data = json.dumps(record.model_dump(), indent=2)
+    with tmp_path.open("w", encoding="utf-8") as fh:
+        fh.write(data)
+        fh.flush()
+        os.fsync(fh.fileno())
+    os.replace(tmp_path, path)
 
 
 def _infer_task_from_log(task_id: str) -> Optional[TaskRecord]:
@@ -297,9 +327,29 @@ async def get_mcp():
         })
     return {"servers": servers}
 
+@app.post("/api/session")
+async def create_session(response: Response):
+    token = secrets.token_urlsafe(32)
+    expires_at = datetime.now(timezone.utc) + timedelta(seconds=SESSION_TTL_SECONDS)
+    _sessions[token] = expires_at
+    response.set_cookie(
+        SESSION_COOKIE_NAME,
+        token,
+        max_age=SESSION_TTL_SECONDS,
+        httponly=True,
+        secure=os.environ.get("SESSION_COOKIE_SECURE", "").lower() in {"1", "true", "yes"},
+        samesite="lax",
+    )
+    return {"authenticated": True, "expires_at": expires_at.isoformat()}
+
+
 @app.get("/api/config")
 async def config():
-    return {"api_key": API_KEY}
+    return {
+        "authenticated": False,
+        "session_endpoint": "/api/session",
+        "session_ttl_seconds": SESSION_TTL_SECONDS,
+    }
 
 _ALL_MODELS = [
     # Free models (OpenRouter) — tested and working
@@ -464,8 +514,8 @@ async def create_task(body: TaskIn):
 
 
 @app.get("/api/tasks/{task_id}")
-async def get_task(task_id: str, credentials: HTTPAuthorizationCredentials = Security(bearer)):
-    await verify_token(credentials)
+async def get_task(task_id: str, request: Request, credentials: HTTPAuthorizationCredentials = Security(bearer)):
+    await verify_token(request, credentials)
     record = _get_task_record(task_id)
     if not record:
         raise HTTPException(status_code=404, detail="Task not found")
@@ -555,14 +605,11 @@ async def retry_task(task_id: str):
 
 
 @app.get("/api/tasks/{task_id}/stream")
-async def stream_task(task_id: str, request: Request, token: Optional[str] = None, since: int = 0):
-    p_token = token or ""
-    if p_token != API_KEY:
-        auth = request.headers.get("Authorization", "")
-        if not auth.startswith("Bearer ") or auth[7:] != API_KEY:
-            async def _bad_auth():
-                yield 'data: {"type":"error","message":"unauthorized"}\n\n'
-            return StreamingResponse(_bad_auth(), media_type="text/event-stream", status_code=401)
+async def stream_task(task_id: str, request: Request, since: int = 0, credentials: HTTPAuthorizationCredentials = Security(bearer)):
+    if not _is_authorized(request, credentials):
+        async def _bad_auth():
+            yield 'data: {"type":"error","message":"unauthorized"}\n\n'
+        return StreamingResponse(_bad_auth(), media_type="text/event-stream", status_code=401)
 
     async def event_generator():
         # Replay persisted events first so fast-completing tasks aren't missed

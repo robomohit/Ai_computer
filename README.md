@@ -2,7 +2,7 @@
 
 An autonomous AI agent that controls your computer using plain English. Give it a goal — it plans, acts, and shows you exactly what it's doing in real time.
 
-> Works on Windows, macOS, and Linux. Free to run with OpenRouter's free-tier models.
+> Coding and browser modes run on Windows, macOS, and Linux; desktop control is Windows-focused. Free to run with OpenRouter free-tier models, subject to OpenRouter's limits.
 
 ---
 
@@ -32,7 +32,7 @@ Open `.env` and paste in at least one key:
 OPENROUTER_API_KEY=sk-or-v1-...   # free tier — recommended
 ```
 
-> Get a free key at [openrouter.ai](https://openrouter.ai/) — no credit card needed.
+> Get a free-tier key at [openrouter.ai](https://openrouter.ai/). Availability and rate limits are controlled by OpenRouter.
 
 ### 3. Launch
 

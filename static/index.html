@@ -24,7 +24,7 @@
     --density: 1;
 
     /* glow intensity driver (0..1.6) */
-    --glow: 1;
+    --glow: 0.35;
 
     /* radii — tight. Codex isn't bubbly. */
     --r-xs: 4px;
@@ -541,7 +541,7 @@
     flex-shrink: 0;
     background: var(--muted-3);
   }
-  .history-dot.running { background: var(--accent); box-shadow: 0 0 0 3px var(--accent-soft); animation: dot-pulse 1.6s ease-in-out infinite; }
+  .history-dot.running { background: var(--accent); box-shadow: 0 0 0 2px var(--accent-soft); }
   .history-dot.done    { background: var(--ok); }
   .history-dot.failed  { background: var(--err); }
   .history-dot.cancelled { background: var(--warn); }
@@ -754,7 +754,7 @@
   }
 
   .pill.status-running { border-color: color-mix(in oklab, var(--accent) 45%, var(--line-2)); }
-  .pill.status-running .pill-dot { background: var(--accent); box-shadow: 0 0 0 3px var(--accent-soft); animation: dot-pulse 1.6s ease-in-out infinite; }
+  .pill.status-running .pill-dot { background: var(--accent); box-shadow: 0 0 0 2px var(--accent-soft); }
   .pill.status-running .pill-label { color: var(--accent); }
   .pill.status-paused, .pill.status-cancelled { border-color: color-mix(in oklab, var(--warn) 45%, var(--line-2)); }
   .pill.status-paused .pill-dot, .pill.status-cancelled .pill-dot { background: var(--warn); }
@@ -961,7 +961,7 @@
     line-height: 1.65;
     font-size: var(--fs-md);
     white-space: pre-wrap;
-    animation: card-appear 0.3s var(--ease-spring) both;
+    animation: none;
     position: relative;
     padding-left: 24px;
   }
@@ -1046,7 +1046,7 @@
     border: 0;
     background: transparent;
     box-shadow: none;
-    animation: card-appear 0.32s var(--ease-spring) both;
+    animation: none;
     position: relative;
     padding-left: 24px;
   }
@@ -1076,8 +1076,7 @@
     border-color: var(--accent);
     box-shadow:
       0 0 0 3px var(--accent-soft),
-      0 0 calc(20px * var(--glow)) var(--accent-glow-1),
-      0 0 calc(40px * var(--glow)) var(--accent-glow-2);
+      0 0 calc(10px * var(--glow)) var(--accent-glow-1);
   }
 
   .card-head {
@@ -1393,7 +1392,7 @@
       0 0 0 3px var(--accent-soft),
       0 0 calc(14px * var(--glow)) var(--accent-glow-1),
       0 0 calc(28px * var(--glow)) var(--accent-glow-2);
-    animation: dot-pulse 1.6s ease-in-out infinite;
+    animation: none;
   }
 
   .status-copy { min-width: 0; flex: 1; }
@@ -1586,7 +1585,7 @@
     width: 6px; height: 6px; border-radius: 999px; background: var(--muted-3);
   }
   .statusbar .sb-status-ready    .sb-dot { background: var(--muted-3); }
-  .statusbar .sb-status-running  .sb-dot { background: var(--accent); box-shadow: 0 0 0 2px var(--accent-soft); animation: dot-pulse 1.6s ease-in-out infinite; }
+  .statusbar .sb-status-running  .sb-dot { background: var(--accent); box-shadow: 0 0 0 2px var(--accent-soft); }
   .statusbar .sb-status-running  .sb-val { color: var(--accent); }
   .statusbar .sb-status-complete .sb-dot { background: var(--ok); }
   .statusbar .sb-status-complete .sb-val { color: var(--ok); }
@@ -1636,7 +1635,7 @@
     background: var(--bg-2);
     border: 1px solid var(--line-3);
     border-radius: var(--r-lg);
-    box-shadow: var(--shadow-pop), 0 0 0 1px var(--line), 0 0 60px var(--accent-glow-2);
+    box-shadow: var(--shadow-pop), 0 0 0 1px var(--line);
     overflow: hidden;
     animation: modal-in 0.22s var(--ease-spring) both;
   }
@@ -1725,7 +1724,7 @@
       var(--shadow-card),
       var(--shadow-inset),
       0 0 0 3px var(--accent-soft),
-      0 0 calc(40px * var(--glow)) var(--accent-glow-1);
+      0 0 calc(10px * var(--glow)) var(--accent-glow-1);
   }
 
   .composer textarea {
@@ -1904,6 +1903,78 @@
     background: var(--accent); color: var(--accent-on); border-color: var(--accent);
   }
   .modal-btn.primary:hover { filter: brightness(1.1); }
+
+  .desktop-control-banner {
+    display: none;
+    align-items: center;
+    justify-content: space-between;
+    gap: 12px;
+    margin: 10px 20px 0;
+    padding: 10px 12px;
+    border: 1px solid color-mix(in oklab, var(--warn) 42%, var(--line-2));
+    border-radius: var(--r);
+    background: color-mix(in oklab, var(--warn) 8%, var(--bg-2));
+    color: var(--ink);
+    box-shadow: var(--shadow-card);
+  }
+  .desktop-control-banner.show { display: flex; }
+  .desktop-control-copy { min-width: 0; }
+  .desktop-control-title {
+    display: flex;
+    align-items: center;
+    gap: 8px;
+    font-size: var(--fs-sm);
+    font-weight: 600;
+  }
+  .desktop-control-dot {
+    width: 8px;
+    height: 8px;
+    border-radius: 999px;
+    background: var(--warn);
+  }
+  .desktop-control-detail {
+    margin-top: 3px;
+    color: var(--muted);
+    font-size: var(--fs-label);
+    line-height: 1.45;
+  }
+  .desktop-access-list {
+    display: grid;
+    gap: 8px;
+    margin-top: 14px;
+  }
+  .desktop-access-row {
+    display: flex;
+    align-items: center;
+    justify-content: space-between;
+    gap: 12px;
+    padding: 9px 10px;
+    border: 1px solid var(--line);
+    border-radius: var(--r-sm);
+    background: var(--bg-3);
+  }
+  .desktop-access-row strong {
+    display: block;
+    font-size: var(--fs-sm);
+    color: var(--ink);
+  }
+  .desktop-access-row span {
+    display: block;
+    margin-top: 2px;
+    font-size: var(--fs-label);
+    color: var(--muted);
+  }
+  .desktop-access-badge {
+    flex-shrink: 0;
+    padding: 3px 7px;
+    border-radius: 999px;
+    border: 1px solid var(--line-2);
+    color: var(--muted);
+    font-size: 10px;
+    font-weight: 600;
+    text-transform: uppercase;
+    letter-spacing: 0.08em;
+  }
 
   .lightbox {
     position: fixed;
@@ -2154,6 +2225,7 @@
         <select id="mode-id">
           <option value="auto">Auto detect</option>
           <option value="coding">Coding</option>
+          <option value="computer">Desktop control</option>
           <option value="computer_isolated">Isolated App control</option>
           <option value="computer_use">Browser cowork</option>
         </select>
@@ -2196,24 +2268,32 @@
       </div>
     </header>
 
+    <div class="desktop-control-banner" id="desktop-control-banner" role="status">
+      <div class="desktop-control-copy">
+        <div class="desktop-control-title"><span class="desktop-control-dot"></span><span id="desktop-control-title">AI Computer is using your computer</span></div>
+        <div class="desktop-control-detail" id="desktop-control-detail">Desktop control is active.</div>
+      </div>
+      <button class="control-btn" id="desktop-control-stop" type="button">Stop</button>
+    </div>
+
     <div class="feed-scroll" id="feed-scroll">
       <div class="feed" id="feed">
         <section class="welcome" id="welcome">
-          <div class="hello-eye">Clean stream · v2</div>
-          <h3>One timeline. <em>Plans, thinking, tools, output — all in place.</em></h3>
-          <p>A unified stream for agents that think, act, and reflect. Left rail keeps your sessions; the feed shows every step with the right amount of density.</p>
+          <div class="hello-eye">AI Computer</div>
+          <h3>Plan, act, and verify. <em>Desktop control stays explicit.</em></h3>
+          <p>Choose coding, browser, desktop, or isolated-app control. The stream shows actions and results without hiding the controls you need to stop or pause.</p>
           <div class="example-grid">
             <button class="example-btn" type="button" data-example="Create a FastAPI app with CRUD endpoints and tests.">
               <div class="ex-body"><strong>Build a coding task</strong><span>Plans, file writes, terminal, and reflections render inline.</span></div>
             </button>
             <button class="example-btn" type="button" data-example="Open example.com in browser cowork mode, summarize the page, and save notes to the workspace.">
-              <div class="ex-body"><strong>Try browser cowork</strong><span>Browser actions and screenshots stay in the same stream.</span></div>
+              <div class="ex-body"><strong>Use browser cowork</strong><span>Research pages with browser tools and a clean final answer.</span></div>
             </button>
-            <button class="example-btn" type="button" data-example="Inspect the existing workspace, explain the architecture, and suggest two cleanup tasks.">
-              <div class="ex-body"><strong>Review a project</strong><span>Good for comparing the old UI to this feed.</span></div>
+            <button class="example-btn" type="button" data-example="Using full desktop control, take a screenshot of the current desktop, describe the active window, and finish.">
+              <div class="ex-body"><strong>Test desktop control</strong><span>Requires explicit desktop access before running.</span></div>
             </button>
-            <button class="example-btn" type="button" data-example="Update the frontend to a lighter premium style and show me each file change.">
-              <div class="ex-body"><strong>Ship a UI change</strong><span>File rewrites, tool calls, and thinking all stay visible.</span></div>
+            <button class="example-btn" type="button" data-example="Open Calculator in isolated app mode, calculate 12 + 30, verify the result shown is 42, then finish.">
+              <div class="ex-body"><strong>Use isolated app control</strong><span>Lock the task to one app when possible.</span></div>
             </button>
           </div>
         </section>
@@ -2306,6 +2386,20 @@
   </div>
 </div>
 
+<div class="overlay" id="desktop-access">
+  <div class="modal">
+    <div class="eyebrow" style="color: var(--warn); font-size: var(--fs-label); font-weight: 600; letter-spacing: var(--track-cap); text-transform: uppercase;">Desktop access</div>
+    <h3 id="desktop-access-title">Allow desktop control?</h3>
+    <p id="desktop-access-reason">AI Computer needs access to your desktop for this task.</p>
+    <div class="desktop-access-list" id="desktop-access-list"></div>
+    <p style="margin-top:12px">Only allow this when you are ready for AI Computer to view and control the selected desktop surface. You can stop the session at any time.</p>
+    <div class="modal-actions">
+      <button class="modal-btn" id="desktop-access-deny" type="button">Deny</button>
+      <button class="modal-btn primary" id="desktop-access-allow" type="button">Allow for this session</button>
+    </div>
+  </div>
+</div>
+
 <div class="lightbox" id="lightbox">
   <button class="lightbox-close" id="lightbox-close" type="button" aria-label="Close">
     <svg width="16" height="16" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><line x1="18" y1="6" x2="6" y2="18"/><line x1="6" y1="6" x2="18" y2="18"/></svg>
@@ -2387,9 +2481,9 @@
   const TWEAK_DEFAULTS = /*EDITMODE-BEGIN*/{
     "theme": "dark",
     "accentHue": 220,
-    "glow": 1,
+    "glow": 0.35,
     "density": 1,
-    "grain": "on",
+    "grain": "off",
     "budgetPct": 44
   }/*EDITMODE-END*/;
 
@@ -2532,6 +2626,8 @@
   let currentMode = 'coding';
   let currentBackgroundMode = true;
   let currentStatus = 'ready';
+  let currentIsolatedApp = '';
+  let desktopAccessResolver = null;
   let lastActionId = null;
   let terminalStateKey = null;
   const actionCards = {};
@@ -2541,6 +2637,7 @@
 
   const api = (path, method = 'GET', body = null) => fetch(path, {
     method,
+    credentials: 'same-origin',
     headers: { 'Authorization': `Bearer ${KEY || ''}`, 'Content-Type': 'application/json' },
     body: body ? JSON.stringify(body) : null
   }).then(async (response) => {
@@ -2563,6 +2660,7 @@
   };
   const humanize = (value = '') => value.replace(/_/g, ' ').replace(/\b\w/g, (c) => c.toUpperCase());
   const truncate = (value = '', limit = 500) => value.length > limit ? `${value.slice(0, limit)}\n…` : value;
+  const escapeHtml = (value = '') => String(value).replace(/[&<>"']/g, (char) => ({ '&': '&amp;', '<': '&lt;', '>': '&gt;', '"': '&quot;', "'": '&#39;' }[char]));
   const isTerminalStatus = (value = '') => /complete|failed|error|cancelled/i.test(value);
 
   const toast = (message, kind = 'info', ttl = 3200) => {
@@ -2626,8 +2724,53 @@
     if (sb) { sb.className = `sb-item sb-status sb-status-${key}`; sb.innerHTML = `<span class="sb-dot"></span><span class="sb-val">${map[key] || humanize(key)}</span>`; }
   };
 
+  const isDesktopMode = (mode = currentMode) => mode === 'computer' || mode === 'computer_isolated';
+
+  const desktopModeLabel = (mode = currentMode) => mode === 'computer_isolated' ? 'Isolated App control' : 'Desktop control';
+
+  const setDesktopSessionActive = (active, mode = currentMode, isolatedApp = currentIsolatedApp) => {
+    const banner = $('desktop-control-banner');
+    if (!banner) return;
+    banner.classList.toggle('show', !!active && isDesktopMode(mode));
+    $('desktop-control-title').textContent = active ? 'AI Computer is using your computer' : 'Desktop control inactive';
+    const scope = mode === 'computer_isolated'
+      ? `${isolatedApp || 'Selected app'} only`
+      : 'Full desktop view and control';
+    $('desktop-control-detail').textContent = `${desktopModeLabel(mode)} · ${scope}`;
+  };
+
+  const requestDesktopAccess = ({ mode, isolatedApp }) => new Promise((resolve) => {
+    const overlay = $('desktop-access');
+    const list = $('desktop-access-list');
+    const fullDesktop = mode === 'computer';
+    $('desktop-access-title').textContent = fullDesktop ? 'Allow full desktop control?' : `Allow control of ${isolatedApp || 'selected app'}?`;
+    $('desktop-access-reason').textContent = fullDesktop
+      ? 'AI Computer will be able to see the desktop and use mouse, keyboard, screenshots, and windows during this task.'
+      : `AI Computer will lock control to ${isolatedApp || 'the selected app'} where possible and use screenshots, focus, and keyboard input for this task.`;
+    const rows = fullDesktop
+      ? [
+          ['Desktop screen', 'Visible to AI Computer during this session', 'Full control'],
+          ['Mouse and keyboard', 'Can click, type, and use shortcuts while the task runs', 'Full control'],
+          ['Other windows', 'May be visible in screenshots unless you use isolated mode', 'Visible']
+        ]
+      : [
+          [isolatedApp || 'Target app', 'Primary app AI Computer may view and control', 'Full control'],
+          ['Other windows', 'Not targeted; may only appear if Windows focus changes', 'Limited'],
+          ['Stop control', 'Pause or cancel from the top bar at any time', 'Available']
+        ];
+    list.innerHTML = rows.map(([title, copy, badge]) => `
+      <div class="desktop-access-row">
+        <div><strong>${escapeHtml(title)}</strong><span>${escapeHtml(copy)}</span></div>
+        <div class="desktop-access-badge">${escapeHtml(badge)}</div>
+      </div>
+    `).join('');
+    desktopAccessResolver = resolve;
+    overlay.classList.add('show');
+  });
+
   const setMode = (mode, isolated = false, isolatedApp = '') => {
     currentMode = mode || 'coding';
+    currentIsolatedApp = isolatedApp || (currentMode === 'computer_isolated' ? ($('isolated-app-id')?.value || '').trim() : '');
     const modeLabels = { computer: 'desktop', computer_use: 'browser', computer_isolated: 'isolated', coding: 'coding' };
     let label = modeLabels[currentMode] ?? humanize(currentMode).toLowerCase();
     if (isolated && currentMode === 'computer') {
@@ -2636,6 +2779,21 @@
     }
     const mp = $('mode-pill'); if (mp) mp.innerHTML = `<span class="pill-label">Mode</span><span class="pill-val">${label}</span>`;
     const sbm = $('sb-mode-val'); if (sbm) sbm.textContent = label;
+    setDesktopSessionActive(currentStatus === 'running' || currentStatus === 'paused', currentMode, currentIsolatedApp);
+    selectPreferredModelForMode(currentMode);
+  };
+
+  const selectPreferredModelForMode = (mode) => {
+    const select = $('model-id');
+    if (!select || !select.options.length || !select.value) return;
+    const preferred = mode === 'coding'
+      ? ['openrouter/qwen/qwen3-coder:free', 'openrouter/nvidia/nemotron-3-super-120b-a12b:free']
+      : ['openrouter/nvidia/nemotron-3-super-120b-a12b:free', 'openrouter/google/gemma-4-31b-it:free'];
+    const match = preferred.find((model) => Array.from(select.options).some((option) => option.value === model));
+    if (!match || select.value === match) return;
+    select.value = match;
+    const sbm = $('sb-model-val');
+    if (sbm) sbm.textContent = select.options[select.selectedIndex]?.textContent || '—';
   };
 
   const setBackgroundMode = (background, message = '') => {
@@ -3478,7 +3636,7 @@
 
   const openStream = (listenTask) => {
     if (sse) { sse.close(); sse = null; }
-    sse = new EventSource(`/api/tasks/${listenTask}/stream?token=${encodeURIComponent(KEY || '')}&since=${streamCursor}`);
+    sse = new EventSource(`/api/tasks/${listenTask}/stream?since=${streamCursor}`, { withCredentials: true });
     sse.onmessage = (message) => {
       if (task !== listenTask) return;
       reconnectAttempts = 0;
@@ -3503,6 +3661,12 @@
     const goal = $('input').value.trim();
     if (!goal) return;
     if (task && sse) { toast('A task is already running. Cancel it before starting another.', 'warn'); return; }
+    const requestedMode = $('mode-id').value;
+    const requestedIsolatedApp = ($('isolated-app-id').value || '').trim();
+    if (isDesktopMode(requestedMode)) {
+      const allowed = await requestDesktopAccess({ mode: requestedMode, isolatedApp: requestedIsolatedApp });
+      if (!allowed) return;
+    }
 
     task = Math.random().toString(36).slice(2);
     currentViewedTask = task;
@@ -3530,8 +3694,9 @@
     try {
       await keyReady;
       const model = $('model-id').value;
-      const mode = $('mode-id').value;
-      const isolated_app = ($('isolated-app-id').value || '').trim() || null;
+      const mode = requestedMode;
+      const isolated_app = requestedIsolatedApp || null;
+      if (isDesktopMode(mode)) setDesktopSessionActive(true, mode, isolated_app || '');
       streamClosedManually = false;
       openStream(task);
       await api('/api/tasks', 'POST', { 
@@ -3555,6 +3720,7 @@
     streamClosedManually = true;
     if (sse) { sse.close(); sse = null; }
     finalizeLiveStatus();
+    setDesktopSessionActive(false);
     showPostRunControls();
   };
 
@@ -3610,7 +3776,7 @@
   const downloadCurrentLog = () => {
     if (!currentViewedTask) { toast('No task selected.', 'warn'); return; }
     const link = document.createElement('a');
-    link.href = `/api/tasks/${currentViewedTask}/log/download?token=${encodeURIComponent(KEY || '')}`;
+    link.href = `/api/tasks/${currentViewedTask}/log/download`;
     link.download = `${currentViewedTask}.jsonl`;
     document.body.appendChild(link);
     link.click(); link.remove();
@@ -3638,13 +3804,22 @@
 
   const hydrateModelSelect = (models) => {
     const select = $('model-id');
-    const list = models && models.length ? models : [
-      'claude-3-5-sonnet-20241022',
-      'gpt-4o-mini',
+    const list = Array.isArray(models) ? models : [
       'openrouter/qwen/qwen3-coder:free',
-      'openrouter/meta-llama/llama-3.3-70b-instruct:free'
+      'openrouter/nvidia/nemotron-3-super-120b-a12b:free',
+      'openrouter/meta-llama/llama-3.3-70b-instruct:free',
+      'claude-3-5-sonnet-20241022',
+      'gpt-4o-mini'
     ];
     select.innerHTML = '';
+    if (!list.length) {
+      const option = document.createElement('option');
+      option.value = '';
+      option.textContent = 'No configured models';
+      select.appendChild(option);
+      const sbm = $('sb-model-val'); if (sbm) sbm.textContent = option.textContent;
+      return;
+    }
     list.forEach((model) => {
       const option = document.createElement('option');
       option.value = model;
@@ -3654,6 +3829,7 @@
       select.appendChild(option);
     });
     if (!select.value && select.options.length) select.selectedIndex = 0;
+    selectPreferredModelForMode($('mode-id')?.value || 'auto');
     const sbm = $('sb-model-val'); if (sbm) sbm.textContent = select.options[select.selectedIndex]?.textContent || '—';
     select.onchange = () => { const sbm = $('sb-model-val'); if (sbm) sbm.textContent = select.options[select.selectedIndex]?.textContent || '—'; };
   };
@@ -3674,6 +3850,11 @@
   const sendPermission = (grant) => {
     api('/api/permissions', 'POST', { task_id: window.pendingTaskId, action_id: window.pendingPermissionId, grant, scope: window.pendingPermissionScope }).catch(() => {});
     $('permission').classList.remove('show');
+  };
+  const resolveDesktopAccess = (allow) => {
+    $('desktop-access').classList.remove('show');
+    if (desktopAccessResolver) desktopAccessResolver(allow);
+    desktopAccessResolver = null;
   };
 
   /* ================================================================
@@ -3797,9 +3978,9 @@
     setMode($('mode-id').value || 'auto');
     setBudget(tweakState.budgetPct);
 
-    keyReady = fetch(`/api/config?cb=${Date.now()}`)
+    keyReady = fetch(`/api/session?cb=${Date.now()}`, { method: 'POST', credentials: 'same-origin' })
       .then((r) => r.json())
-      .then((c) => { KEY = c.api_key || ''; return KEY; })
+      .then(() => { KEY = ''; return KEY; })
       .catch(() => '');
 
     try {
@@ -3911,12 +4092,19 @@
   $('app-deny').onclick = () => sendApproval(false);
   $('perm-approve').onclick = () => sendPermission(true);
   $('perm-deny').onclick = () => sendPermission(false);
+  $('desktop-access-allow').onclick = () => resolveDesktopAccess(true);
+  $('desktop-access-deny').onclick = () => resolveDesktopAccess(false);
+  $('desktop-control-stop').onclick = () => { stopEverything(); cancelTask(); };
 
   $('mode-id').onchange = (e) => {
     const val = e.target.value;
-    setMode(val, val === 'computer_isolated');
+    const isolatedApp = ($('isolated-app-id').value || '').trim();
+    setMode(val, val === 'computer_isolated', isolatedApp);
     $('isolated-app-wrap').style.display = (val === 'computer_isolated') ? '' : 'none';
   };
+  $('isolated-app-id').addEventListener('input', () => {
+    if (($('mode-id').value || '') === 'computer_isolated') setMode('computer_isolated', true, ($('isolated-app-id').value || '').trim());
+  });
 
   $('input').addEventListener('input', () => { autoGrow(); updateCharCount(); });
   $('input').addEventListener('keydown', (event) => {
@@ -3935,6 +4123,11 @@
       if (event.key === 'Escape') { event.preventDefault(); sendPermission(false); }
       return;
     }
+    if ($('desktop-access').classList.contains('show')) {
+      if (event.key === 'Enter') { event.preventDefault(); resolveDesktopAccess(true); }
+      if (event.key === 'Escape') { event.preventDefault(); resolveDesktopAccess(false); }
+      return;
+    }
     if ($('lightbox').classList.contains('show') && event.key === 'Escape') { event.preventDefault(); closeLightbox(); return; }
 
     if (event.key === 'Escape' && task && !isTerminalStatus(currentStatus)) {
@@ -3945,13 +4138,14 @@
   });
 
   // focus-loss auto-pause
+  const shouldAutoPauseOnFocusLoss = () => currentMode === 'computer' || currentMode === 'computer_isolated';
   let _focusLossTimer = null;
   let _pausedByFocusLoss = false;
   document.addEventListener('visibilitychange', () => {
     if (document.hidden) {
-      if (task && !isTerminalStatus(currentStatus) && !isPaused) {
+      if (shouldAutoPauseOnFocusLoss() && task && !isTerminalStatus(currentStatus) && !isPaused) {
         _focusLossTimer = setTimeout(async () => {
-          if (task && !isTerminalStatus(currentStatus) && !isPaused) {
+          if (shouldAutoPauseOnFocusLoss() && task && !isTerminalStatus(currentStatus) && !isPaused) {
             _pausedByFocusLoss = true;
             isPaused = true;
             await api(`/api/tasks/${task}/pause`, 'POST').catch(() => {});
@@ -4080,9 +4274,9 @@
   // Production Safety Layer (Wired to Codex UI)
   let focusSafetyTimer = null;
   window.addEventListener('blur', () => {
-    if (task && !isTerminalStatus(currentStatus) && !isPaused) {
+    if (shouldAutoPauseOnFocusLoss() && task && !isTerminalStatus(currentStatus) && !isPaused) {
       focusSafetyTimer = setTimeout(() => {
-        if (!isPaused) {
+        if (shouldAutoPauseOnFocusLoss() && !isPaused) {
           console.warn("Safety: Focus lost for 5s. Auto-pausing.");
           togglePause();
         }

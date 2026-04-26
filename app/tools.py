@@ -20,12 +20,28 @@ except ImportError:
 from .models import Action, ActionType, ToolError, ToolResult
 from .providers import get_scale_factor
 
-import win32gui, win32api, win32con, win32process
+try:
+    import win32gui, win32api, win32con, win32process  # type: ignore
+except ImportError:
+    win32gui = win32api = win32con = win32process = None  # type: ignore
 import ctypes
 import time
 import logging
 
 _log = logging.getLogger(__name__)
+
+
+def _is_hung_app_window(hwnd: int) -> bool:
+    """Return whether a Win32 window is hung, tolerating pywin32 builds without this helper."""
+    if win32gui is not None and hasattr(win32gui, "IsHungAppWindow"):
+        try:
+            return bool(win32gui.IsHungAppWindow(hwnd))
+        except Exception:
+            pass
+    try:
+        return bool(ctypes.windll.user32.IsHungAppWindow(int(hwnd)))
+    except Exception:
+        return False
 
 # Opus Audit Fix: Enable DPI awareness for precise mouse/keyboard isolation
 try:
@@ -92,6 +108,8 @@ class ToolExecutor:
 
     def resolve_isolated_hwnd(self) -> Optional[int]:
         """Resolve the current isolated HWND, re-discovering it by title when possible."""
+        if win32gui is None:
+            return None
         if self._isolated_hwnd and win32gui.IsWindow(self._isolated_hwnd):
             return self._isolated_hwnd
         self._isolated_hwnd = self._get_hwnd_for_title(self._isolated_app or "")
@@ -99,6 +117,8 @@ class ToolExecutor:
 
     def _get_hwnd_for_title(self, title: str):
         """Find a window by title within the same process context if possible."""
+        if win32gui is None:
+            return None
         if not title: return None
         def callback(hwnd, windows):
             if win32gui.IsWindowVisible(hwnd) and title.lower() in win32gui.GetWindowText(hwnd).lower():
@@ -109,22 +129,22 @@ class ToolExecutor:
 
     def _assert_hwnd_responsive(self, hwnd: int) -> Optional[str]:
         """Return an error string if the window is gone or hung, else None."""
-        import win32gui  # type: ignore
+        try:
+            import win32gui  # type: ignore
+        except ImportError:
+            return "Isolated window control is only available on Windows."
         if not win32gui.IsWindow(hwnd):
             return "Target window no longer exists."
-        if win32gui.IsHungAppWindow(hwnd):
+        if _is_hung_app_window(hwnd):
             return "Target window is not responding (hung)."
         return None
 
     def _safe_path(self, value: str) -> Path:
-        """Resolve a path, allowing workspace-relative or user-home-absolute paths."""
+        """Resolve a path and require it to stay inside the workspace."""
         candidate = (self.workspace / value).resolve() if not Path(value).is_absolute() else Path(value).resolve()
-        # Allow paths inside workspace OR inside user's home directory
-        home = Path.home().resolve()
-        if (self.workspace in candidate.parents or candidate == self.workspace
-                or home in candidate.parents or candidate == home):
+        if candidate == self.workspace or self.workspace in candidate.parents:
             return candidate
-        raise ToolError(f"Path escapes allowed directories (workspace or home): {value}")
+        raise ToolError(f"Path escapes workspace: {value}")
 
     def _scale(self, x: int, y: int, sw: int, sh: int):
         """Scale coordinates — in background mode, use browser viewport directly."""
@@ -174,7 +194,7 @@ class ToolExecutor:
                 return ToolResult(ok=False, output=f"Target window '{self._isolated_app or 'isolated app'}' not found.")
 
             # Opus Audit: Hung Application Detection
-            if win32gui.IsHungAppWindow(hwnd):
+            if _is_hung_app_window(hwnd):
                 return ToolResult(ok=False, output="Target application is frozen/not responding.")
 
             if not (0 <= x <= sw and 0 <= y <= sh):
@@ -202,8 +222,8 @@ class ToolExecutor:
             return ToolResult(ok=False, output=f'Isolated click failed: {str(e)}')
 
     def _keyboard_type_isolated(self, text: str):
-        import win32con  # noqa: F401
         try:
+            import win32con  # type: ignore  # noqa: F401
             hwnd = self.resolve_isolated_hwnd()
             if not hwnd:
                 return ToolResult(ok=False, output=f"Target window '{self._isolated_app or 'isolated app'}' not found.")
@@ -343,7 +363,10 @@ class ToolExecutor:
 
     def _isolated_key(self, keys: str) -> ToolResult:
         """Send a key combo via WM_KEYDOWN/WM_KEYUP to the isolated HWND."""
-        import win32api, win32con  # type: ignore  # noqa: F401
+        try:
+            import win32api, win32con  # type: ignore  # noqa: F401
+        except ImportError:
+            return ToolResult(ok=False, output="Isolated key control is only available on Windows.")
         hwnd = self.resolve_isolated_hwnd()
         if not hwnd:
             return ToolResult(ok=False, output=f"Target window '{self._isolated_app or 'isolated app'}' not found.")
@@ -539,6 +562,12 @@ class ToolExecutor:
 
     def run_command(self, command: str):
         try:
+            import re
+            mkdir_p = re.fullmatch(r'(?:mkdir|md)\s+-p\s+["\']?(.+?)["\']?', command.strip(), flags=re.IGNORECASE)
+            if mkdir_p:
+                target = self._safe_path(mkdir_p.group(1).strip())
+                target.mkdir(parents=True, exist_ok=True)
+                return ToolResult(ok=True, output=f"Created directory: {target}")
             res = subprocess.run(command, shell=True, capture_output=True, text=True, timeout=120, cwd=self.workspace)
             return ToolResult(ok=res.returncode == 0, output=f"STDOUT:\n{res.stdout}\nSTDERR:\n{res.stderr}")
         except subprocess.TimeoutExpired:
@@ -561,9 +590,27 @@ class ToolExecutor:
         if stripped.lower() in {"pwd", "cd"}:
             return ToolResult(ok=True, output=str(self._bash_cwd))
 
+        try:
+            import re
+            mkdir_p = re.fullmatch(r'(?:mkdir|md)\s+-p\s+["\']?(.+?)["\']?', stripped, flags=re.IGNORECASE)
+            if mkdir_p:
+                target = self._safe_path(mkdir_p.group(1).strip())
+                target.mkdir(parents=True, exist_ok=True)
+                return ToolResult(ok=True, output=f"Created directory: {target}")
+        except Exception as e:
+            return ToolResult(ok=False, output=f"mkdir -p failed: {e}")
+
         cd_match = None
         try:
             import re
+            cd_and_run = re.fullmatch(r'cd\s+["\']?(.+?)["\']?\s*(?:&&|;)\s*(.+)', stripped, flags=re.IGNORECASE)
+            if cd_and_run:
+                target = self._safe_path(cd_and_run.group(1).strip())
+                if not target.is_dir():
+                    return ToolResult(ok=False, output=f"Not a directory: {target}")
+                self._bash_cwd = target
+                stripped = cd_and_run.group(2).strip()
+                command = stripped
             cd_match = re.fullmatch(r'cd\s+["\']?(.+?)["\']?', stripped, flags=re.IGNORECASE)
         except Exception:
             cd_match = None
@@ -745,9 +792,17 @@ class ToolExecutor:
 
     def file_glob(self, pattern: str):
         import glob
-        # Execute relative to workspace
+        raw = Path(pattern)
+        if raw.is_absolute() or ".." in raw.parts:
+            raise ToolError("Glob pattern must be relative and stay inside the workspace.")
         matches = glob.glob(str(self.workspace / pattern), recursive=True)
-        rel_matches = [str(Path(m).relative_to(self.workspace)) for m in matches]
+        rel_matches = []
+        for match in matches:
+            path = Path(match).resolve()
+            try:
+                rel_matches.append(str(path.relative_to(self.workspace)))
+            except ValueError:
+                raise ToolError("Glob pattern escaped workspace.")
         return ToolResult(ok=True, output="\n".join(rel_matches) if rel_matches else "No matches found.")
 
     def file_grep(self, pattern: str, directory: str = "."):
@@ -841,9 +896,7 @@ class ToolExecutor:
     def lint_code(self, path: str):
         """Run real linters: flake8/mypy for Python, eslint/tsc for JS/TS."""
         import subprocess
-        abs_path = (self.workspace / path).resolve()
-        if not str(abs_path).startswith(str(self.workspace)):
-            return ToolResult(ok=False, output="Access denied: path is outside workspace.")
+        abs_path = self._safe_path(path)
         if not abs_path.exists():
             return ToolResult(ok=False, output=f"File not found: {path}")
 
@@ -857,6 +910,9 @@ class ToolExecutor:
                 if r.returncode == 0:
                     results.append(f"[{label}] ✓ clean")
                 else:
+                    if "No module named" in out and label != "syntax":
+                        results.append(f"[{label}] skipped (not installed)")
+                        return None
                     results.append(f"[{label}] issues:\n{out[:2000]}")
                 return r.returncode == 0
             except FileNotFoundError:
@@ -881,7 +937,7 @@ class ToolExecutor:
         else:
             return ToolResult(ok=True, output=f"No linter configured for {ext} files.")
 
-        ok_all = all("[✓]" in r or "✓ clean" in r for r in results)
+        ok_all = all("[✓]" in r or "✓ clean" in r or "skipped" in r for r in results)
         return ToolResult(ok=ok_all, output="\n".join(results) if results else "No linters ran.")
 
     def git(self, command: str, args: str = ""):
@@ -917,6 +973,8 @@ class ToolExecutor:
                 command = "cargo test"
             else:
                 command = "python -m pytest -v --tb=short"
+        elif command.strip().lower().startswith("pytest"):
+            command = f"python -m {command.strip()}"
         try:
             r = subprocess.run(command, shell=True, capture_output=True, text=True, timeout=120, cwd=cwd)
             out = (r.stdout + r.stderr).strip()

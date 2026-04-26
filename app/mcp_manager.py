@@ -20,6 +20,13 @@ class MCPServer:
         self._listener_task: Optional[asyncio.Task] = None
         self.tools: List[Dict[str, Any]] = []
 
+    def _fail_pending(self, exc: Exception) -> None:
+        pending = list(self._pending.values())
+        self._pending.clear()
+        for fut in pending:
+            if not fut.done():
+                fut.set_exception(exc)
+
     async def start(self):
         env = os.environ.copy()
         env.update(self.env)
@@ -57,11 +64,18 @@ class MCPServer:
 
     async def _listen(self):
         if not self.proc or not self.proc.stdout: return
-        while self.proc.poll() is None:
-            try:
+        disconnect_error: Optional[Exception] = None
+        try:
+            while self.proc.poll() is None:
                 line = await asyncio.to_thread(self.proc.stdout.readline)
-                if not line: break
-                data = json.loads(line)
+                if not line:
+                    disconnect_error = RuntimeError(f"MCP server {self.name} closed stdout")
+                    break
+                try:
+                    data = json.loads(line)
+                except json.JSONDecodeError as e:
+                    _log.warning("Ignoring invalid JSON from MCP server %s: %s", self.name, e)
+                    continue
                 if "id" in data:
                     req_id = data["id"]
                     fut = self._pending.pop(req_id, None)
@@ -70,15 +84,30 @@ class MCPServer:
                             fut.set_exception(RuntimeError(data["error"]))
                         else:
                             fut.set_result(data.get("result", {}))
-            except Exception as e:
-                continue
+        except asyncio.CancelledError:
+            disconnect_error = RuntimeError(f"MCP server {self.name} listener stopped")
+            raise
+        except Exception as e:
+            disconnect_error = e
+            _log.warning("MCP server %s listener failed: %s", self.name, e)
+        finally:
+            if self._pending:
+                self._fail_pending(disconnect_error or RuntimeError(f"MCP server {self.name} disconnected"))
 
     async def stop(self):
         if self._listener_task:
             self._listener_task.cancel()
         if self.proc:
             self.proc.terminate()
+            try:
+                await asyncio.to_thread(self.proc.wait, timeout=5)
+            except Exception:
+                try:
+                    self.proc.kill()
+                except Exception:
+                    pass
             self.proc = None
+        self._fail_pending(RuntimeError(f"MCP server {self.name} stopped"))
 
     async def notify(self, method: str, params: Dict[str, Any]):
         if not self.proc or not self.proc.stdin:
@@ -94,6 +123,9 @@ class MCPServer:
     async def call(self, method: str, params: Dict[str, Any], timeout: float = 60.0) -> Dict[str, Any]:
         if not self.proc or not self.proc.stdin:
             raise RuntimeError(f"MCP server {self.name} not running")
+        if self.proc.poll() is not None:
+            self._fail_pending(RuntimeError(f"MCP server {self.name} exited with code {self.proc.returncode}"))
+            raise RuntimeError(f"MCP server {self.name} exited with code {self.proc.returncode}")
 
         self._id_counter += 1
         req_id = self._id_counter
@@ -108,8 +140,12 @@ class MCPServer:
         fut = loop.create_future()
         self._pending[req_id] = fut
 
-        self.proc.stdin.write(json.dumps(request) + "\n")
-        self.proc.stdin.flush()
+        try:
+            self.proc.stdin.write(json.dumps(request) + "\n")
+            self.proc.stdin.flush()
+        except Exception as e:
+            self._pending.pop(req_id, None)
+            raise RuntimeError(f"MCP {self.name} write failed: {e}") from e
 
         try:
             return await asyncio.wait_for(fut, timeout=timeout)
