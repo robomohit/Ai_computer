@@ -20,27 +20,37 @@ except ImportError:
 from .models import Action, ActionType, ToolError, ToolResult
 from .providers import get_scale_factor
 
-import win32gui, win32api, win32con, win32process
 import ctypes
-import time
 import logging
+import sys
+
+if sys.platform == "win32":
+    try:
+        import win32gui, win32api, win32con, win32process  # type: ignore
+    except ImportError:
+        win32gui = win32api = win32con = win32process = None
+else:
+    win32gui = win32api = win32con = win32process = None
 
 _log = logging.getLogger(__name__)
 
 # Opus Audit Fix: Enable DPI awareness for precise mouse/keyboard isolation
-try:
-    ctypes.windll.shcore.SetProcessDpiAwareness(1) # PROCESS_SYSTEM_DPI_AWARE
-except Exception:
+if sys.platform == "win32":
     try:
-        ctypes.windll.user32.SetProcessDPIAware()
+        ctypes.windll.shcore.SetProcessDpiAwareness(1) # PROCESS_SYSTEM_DPI_AWARE
     except Exception:
-        pass
+        try:
+            ctypes.windll.user32.SetProcessDPIAware()
+        except Exception:
+            pass
 
 from .text_editor import TextEditorTool
 
 
 def _init_dpi_awareness() -> None:
     """Call once at startup so Win32 coords and pyautogui coords match on HiDPI displays."""
+    if sys.platform != "win32":
+        return
     try:
         import ctypes
         ctypes.windll.shcore.SetProcessDpiAwareness(2)  # PROCESS_PER_MONITOR_DPI_AWARE
@@ -53,6 +63,10 @@ def _init_dpi_awareness() -> None:
 
 
 _init_dpi_awareness()
+
+
+def _win32_unavailable() -> ToolResult:
+    return ToolResult(ok=False, output="Isolated window control is only available on Windows with pywin32 installed.")
 
 
 class ToolExecutor:
@@ -92,6 +106,8 @@ class ToolExecutor:
 
     def resolve_isolated_hwnd(self) -> Optional[int]:
         """Resolve the current isolated HWND, re-discovering it by title when possible."""
+        if win32gui is None:
+            return None
         if self._isolated_hwnd and win32gui.IsWindow(self._isolated_hwnd):
             return self._isolated_hwnd
         self._isolated_hwnd = self._get_hwnd_for_title(self._isolated_app or "")
@@ -99,6 +115,8 @@ class ToolExecutor:
 
     def _get_hwnd_for_title(self, title: str):
         """Find a window by title within the same process context if possible."""
+        if win32gui is None:
+            return None
         if not title: return None
         def callback(hwnd, windows):
             if win32gui.IsWindowVisible(hwnd) and title.lower() in win32gui.GetWindowText(hwnd).lower():
@@ -109,7 +127,8 @@ class ToolExecutor:
 
     def _assert_hwnd_responsive(self, hwnd: int) -> Optional[str]:
         """Return an error string if the window is gone or hung, else None."""
-        import win32gui  # type: ignore
+        if win32gui is None:
+            return "Isolated window control is only available on Windows with pywin32 installed."
         if not win32gui.IsWindow(hwnd):
             return "Target window no longer exists."
         if win32gui.IsHungAppWindow(hwnd):
@@ -167,6 +186,8 @@ class ToolExecutor:
 
 
     def _mouse_click_isolated(self, x: int, y: int, button: str, clicks: int, sw: int, sh: int):
+        if win32gui is None or win32api is None or win32con is None:
+            return _win32_unavailable()
         try:
             # Opus Audit: Auto-discovery & Recovery for Child Windows/Modals
             hwnd = self.resolve_isolated_hwnd()
@@ -202,7 +223,8 @@ class ToolExecutor:
             return ToolResult(ok=False, output=f'Isolated click failed: {str(e)}')
 
     def _keyboard_type_isolated(self, text: str):
-        import win32con  # noqa: F401
+        if win32gui is None or win32con is None:
+            return _win32_unavailable()
         try:
             hwnd = self.resolve_isolated_hwnd()
             if not hwnd:
@@ -343,7 +365,8 @@ class ToolExecutor:
 
     def _isolated_key(self, keys: str) -> ToolResult:
         """Send a key combo via WM_KEYDOWN/WM_KEYUP to the isolated HWND."""
-        import win32api, win32con  # type: ignore  # noqa: F401
+        if win32api is None or win32con is None:
+            return _win32_unavailable()
         hwnd = self.resolve_isolated_hwnd()
         if not hwnd:
             return ToolResult(ok=False, output=f"Target window '{self._isolated_app or 'isolated app'}' not found.")
