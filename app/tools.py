@@ -71,6 +71,62 @@ def _init_dpi_awareness() -> None:
 _init_dpi_awareness()
 
 
+_BLOCKED_HOST_SUBSTRINGS = (
+    "localhost",
+    "metadata.google.internal",
+    "metadata.goog",
+)
+_BLOCKED_HOST_EXACT = {
+    "0.0.0.0",
+    "::",
+    "169.254.169.254",  # AWS / GCP / Azure instance metadata
+    "fd00:ec2::254",
+}
+
+
+def _validate_public_http_url(url: str) -> str:
+    """Block SSRF-style targets (file://, internal IPs, metadata) and require http(s).
+
+    Returns the URL if it is acceptable, otherwise raises ToolError.
+    """
+    import ipaddress
+    from urllib.parse import urlsplit
+
+    if not isinstance(url, str) or not url.strip():
+        raise ToolError("URL is required.")
+
+    parts = urlsplit(url.strip())
+    scheme = (parts.scheme or "").lower()
+    if scheme not in {"http", "https"}:
+        raise ToolError(f"Only http(s) URLs are allowed (got scheme '{scheme or 'none'}').")
+
+    host = (parts.hostname or "").strip().lower()
+    if not host:
+        raise ToolError("URL must include a hostname.")
+
+    if host in _BLOCKED_HOST_EXACT:
+        raise ToolError(f"Refusing to fetch internal host: {host}")
+    for needle in _BLOCKED_HOST_SUBSTRINGS:
+        if needle in host:
+            raise ToolError(f"Refusing to fetch internal host: {host}")
+
+    try:
+        ip = ipaddress.ip_address(host)
+    except ValueError:
+        ip = None
+    if ip is not None and (
+        ip.is_loopback
+        or ip.is_private
+        or ip.is_link_local
+        or ip.is_multicast
+        or ip.is_unspecified
+        or ip.is_reserved
+    ):
+        raise ToolError(f"Refusing to fetch private/internal IP: {host}")
+
+    return url
+
+
 class ToolExecutor:
     def __init__(self, workspace: Path, text_editor=None, plugin_registry=None):
         self.workspace = workspace.resolve()
@@ -825,17 +881,25 @@ class ToolExecutor:
 
     def web_fetch(self, url: str):
         try:
+            safe_url = _validate_public_http_url(url)
+        except ToolError as exc:
+            return ToolResult(ok=False, output=str(exc))
+        try:
             import urllib.request
-            req = urllib.request.Request(url, headers={'User-Agent': 'Mozilla/5.0 (AI Computer Agent)'})
+            req = urllib.request.Request(safe_url, headers={'User-Agent': 'Mozilla/5.0 (AI Computer Agent)'})
             with urllib.request.urlopen(req, timeout=10) as response:
-                html = response.read().decode('utf-8')
-            # Extract basic text
+                # Cap body to ~1 MB to avoid blowing memory on adversarial servers
+                raw = response.read(1_000_000)
+            try:
+                html = raw.decode('utf-8')
+            except UnicodeDecodeError:
+                html = raw.decode('utf-8', errors='replace')
             import re
             text = re.sub(r'<script[^>]*>.*?</script>', '', html, flags=re.DOTALL|re.IGNORECASE)
             text = re.sub(r'<style[^>]*>.*?</style>', '', text, flags=re.DOTALL|re.IGNORECASE)
             text = re.sub(r'<[^>]+>', ' ', text)
             text = ' '.join(text.split())
-            return ToolResult(ok=True, output=text[:20000]) # Cap length
+            return ToolResult(ok=True, output=text[:20000])
         except Exception as e:
             return ToolResult(ok=False, output=str(e))
 
@@ -1072,9 +1136,16 @@ class ToolExecutor:
             return ToolResult(ok=False, output=str(e))
 
     def api_call(self, method: str, url: str, headers: dict = None, body: dict = None):
-        import httpx
-        resp = httpx.request(method, url, headers=headers or {}, json=body)
-        return ToolResult(ok=True, output=resp.text)
+        try:
+            safe_url = _validate_public_http_url(url)
+        except ToolError as exc:
+            return ToolResult(ok=False, output=str(exc))
+        try:
+            import httpx
+            resp = httpx.request(method, safe_url, headers=headers or {}, json=body, timeout=15.0)
+            return ToolResult(ok=resp.is_success, output=resp.text[:20000])
+        except Exception as e:
+            return ToolResult(ok=False, output=f"api_call failed: {e}")
 
     _REQUIRED_ARGS: dict = {
         "run_command":    ["command"],

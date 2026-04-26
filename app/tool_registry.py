@@ -40,7 +40,7 @@ TOOL_DESCRIPTIONS = {
     ActionType.screenshot: "screenshot: {} — take a screenshot of the desktop.",
     ActionType.web_search: "web_search: {\"query\": str} — search the web for information.",
     ActionType.web_fetch: "web_fetch: {\"url\": str} — fetch a webpage's content directly.",
-    ActionType.api_call: "api_call: {\"method\": str, \"url\": str, \"headers\": dict, \"data\": str} — make an HTTP API call.",
+    ActionType.api_call: "api_call: {\"method\": str, \"url\": str, \"headers\": dict, \"body\": dict} — make an HTTP(S) API call. Only public http(s) URLs are allowed.",
     ActionType.request_permission: "request_permission: {\"scope\": str, \"reason\": str} — ask user for permission.",
     ActionType.computer: "computer: {\"action\": str, \"x\": int, \"y\": int, \"text\": str, \"keys\": str} — high-level computer action (screenshot, mouse_move, left_click, right_click, double_click, key, type, scroll, cursor_position).",
     ActionType.virtual_input: "virtual_input: {\"action\": str, \"text\": str, \"keys\": str} — alias for high-level isolated input.",
