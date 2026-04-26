@@ -72,6 +72,24 @@ workspace_dir.mkdir(parents=True, exist_ok=True)
 (workspace_dir / "logs").mkdir(parents=True, exist_ok=True)
 task_store_dir = workspace_dir / "tasks"
 task_store_dir.mkdir(parents=True, exist_ok=True)
+
+
+def _cleanup_orphan_tmp_files() -> int:
+    """Remove leftover .tmp atomic-write files from previous crashes."""
+    removed = 0
+    for tmp in task_store_dir.glob(".*.json.*.tmp"):
+        try:
+            tmp.unlink()
+            removed += 1
+        except OSError:
+            pass
+    return removed
+
+
+_orphans_removed = _cleanup_orphan_tmp_files()
+if _orphans_removed:
+    print(f"[AI_Computer] Cleaned up {_orphans_removed} orphaned task tmp file(s).", flush=True)
+
 service = AgentService(workspace_dir, log_emitter=log_emitter)
 
 

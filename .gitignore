@@ -1,12 +1,44 @@
+# Secrets and environment
 .env
+.env.local
+.env.*.local
+*.key
+*.pem
+
+# Python
 __pycache__/
 *.pyc
-workspace/
+*.pyo
+*.pyd
+*.egg-info/
 .pytest_cache/
+.mypy_cache/
+.ruff_cache/
+.venv/
+venv/
+env/
+
+# Project runtime artifacts
+workspace/
 test_workspace/
 chroma_memory/
-*.log
 tasks/*.json
+!tasks/.gitkeep
+*.log
 workspace/logs/
 screenshots/
 tmp/
+logs/
+diagnostics/
+
+# Scratch/debug
+scratch/
+temp_message.txt
+test.txt
+
+# OS / editor
+.DS_Store
+Thumbs.db
+.vscode/
+.idea/
+*.swp
