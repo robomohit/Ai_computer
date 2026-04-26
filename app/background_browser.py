@@ -151,13 +151,13 @@ class BackgroundBrowser:
     # ── screenshot ──────────────────────────────────────────────────────
 
     async def screenshot_b64(self) -> str:
-        """Capture the browser page as a base64-encoded PNG."""
-        raw = await self.page.screenshot(type="png", full_page=False)
+        """Capture the browser page as a base64-encoded JPEG (10x smaller than PNG)."""
+        raw = await self.page.screenshot(type="jpeg", quality=65, full_page=False)
         return base64.b64encode(raw).decode("utf-8")
 
     async def screenshot_bytes(self) -> bytes:
-        """Capture the browser page as raw PNG bytes."""
-        return await self.page.screenshot(type="png", full_page=False)
+        """Capture the browser page as raw JPEG bytes."""
+        return await self.page.screenshot(type="jpeg", quality=65, full_page=False)
 
     # ── DOM interaction (for computer_use mode compatibility) ─────────
 

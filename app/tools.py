@@ -7,6 +7,7 @@ import os
 import base64
 import io
 import shutil
+import re
 from pathlib import Path
 from typing import Any, Awaitable, Callable, Dict, Optional
 import mss
@@ -65,6 +66,17 @@ class ToolExecutor:
         # Whether to run GUI actions in background (cowork) mode
         self._background_mode = True
         self._isolated_hwnd = None
+        self._isolated_app = None
+
+    def _read_text_file(self, path: Path) -> str:
+        """Read text robustly on Windows, preferring UTF-8 but tolerating legacy files."""
+        raw = path.read_bytes()
+        for encoding in ("utf-8", "utf-8-sig", "cp1252", "latin-1"):
+            try:
+                return raw.decode(encoding)
+            except UnicodeDecodeError:
+                continue
+        return raw.decode("utf-8", errors="replace")
 
     def set_background_browser(self, browser):
         """Attach a BackgroundBrowser for sandboxed GUI actions."""
@@ -74,6 +86,16 @@ class ToolExecutor:
         """Set the target HWND for isolated control. None reverts to normal mode."""
         self._isolated_hwnd = hwnd
         self._isolated_app = app_title
+
+    def has_isolated_target(self) -> bool:
+        return bool(self._isolated_hwnd or self._isolated_app)
+
+    def resolve_isolated_hwnd(self) -> Optional[int]:
+        """Resolve the current isolated HWND, re-discovering it by title when possible."""
+        if self._isolated_hwnd and win32gui.IsWindow(self._isolated_hwnd):
+            return self._isolated_hwnd
+        self._isolated_hwnd = self._get_hwnd_for_title(self._isolated_app or "")
+        return self._isolated_hwnd
 
     def _get_hwnd_for_title(self, title: str):
         """Find a window by title within the same process context if possible."""
@@ -133,7 +155,7 @@ class ToolExecutor:
         return ToolResult(ok=True, output=f"Clicked {button} {clicks} times at {x}, {y} (background)")
 
     def mouse_click(self, x: int, y: int, button: str = "left", clicks=1, sw=1280, sh=800):
-        if self._isolated_hwnd:
+        if self.has_isolated_target():
             return self._mouse_click_isolated(x, y, button, clicks, sw, sh)
         import pyautogui
         rx, ry = self._scale(x, y, sw, sh)
@@ -147,13 +169,12 @@ class ToolExecutor:
     def _mouse_click_isolated(self, x: int, y: int, button: str, clicks: int, sw: int, sh: int):
         try:
             # Opus Audit: Auto-discovery & Recovery for Child Windows/Modals
-            if not self._isolated_hwnd or not win32gui.IsWindow(self._isolated_hwnd):
-                 self._isolated_hwnd = self._get_hwnd_for_title(self._isolated_app)
-                 if not self._isolated_hwnd:
-                     return ToolResult(ok=False, output=f"Target window '{self._isolated_app}' lost.")
+            hwnd = self.resolve_isolated_hwnd()
+            if not hwnd:
+                return ToolResult(ok=False, output=f"Target window '{self._isolated_app or 'isolated app'}' not found.")
 
             # Opus Audit: Hung Application Detection
-            if win32gui.IsHungAppWindow(self._isolated_hwnd):
+            if win32gui.IsHungAppWindow(hwnd):
                 return ToolResult(ok=False, output="Target application is frozen/not responding.")
 
             if not (0 <= x <= sw and 0 <= y <= sh):
@@ -165,16 +186,16 @@ class ToolExecutor:
             abs_y = int(y * screen_h / sh)
             
             # Sub-pixel precise conversion for DPI-aware windows
-            client_pt = win32gui.ScreenToClient(self._isolated_hwnd, (abs_x, abs_y))
+            client_pt = win32gui.ScreenToClient(hwnd, (abs_x, abs_y))
             lparam = win32api.MAKELONG(client_pt[0], client_pt[1])
             
             msg_down = win32con.WM_LBUTTONDOWN if button == 'left' else win32con.WM_RBUTTONDOWN
             msg_up = win32con.WM_LBUTTONUP if button == 'left' else win32con.WM_RBUTTONUP
             
             for _ in range(clicks):
-                win32gui.PostMessage(self._isolated_hwnd, msg_down, win32con.MK_LBUTTON if button == 'left' else win32con.MK_RBUTTON, lparam)
+                win32gui.PostMessage(hwnd, msg_down, win32con.MK_LBUTTON if button == 'left' else win32con.MK_RBUTTON, lparam)
                 time.sleep(0.05)
-                win32gui.PostMessage(self._isolated_hwnd, msg_up, 0, lparam)
+                win32gui.PostMessage(hwnd, msg_up, 0, lparam)
                 time.sleep(0.1)
             return ToolResult(ok=True, output=f'Sent {button} click to window (Isolated)')
         except Exception as e:
@@ -183,13 +204,20 @@ class ToolExecutor:
     def _keyboard_type_isolated(self, text: str):
         import win32con  # noqa: F401
         try:
-            err = self._assert_hwnd_responsive(self._isolated_hwnd)
+            hwnd = self.resolve_isolated_hwnd()
+            if not hwnd:
+                return ToolResult(ok=False, output=f"Target window '{self._isolated_app or 'isolated app'}' not found.")
+            err = self._assert_hwnd_responsive(hwnd)
             if err:
                 return ToolResult(ok=False, output=err)
 
+            path_paste = self._maybe_paste_path(text, isolated=True)
+            if path_paste:
+                return path_paste
+
             import win32gui
             for char in text:
-                win32gui.PostMessage(self._isolated_hwnd, win32con.WM_CHAR, ord(char), 0)
+                win32gui.PostMessage(hwnd, win32con.WM_CHAR, ord(char), 0)
                 time.sleep(0.05) # Rate limited for stability
             return ToolResult(ok=True, output='Sent keys to window (Isolated)')
         except Exception as e:
@@ -214,8 +242,11 @@ class ToolExecutor:
         return ToolResult(ok=True, output="Typed text (background)")
 
     def keyboard_type(self, text: str):
-        if self._isolated_hwnd:
+        if self.has_isolated_target():
             return self._keyboard_type_isolated(text)
+        path_paste = self._maybe_paste_path(text, isolated=False)
+        if path_paste:
+            return path_paste
         import pyautogui
         # Slightly randomized human-like typing speed (~40-80ms per char)
         import random
@@ -229,7 +260,7 @@ class ToolExecutor:
         return ToolResult(ok=True, output=f"Pressed hotkey: {keys} (background)")
 
     def key(self, keys: str):
-        if self._isolated_hwnd:
+        if self.has_isolated_target():
             return self._isolated_key(keys)
         import pyautogui
         parts = [p.strip() for p in keys.split("+") if p.strip()]
@@ -264,6 +295,11 @@ class ToolExecutor:
         return ToolResult(ok=True, output=f"Typed text with {delay}s delay (background)")
 
     def type_with_delay(self, text: str, delay: float = 0.05):
+        if self.has_isolated_target():
+            return self._keyboard_type_isolated(text)
+        path_paste = self._maybe_paste_path(text, isolated=False)
+        if path_paste:
+            return path_paste
         import pyautogui
         for char in text:
             pyautogui.write(char)
@@ -277,28 +313,40 @@ class ToolExecutor:
         return ToolResult(ok=True, output="Screenshot captured (background browser)", base64_image=b64)
 
     def screenshot(self):
-        if self._isolated_hwnd:
-            return self._isolated_screenshot()
+        if self.has_isolated_target():
+            hwnd = self.resolve_isolated_hwnd()
+            if hwnd:
+                return self._isolated_screenshot()
         import pyautogui
         screen_w, screen_h = pyautogui.size()
+        cap_w = min(screen_w, 1280)
+        cap_h = min(screen_h, 800)
         with mss.mss() as sct:
-            monitor = {"left": 0, "top": 0, "width": screen_w, "height": screen_h}
+            monitor = {"left": 0, "top": 0, "width": cap_w, "height": cap_h}
             shot = sct.grab(monitor)
             img = Image.frombytes("RGB", shot.size, shot.rgb)
-            buf = io.BytesIO()
-            img.save(buf, format="PNG")
-            b64 = base64.b64encode(buf.getvalue()).decode("utf-8")
-            return ToolResult(ok=True, output="Screenshot captured", base64_image=b64)
+            try:
+                buf = io.BytesIO()
+                img.save(buf, format="JPEG", quality=65, optimize=True)
+                b64 = base64.b64encode(buf.getvalue()).decode("utf-8")
+                return ToolResult(ok=True, output="Screenshot captured", base64_image=b64)
+            finally:
+                img.close()
 
     def _isolated_screenshot(self) -> ToolResult:
         from .providers import _capture_hwnd_screenshot_b64
-        b64 = _capture_hwnd_screenshot_b64(self._isolated_hwnd)
-        return ToolResult(ok=True, output="Isolated screenshot (HWND crop)", base64_image=b64)
+        hwnd = self.resolve_isolated_hwnd()
+        if not hwnd:
+            return ToolResult(ok=False, output=f"Target window '{self._isolated_app or 'isolated app'}' not found.")
+        b64 = _capture_hwnd_screenshot_b64(hwnd)
+        return ToolResult(ok=True, output="Isolated screenshot (PrintWindow)", base64_image=b64)
 
     def _isolated_key(self, keys: str) -> ToolResult:
         """Send a key combo via WM_KEYDOWN/WM_KEYUP to the isolated HWND."""
         import win32api, win32con  # type: ignore  # noqa: F401
-        hwnd = self._isolated_hwnd
+        hwnd = self.resolve_isolated_hwnd()
+        if not hwnd:
+            return ToolResult(ok=False, output=f"Target window '{self._isolated_app or 'isolated app'}' not found.")
         err = self._assert_hwnd_responsive(hwnd)
         if err:
             return ToolResult(ok=False, output=err)
@@ -331,6 +379,47 @@ class ToolExecutor:
             win32api.PostMessage(hwnd, win32con.WM_KEYUP, vk, 0)
             time.sleep(0.02)
         return ToolResult(ok=True, output=f"Isolated key: {keys}")
+
+    def _looks_like_windows_absolute_path(self, text: str) -> bool:
+        candidate = (text or "").strip().strip('"')
+        return bool(re.match(r"^[A-Za-z]:\\", candidate) or candidate.startswith("\\\\"))
+
+    def _paste_via_clipboard(self, text: str, *, isolated: bool) -> Optional[ToolResult]:
+        try:
+            import pyperclip
+        except ImportError:
+            return None
+
+        try:
+            previous = pyperclip.paste()
+        except Exception:
+            previous = None
+
+        try:
+            pyperclip.copy(text)
+            time.sleep(0.05)
+            if isolated:
+                result = self._isolated_key("ctrl+v")
+                if not result.ok:
+                    return result
+            else:
+                import pyautogui
+                pyautogui.hotkey("ctrl", "v")
+            time.sleep(0.05)
+            return ToolResult(ok=True, output="Pasted text via clipboard")
+        except Exception:
+            return None
+        finally:
+            if previous is not None:
+                try:
+                    pyperclip.copy(previous)
+                except Exception:
+                    pass
+
+    def _maybe_paste_path(self, text: str, *, isolated: bool) -> Optional[ToolResult]:
+        if not self._looks_like_windows_absolute_path(text):
+            return None
+        return self._paste_via_clipboard(text, isolated=isolated)
 
     async def _cursor_position_bg(self):
         # Background browser doesn't track cursor in same way
@@ -418,6 +507,30 @@ class ToolExecutor:
         text = pytesseract.image_to_string(img)
         return ToolResult(ok=True, output=text)
 
+    def focus_window(self, title: str) -> ToolResult:
+        """Bring the first visible window whose title contains `title` to the foreground."""
+        try:
+            import win32gui, win32com.client  # type: ignore
+            found: list = []
+
+            def _enum(hwnd, _):
+                if win32gui.IsWindowVisible(hwnd) and title.lower() in win32gui.GetWindowText(hwnd).lower():
+                    found.append(hwnd)
+
+            win32gui.EnumWindows(_enum, None)
+            if not found:
+                return ToolResult(ok=False, output=f"No window with title containing '{title}' found.")
+            hwnd = found[0]
+            # Use shell.AppActivate which bypasses the foreground-lock restriction
+            shell = win32com.client.Dispatch("WScript.Shell")
+            shell.AppActivate(win32gui.GetWindowText(hwnd))
+            import time; time.sleep(0.3)
+            win32gui.SetForegroundWindow(hwnd)
+            actual_title = win32gui.GetWindowText(hwnd)
+            return ToolResult(ok=True, output=f"Focused window: '{actual_title}'")
+        except Exception as e:
+            return ToolResult(ok=False, output=f"focus_window failed: {e}")
+
     def run_command(self, command: str):
         try:
             res = subprocess.run(command, shell=True, capture_output=True, text=True, timeout=120, cwd=self.workspace)
@@ -456,19 +569,41 @@ class ToolExecutor:
             self._bash_cwd = target
             return ToolResult(ok=True, output=f"Changed directory to {target}")
 
+        # ── Detect fire-and-forget GUI launch commands ──
+        # On Windows, `start <app>` / `explorer` / `cmd /c start` launch a GUI process
+        # and the parent cmd.exe may never exit, causing subprocess.run to hang.
+        # For these, use Popen without waiting.
+        import re as _re
+        _stripped_lower = stripped.lower()
+        _is_gui_launch = bool(_re.match(
+            r'^(start\s+\S|explorer\s|cmd\s*/c\s+start|powershell\s+-command\s+"?start)',
+            _stripped_lower
+        ))
+
+        if _is_gui_launch:
+            try:
+                subprocess.Popen(
+                    command, shell=True, cwd=self._bash_cwd,
+                    stdout=subprocess.DEVNULL, stderr=subprocess.DEVNULL,
+                    creationflags=subprocess.DETACHED_PROCESS | subprocess.CREATE_NEW_PROCESS_GROUP,
+                )
+                return ToolResult(ok=True, output=f"Launched (fire-and-forget): {command}\nCWD:\n{self._bash_cwd}")
+            except Exception as e:
+                return ToolResult(ok=False, output=f"Launch failed: {e}")
+
         try:
             res = subprocess.run(
                 command,
                 shell=True,
                 capture_output=True,
                 text=True,
-                timeout=120,
+                timeout=60,
                 cwd=self._bash_cwd,
             )
             output = f"STDOUT:\n{res.stdout}\nSTDERR:\n{res.stderr}\nCWD:\n{self._bash_cwd}"
             return ToolResult(ok=res.returncode == 0, output=output)
         except subprocess.TimeoutExpired:
-            return ToolResult(ok=False, output="Bash command timed out after 120 seconds.")
+            return ToolResult(ok=False, output="Bash command timed out after 60 seconds.")
         except Exception as e:
             return ToolResult(ok=False, output=str(e))
 
@@ -540,7 +675,7 @@ class ToolExecutor:
 
     def read_file(self, path: str):
         p = self._safe_path(path)
-        return ToolResult(ok=True, output=p.read_text())
+        return ToolResult(ok=True, output=self._read_text_file(p))
 
     def write_file(self, path: str, content: str):
         # LLMs often over-escape newlines in JSON strings as literal \n
@@ -694,32 +829,122 @@ class ToolExecutor:
         raise ToolError(f"Unsupported text_editor command: {command}")
 
     def lint_file(self, path: str):
-        """Run a basic syntax check on a file."""
+        """Run a basic syntax check on a file (legacy — prefer lint_code)."""
+        return self.lint_code(path)
+
+    def lint_code(self, path: str):
+        """Run real linters: flake8/mypy for Python, eslint/tsc for JS/TS."""
         import subprocess
         abs_path = (self.workspace / path).resolve()
         if not str(abs_path).startswith(str(self.workspace)):
             return ToolResult(ok=False, output="Access denied: path is outside workspace.")
         if not abs_path.exists():
-            return ToolResult(ok=False, output="File not found")
-        
+            return ToolResult(ok=False, output=f"File not found: {path}")
+
         ext = abs_path.suffix.lower()
-        cmd = []
-        if ext == '.py':
-            cmd = ["python", "-m", "py_compile", str(abs_path)]
-        elif ext in ('.js', '.ts'):
-            cmd = ["node", "--check", str(abs_path)]
-        
-        if not cmd:
-            return ToolResult(ok=True, output="No linter available for this file type.")
-            
+        results = []
+
+        def _run(cmd, label):
+            try:
+                r = subprocess.run(cmd, capture_output=True, text=True, timeout=15, cwd=str(self.workspace))
+                out = (r.stdout + r.stderr).strip()
+                if r.returncode == 0:
+                    results.append(f"[{label}] ✓ clean")
+                else:
+                    results.append(f"[{label}] issues:\n{out[:2000]}")
+                return r.returncode == 0
+            except FileNotFoundError:
+                return None  # tool not installed
+            except Exception as e:
+                results.append(f"[{label}] error: {e}")
+                return False
+
+        if ext == ".py":
+            # Syntax first
+            ok = _run(["python", "-m", "py_compile", str(abs_path)], "syntax")
+            # flake8 style (pyflakes is lighter, likely installed)
+            if _run(["python", "-m", "flake8", "--max-line-length=120", str(abs_path)], "flake8") is None:
+                _run(["python", "-m", "pyflakes", str(abs_path)], "pyflakes")
+            # mypy type check
+            _run(["python", "-m", "mypy", "--ignore-missing-imports", str(abs_path)], "mypy")
+        elif ext in (".js", ".mjs", ".cjs"):
+            _run(["node", "--check", str(abs_path)], "syntax")
+            _run(["npx", "--yes", "eslint", "--no-eslintrc", "-c", "{}", str(abs_path)], "eslint")
+        elif ext in (".ts", ".tsx"):
+            _run(["npx", "--yes", "tsc", "--noEmit", "--allowJs", str(abs_path)], "tsc")
+        else:
+            return ToolResult(ok=True, output=f"No linter configured for {ext} files.")
+
+        ok_all = all("[✓]" in r or "✓ clean" in r for r in results)
+        return ToolResult(ok=ok_all, output="\n".join(results) if results else "No linters ran.")
+
+    def git(self, command: str, args: str = ""):
+        """Run a git command safely inside the workspace."""
+        import subprocess
+        BLOCKED = {"push", "reset --hard", "clean -f", "rm -rf"}
+        cmd_lower = (command + " " + args).strip().lower()
+        for b in BLOCKED:
+            if b in cmd_lower:
+                return ToolResult(ok=False, output=f"Blocked: '{b}' requires explicit user approval.")
+        full_cmd = f"git {command} {args}".strip()
         try:
-            res = subprocess.run(cmd, capture_output=True, text=True, timeout=5)
-            if res.returncode == 0:
-                return ToolResult(ok=True, output="No syntax errors found.")
-            else:
-                return ToolResult(ok=False, output=res.stderr or res.stdout)
+            r = subprocess.run(
+                full_cmd, shell=True, capture_output=True, text=True,
+                timeout=30, cwd=str(self.workspace)
+            )
+            out = (r.stdout + r.stderr).strip()
+            return ToolResult(ok=(r.returncode == 0), output=out or "(no output)")
         except Exception as e:
-            return ToolResult(ok=False, output=f"Linter failed: {str(e)}")
+            return ToolResult(ok=False, output=f"git error: {e}")
+
+    def run_tests(self, command: str = "", path: str = "."):
+        """Run test suite and return structured pass/fail summary."""
+        import subprocess, re
+        cwd = str(self._safe_path(path))
+        # Auto-detect if no command given
+        if not command:
+            if (self.workspace / "pytest.ini").exists() or (self.workspace / "setup.cfg").exists() or (self.workspace / "pyproject.toml").exists():
+                command = "python -m pytest -v --tb=short"
+            elif (self.workspace / "package.json").exists():
+                command = "npm test"
+            elif (self.workspace / "Cargo.toml").exists():
+                command = "cargo test"
+            else:
+                command = "python -m pytest -v --tb=short"
+        try:
+            r = subprocess.run(command, shell=True, capture_output=True, text=True, timeout=120, cwd=cwd)
+            out = (r.stdout + r.stderr).strip()
+            # Parse pytest summary line
+            summary_match = re.search(r"((\d+ passed).*?((\d+ failed).*?)?(\d+ error)?.*?in [\d.]+s)", out)
+            header = f"[{'PASS' if r.returncode == 0 else 'FAIL'}] {summary_match.group(1) if summary_match else ''}"
+            return ToolResult(ok=(r.returncode == 0), output=f"{header}\n\n{out[:4000]}")
+        except subprocess.TimeoutExpired:
+            return ToolResult(ok=False, output="Tests timed out after 120s.")
+        except Exception as e:
+            return ToolResult(ok=False, output=f"Test runner error: {e}")
+
+    def find_symbol(self, symbol: str, path: str = "."):
+        """Find function/class definitions across the codebase."""
+        import re, subprocess
+        patterns = [
+            rf"^\s*(def|class|function|const|let|var|async def)\s+{re.escape(symbol)}\b",
+            rf"(export\s+)?(default\s+)?(function|class)\s+{re.escape(symbol)}\b",
+        ]
+        combined = "|".join(patterns)
+        hits = []
+        for root, _, files in os.walk(self._safe_path(path)):
+            for fname in files:
+                if not fname.endswith(('.py', '.js', '.ts', '.tsx', '.jsx')):
+                    continue
+                fpath = Path(root) / fname
+                try:
+                    for i, line in enumerate(fpath.read_text(errors='ignore').splitlines(), 1):
+                        if re.search(combined, line):
+                            rel = fpath.relative_to(self.workspace) if self.workspace in fpath.parents else fpath
+                            hits.append(f"{rel}:{i}: {line.strip()}")
+                except Exception:
+                    pass
+        return ToolResult(ok=True, output="\n".join(hits) if hits else f"Symbol '{symbol}' not found.")
 
     def computer_action(self, action: str, **kwargs):
         action = action.lower().strip()
@@ -747,6 +972,8 @@ class ToolExecutor:
             return self.cursor_position()
         if action == "wait":
             return self.wait_action(kwargs.get("seconds", 1.0))
+        if action == "focus_window":
+            return self.focus_window(kwargs.get("title", ""))
         raise ToolError(f"Unsupported computer action: {action}")
 
     def list_processes(self):
@@ -785,7 +1012,63 @@ class ToolExecutor:
         resp = httpx.request(method, url, headers=headers or {}, json=body)
         return ToolResult(ok=True, output=resp.text)
 
+    _REQUIRED_ARGS: dict = {
+        "run_command":    ["command"],
+        "bash":           ["command"],
+        "read_file":      ["path"],
+        "write_file":     ["path", "content"],
+        "move_file":      ["source", "destination"],
+        "text_view":      ["path"],
+        "text_create":    ["path", "file_text"],
+        "text_str_replace": ["path", "old_str", "new_str"],
+        "text_insert":    ["path", "insert_line", "new_str"],
+        "text_undo_edit": ["path"],
+        "text_editor":    ["command", "path"],
+        "computer":       ["action"],
+        "mouse_move":     ["x", "y"],
+        "mouse_click":    ["x", "y"],
+        "double_click":   ["x", "y"],
+        "right_click":    ["x", "y"],
+        "middle_click":   ["x", "y"],
+        "left_click_drag":["x", "y"],
+        "keyboard_type":  ["text"],
+        "key_combo":      ["keys"],
+        "hold_key":       ["key"],
+        "type_with_delay":["text"],
+        "find_on_screen": ["image_path"],
+        "set_clipboard":  ["text"],
+        "notify":         ["message"],
+        "api_call":       ["method", "url"],
+        "file_glob":      ["pattern"],
+        "file_grep":      ["pattern"],
+        "web_fetch":      ["url"],
+        "web_search":     ["query"],
+        "kill_process":   ["pid"],
+        "mcp_tool":       ["server_name", "tool_name"],
+        "git":            ["command"],
+        "lint_code":      ["path"],
+        "find_symbol":    ["symbol"],
+    }
+
+    def _validate_action_args(self, action: "Action") -> "Optional[ToolResult]":
+        required = self._REQUIRED_ARGS.get(action.type.value, [])
+        missing = [k for k in required if k not in action.args]
+        if missing:
+            example = ", ".join(f'"{k}": ...' for k in required)
+            return ToolResult(
+                ok=False,
+                output=(
+                    f"Missing required argument(s) {missing} for '{action.type.value}'. "
+                    f"Provide a JSON object like: {{{example}}}"
+                ),
+            )
+        return None
+
     async def run_action(self, action: Action, sw=1280, sh=800, on_stream: Optional[Callable[[Dict[str, Any]], Awaitable[None]]] = None) -> ToolResult:
+        validation_error = self._validate_action_args(action)
+        if validation_error:
+            return validation_error
+
         use_bg = self._background_mode and self._bg_browser and self._bg_browser.is_running
 
         # Background browser handlers for GUI actions
@@ -855,6 +1138,7 @@ class ToolExecutor:
             ActionType.notify: lambda a: self.notify(a.args["message"]),
             ActionType.screenshot: lambda a: self.screenshot(),
             ActionType.cursor_position: lambda a: self.cursor_position(),
+            ActionType.focus_window: lambda a: self.focus_window(a.args.get("title", "")),
             ActionType.wait_action: lambda a: self.wait_action(a.args.get("seconds", 1.0)),
             ActionType.ocr_image: lambda a: self.ocr_image(),
             ActionType.run_command: lambda a: self.run_command(a.args["command"]),
@@ -899,6 +1183,11 @@ class ToolExecutor:
             # request_permission is normally intercepted by the agent, but stub
             # it here so ActionType enum coverage is complete.
             ActionType.request_permission: lambda a: ToolResult(ok=True, output=f"Permission request for '{a.args.get('scope','')}' noted."),
+            # Coding power tools
+            ActionType.git: lambda a: self.git(a.args["command"], a.args.get("args", "")),
+            ActionType.run_tests: lambda a: self.run_tests(a.args.get("command", ""), a.args.get("path", ".")),
+            ActionType.lint_code: lambda a: self.lint_code(a.args["path"]),
+            ActionType.find_symbol: lambda a: self.find_symbol(a.args["symbol"], a.args.get("path", ".")),
         }
         if action.type in handlers:
             try:

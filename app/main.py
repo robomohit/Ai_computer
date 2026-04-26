@@ -160,7 +160,46 @@ def _get_task_record(task_id: str) -> Optional[TaskRecord]:
     return inferred
 
 
+def _task_is_server_running(task_id: str) -> bool:
+    task = service._active_tasks.get(task_id)
+    return bool(task and not task.done())
+
+
+def _serialize_task_record(record: TaskRecord) -> dict:
+    payload = record.model_dump()
+    payload["paused"] = bool(record.paused or record.id in service._paused_tasks)
+    payload["server_running"] = _task_is_server_running(record.id)
+    if payload["server_running"]:
+        payload["status"] = "paused" if payload["paused"] else "running"
+    return payload
+
+
 _tasks = _load_persisted_tasks()
+
+_MAX_IN_MEMORY_TASKS = 200  # keep at most this many completed tasks in _tasks dict
+
+
+def _evict_old_tasks() -> None:
+    """Drop the oldest completed tasks from the in-memory dict when it grows too large.
+
+    TaskRecord objects are small, but the dict still accumulates unboundedly across
+    many runs.  We keep the newest _MAX_IN_MEMORY_TASKS entries so history still works
+    for recent tasks while preventing a slow memory creep over long sessions.
+    """
+    if len(_tasks) <= _MAX_IN_MEMORY_TASKS:
+        return
+    terminal = [
+        (tid, t) for tid, t in _tasks.items()
+        if _is_terminal_status(t.status)
+    ]
+    if not terminal:
+        return
+    # Sort by finished_at ascending so we drop the oldest first
+    terminal.sort(key=lambda x: x[1].finished_at or "")
+    excess = len(_tasks) - _MAX_IN_MEMORY_TASKS
+    for tid, _ in terminal[:excess]:
+        _tasks.pop(tid, None)
+
 
 def _on_complete(task_id: str, status: str, reason: str):
     rec = _tasks.get(task_id)
@@ -169,6 +208,10 @@ def _on_complete(task_id: str, status: str, reason: str):
         rec.finished_at = datetime.now(timezone.utc).isoformat()
         rec.reason = reason
         _save_task_record(rec)
+    # Release per-task in-memory state in the log emitter (seq counter, disk flag)
+    log_emitter.cleanup_task(task_id)
+    # Evict oldest completed tasks to cap the in-memory dict size
+    _evict_old_tasks()
 
 service._on_task_complete = _on_complete
 
@@ -176,7 +219,7 @@ from pydantic import BaseModel, Field
 
 class TaskIn(BaseModel):
     task_id: str
-    goal: str = Field(..., min_length=5, max_length=2000)
+    goal: str = Field(..., min_length=1, max_length=2000)
     model: Optional[str] = None  # None = auto-pick from available keys
     mode: Literal["auto", "coding", "computer", "computer_use", "computer_isolated"] = "auto"
     screen_width: int = 1280
@@ -338,15 +381,8 @@ async def get_all_tasks():
     return {
         "tasks": [
             {
-                "id": t.id,
+                **_serialize_task_record(t),
                 "goal": t.goal or t.context.goal,
-                "status": t.status,
-                "paused": t.paused,
-                "created_at": t.created_at,
-                "finished_at": t.finished_at,
-                "reason": t.reason,
-                "model": t.model,
-                "mode": t.mode,
             }
             for t in ordered
         ]
@@ -368,7 +404,11 @@ async def create_task(body: TaskIn):
     # Auto-pick a model from whatever keys are available when none is specified
     if not body.model:
         if os.environ.get("OPENROUTER_API_KEY"):
-            selected_model = "openrouter/nvidia/nemotron-3-super-120b-a12b:free"
+            # Qwen3-Coder is purpose-built for code; use it for coding mode
+            if (body.mode or "auto") == "coding":
+                selected_model = "openrouter/qwen/qwen3-coder:free"
+            else:
+                selected_model = "openrouter/nvidia/nemotron-3-super-120b-a12b:free"
         elif os.environ.get("ANTHROPIC_API_KEY"):
             selected_model = "claude-3-5-sonnet-20241022"
         elif os.environ.get("OPENAI_API_KEY"):
@@ -428,7 +468,7 @@ async def get_task(task_id: str, credentials: HTTPAuthorizationCredentials = Sec
     record = _get_task_record(task_id)
     if not record:
         raise HTTPException(status_code=404, detail="Task not found")
-    return record
+    return _serialize_task_record(record)
 
 
 @app.delete("/api/tasks/{task_id}", dependencies=[Depends(verify_token)])

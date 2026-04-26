@@ -1,5 +1,6 @@
 from __future__ import annotations
 
+import asyncio
 import base64
 import io
 import json
@@ -177,20 +178,105 @@ _COMPUTER_USE_KEYWORDS = [
     "sign in to", "visit", "webpage",
 ]
 
+_KNOWN_ISOLATED_APPS = {
+    "notepad": "Notepad",
+    "calculator": "Calculator",
+    "calc": "Calculator",
+    "paint": "Paint",
+    "mspaint": "Paint",
+    "wordpad": "WordPad",
+    "word": "Word",
+    "excel": "Excel",
+    "powerpoint": "PowerPoint",
+    "visual studio code": "Visual Studio Code",
+    "vs code": "Visual Studio Code",
+    "vscode": "Visual Studio Code",
+    "code": "Visual Studio Code",
+    "powershell": "PowerShell",
+    "command prompt": "Command Prompt",
+    "cmd": "Command Prompt",
+    "terminal": "Terminal",
+    "file explorer": "File Explorer",
+    "explorer": "File Explorer",
+    "photos": "Photos",
+    "snipping tool": "Snipping Tool",
+}
+
+
+_CHAT_GREETINGS = {
+    "hi", "hey", "hello", "sup", "yo", "hiya", "howdy", "greetings",
+    "hi there", "hey there", "good morning", "good afternoon", "good evening",
+}
+
+_CHAT_PATTERNS = [
+    "how are you", "what are you", "who are you", "what can you do",
+    "what do you do", "tell me about yourself", "what's up", "whats up",
+    "are you", "can you", "do you", "will you", "could you explain",
+    "what is", "what's", "whats", "explain ", "describe ", "why is",
+    "why does", "how does", "what does", "give me an example",
+    "i'm bored", "im bored", "talk to me", "just chatting", "just asking",
+    "thanks", "thank you", "thx", "ty", "cool", "nice", "great", "ok",
+    "okay", "sounds good", "got it", "i see", "interesting",
+]
+
 
 def detect_task_mode(goal: str, explicit_mode: Optional[str] = None) -> str:
-    """Return 'coding', 'computer_use', or 'computer'. If explicit_mode is set, honour it."""
-    if explicit_mode and explicit_mode in ("coding", "computer", "computer_use", "computer_isolated"):
-        return "computer_isolated" if explicit_mode == "computer" else explicit_mode
-    g = goal.lower()
+    """Return 'chat', 'coding', 'computer_use', 'computer', or 'computer_isolated'. If explicit_mode is set, honour it."""
+    if explicit_mode and explicit_mode in ("coding", "auto", "chat", "computer", "computer_use", "computer_isolated"):
+        return explicit_mode  # Always respect the user's explicit mode selection
+
+    g = goal.strip().lower()
+
+    # --- Chat detection ---
+    # Pure greeting (no other content)
+    if g in _CHAT_GREETINGS or g.rstrip("!?.") in _CHAT_GREETINGS:
+        return "chat"
+    # Very short message with no action keywords
+    if len(g.split()) <= 6 and not any(kw in g for kw in _CODING_KEYWORDS + _COMPUTER_KEYWORDS):
+        return "chat"
+    # Starts with a chat pattern
+    if any(g.startswith(p) or g == p.strip() for p in _CHAT_PATTERNS):
+        return "chat"
+
+    # --- Existing mode detection ---
     computer_use_score = sum(1 for kw in _COMPUTER_USE_KEYWORDS if kw in g)
     coding_score = sum(1 for kw in _CODING_KEYWORDS if kw in g)
     computer_score = sum(1 for kw in _COMPUTER_KEYWORDS if kw in g)
     if computer_use_score >= 2 and computer_use_score > coding_score:
         return "computer_use"
     if computer_score >= 2 and computer_score > coding_score:
-        return "computer_isolated"
+        return "computer_isolated" if infer_isolated_app_name(goal) else "computer"
     return "coding"
+
+
+def infer_isolated_app_name(goal: str) -> Optional[str]:
+    """Infer a likely single-app window title from a desktop-control goal."""
+    raw_goal = (goal or "").strip()
+    if not raw_goal:
+        return None
+
+    lowered = raw_goal.lower()
+    for alias, title in _KNOWN_ISOLATED_APPS.items():
+        if re.search(rf"(?<!\w){re.escape(alias)}(?!\w)", lowered):
+            return title
+
+    match = re.search(
+        r"\b(?:open|launch|use|inside|within|in)\s+([A-Za-z][A-Za-z0-9.&()'/-]*(?:\s+[A-Za-z][A-Za-z0-9.&()'/-]*){0,3})",
+        raw_goal,
+        flags=re.IGNORECASE,
+    )
+    if not match:
+        return None
+
+    candidate = match.group(1).strip(" .,!?:;\"'")
+    candidate_lower = candidate.lower()
+    if candidate_lower in {"desktop", "screen", "window", "app", "application", "browser"}:
+        return None
+    if candidate_lower.startswith(("a ", "an ", "the ")):
+        return None
+    if len(candidate.split()) > 4:
+        return None
+    return " ".join(part.capitalize() if part.islower() else part for part in candidate.split())
 
 
 def get_scale_factor(width: int, height: int) -> float:
@@ -209,11 +295,16 @@ def _capture_screenshot_b64(width: int, height: int) -> str:
         monitor = {"left": 0, "top": 0, "width": w, "height": h}
         shot = sct.grab(monitor)
         image = Image.frombytes("RGB", shot.size, shot.rgb)
-        if image.size[0] > w or image.size[1] > h:
-            image.thumbnail((w, h), Image.Resampling.LANCZOS)
-        buf = io.BytesIO()
-        image.save(buf, format="PNG")
-        return base64.b64encode(buf.getvalue()).decode("utf-8")
+        try:
+            if image.size[0] > w or image.size[1] > h:
+                image.thumbnail((w, h), Image.Resampling.LANCZOS)
+            buf = io.BytesIO()
+            # JPEG at quality=65 is ~10-15x smaller than PNG with no visible quality loss
+            # for screenshots. Reduces per-screenshot memory from ~2MB to ~150KB.
+            image.save(buf, format="JPEG", quality=65, optimize=True)
+            return base64.b64encode(buf.getvalue()).decode("utf-8")
+        finally:
+            image.close()  # Explicitly release the PIL buffer immediately
 
 
 def _get_active_window_rect(sw: int, sh: int) -> Optional[Dict[str, Any]]:
@@ -281,19 +372,70 @@ def _get_hwnd_for_title(partial_title: str) -> Optional[int]:
 
 
 def _capture_hwnd_screenshot_b64(hwnd: int) -> str:
-    """Capture a screenshot cropped to the given HWND's screen bounding rect."""
-    import win32gui  # type: ignore
-    rect = win32gui.GetWindowRect(hwnd)
-    left, top, right, bottom = rect
-    w = max(1, min(right - left, 1280))
-    h = max(1, min(bottom - top, 800))
-    with mss.mss() as sct:
-        monitor = {"left": left, "top": top, "width": w, "height": h}
-        shot = sct.grab(monitor)
-        image = Image.frombytes("RGB", shot.size, shot.rgb)
+    """Capture a screenshot of the given HWND via PrintWindow so fullscreen overlays don't block it."""
+    image = _capture_hwnd_image(hwnd)
+    try:
         buf = io.BytesIO()
-        image.save(buf, format="PNG")
+        image.save(buf, format="JPEG", quality=65, optimize=True)
         return base64.b64encode(buf.getvalue()).decode("utf-8")
+    finally:
+        image.close()  # Explicitly release the PIL buffer immediately
+
+
+def _capture_hwnd_image(hwnd: int) -> Image.Image:
+    import ctypes
+    import win32con  # type: ignore
+    import win32gui  # type: ignore
+    import win32ui  # type: ignore
+
+    if not hwnd or not win32gui.IsWindow(hwnd):
+        raise RuntimeError("Target window is not available for capture.")
+
+    left, top, right, bottom = win32gui.GetWindowRect(hwnd)
+    width = max(1, right - left)
+    height = max(1, bottom - top)
+
+    hwnd_dc = win32gui.GetWindowDC(hwnd)
+    if not hwnd_dc:
+        raise RuntimeError("Could not acquire a window device context.")
+
+    src_dc = win32ui.CreateDCFromHandle(hwnd_dc)
+    mem_dc = src_dc.CreateCompatibleDC()
+    bitmap = win32ui.CreateBitmap()
+    bitmap.CreateCompatibleBitmap(src_dc, width, height)
+    mem_dc.SelectObject(bitmap)
+
+    try:
+        pw_render_fullcontent = 0x00000002
+        result = ctypes.windll.user32.PrintWindow(hwnd, mem_dc.GetSafeHdc(), pw_render_fullcontent)
+        if result != 1:
+            result = ctypes.windll.user32.PrintWindow(hwnd, mem_dc.GetSafeHdc(), 0)
+        if result != 1:
+            mem_dc.BitBlt((0, 0), (width, height), src_dc, (0, 0), win32con.SRCCOPY)
+
+        bmp_info = bitmap.GetInfo()
+        bmp_bytes = bitmap.GetBitmapBits(True)
+        raw_image = Image.frombuffer(
+            "RGB",
+            (bmp_info["bmWidth"], bmp_info["bmHeight"]),
+            bmp_bytes,
+            "raw",
+            "BGRX",
+            0,
+            1,
+        )
+        # .copy() breaks the reference to bmp_bytes so it can be freed immediately
+        image = raw_image.copy()
+        raw_image.close()
+        del bmp_bytes  # release the large Win32 bitmap buffer ASAP
+        if image.size[0] > 1280 or image.size[1] > 800:
+            image.thumbnail((1280, 800), Image.Resampling.LANCZOS)
+        return image
+    finally:
+        win32gui.DeleteObject(bitmap.GetHandle())
+        mem_dc.DeleteDC()
+        src_dc.DeleteDC()
+        win32gui.ReleaseDC(hwnd, hwnd_dc)
 
 
 def _sanitize_json_text(text: str) -> str:
@@ -544,7 +686,7 @@ class PlannerProvider:
                     return data["content"][0]["text"]
             except httpx.HTTPStatusError as e:
                 last_err = e
-                if e.response.status_code == 429 or e.response.status_code >= 500:
+                if e.response.status_code in (402, 429) or e.response.status_code >= 500:
                     time.sleep(2 ** attempt)
                     continue
                 raise
@@ -580,7 +722,7 @@ class PlannerProvider:
                     return _extract_chat_message_text(data)
             except httpx.HTTPStatusError as e:
                 last_err = e
-                if e.response.status_code == 429 or e.response.status_code >= 500:
+                if e.response.status_code in (402, 429) or e.response.status_code >= 500:
                     time.sleep(2 ** attempt)
                     continue
                 raise
@@ -589,23 +731,17 @@ class PlannerProvider:
     def _chat_openrouter(self, system: str, prompt: str, screenshot_b64: Optional[str] = None) -> str:
         if not self._openrouter_key:
             raise RuntimeError("OPENROUTER_API_KEY not set")
-            
-        model = self.model.replace("openrouter/", "")
-        is_vision_model = any(x in model.lower() for x in ["vision", "vl", "gemini", "claude", "gpt-4o", "gpt-4-turbo", "pixtral", "llava", "gemma"])
-        
-        # If task has a screenshot but the user selected a non-vision model (e.g. Nemotron),
-        # automatically swap to the preferred vision model.
-        if screenshot_b64 and not is_vision_model:
-            model = "google/gemma-4-31b-it:free"
-            is_vision_model = True
-            
-        models_to_try = [model]
-        # If using the preferred 31B model, set up the 26B as a fallback
-        if model == "google/gemma-4-31b-it:free":
-            models_to_try.append("google/gemma-4-26b-a4b-it:free")
-            
+
+        models_to_try = self._openrouter_models_to_try(
+            self.model.replace("openrouter/", ""), screenshot_b64
+        )
+
         last_err = None
         for current_model in models_to_try:
+            is_vision_model = any(
+                x in current_model.lower()
+                for x in ["vision", "vl", "gemini", "claude", "gpt-4o", "gpt-4-turbo", "pixtral", "llava", "gemma"]
+            )
             content: List[Any] = [{"type": "text", "text": prompt}]
             if screenshot_b64 and is_vision_model:
                 content.insert(0, {"type": "image_url", "image_url": {"url": f"data:image/png;base64,{screenshot_b64}"}})
@@ -642,7 +778,7 @@ class PlannerProvider:
                         return _extract_chat_message_text(resp_json)
                 except httpx.HTTPStatusError as e:
                     last_err = e
-                    if e.response.status_code == 429 or e.response.status_code >= 500:
+                    if e.response.status_code in (402, 429) or e.response.status_code >= 500:
                         time.sleep(2 ** (attempt + 1))
                         continue
                     break # Hard error, stop retrying this model
@@ -650,6 +786,46 @@ class PlannerProvider:
             # If we reach here, this model failed all retries or hit a hard error.
             # The loop will continue to the next model in models_to_try.
         raise last_err
+
+    def _openrouter_models_to_try(self, requested_model: str, screenshot_b64: Optional[str] = None) -> List[str]:
+        """Return an ordered OpenRouter model fallback chain for this request."""
+        model = requested_model
+        is_vision_model = any(
+            x in model.lower()
+            for x in ["vision", "vl", "gemini", "claude", "gpt-4o", "gpt-4-turbo", "pixtral", "llava", "gemma"]
+        )
+
+        # If a screenshot is present and the chosen model is text-only, upgrade to a vision-capable model.
+        if screenshot_b64 and not is_vision_model:
+            model = "google/gemma-4-31b-it:free"
+
+        models_to_try: List[str] = [model]
+
+        # Prefer the 31B Gemma model, but fall back to smaller Gemma then text-only models.
+        if model == "google/gemma-4-31b-it:free":
+            models_to_try.append("google/gemma-4-26b-a4b-it:free")
+            models_to_try.append("meta-llama/llama-3.3-70b-instruct:free")
+            models_to_try.append("nvidia/nemotron-3-super-120b-a12b:free")
+
+        if model == "google/gemma-4-26b-a4b-it:free":
+            models_to_try.append("meta-llama/llama-3.3-70b-instruct:free")
+            models_to_try.append("nvidia/nemotron-3-super-120b-a12b:free")
+
+        # Qwen3-Coder free tier rate-limits aggressively; fall back to Llama then Nemotron.
+        # Note: model has already had "openrouter/" stripped by callers.
+        if model == "qwen/qwen3-coder:free":
+            models_to_try.append("meta-llama/llama-3.3-70b-instruct:free")
+            models_to_try.append("nvidia/nemotron-3-super-120b-a12b:free")
+
+        # Llama free tier also rate-limits; fall back to Nemotron.
+        if model == "meta-llama/llama-3.3-70b-instruct:free":
+            models_to_try.append("nvidia/nemotron-3-super-120b-a12b:free")
+
+        deduped: List[str] = []
+        for candidate in models_to_try:
+            if candidate not in deduped:
+                deduped.append(candidate)
+        return deduped
 
     def _chat_google(self, system: str, prompt: str, screenshot_b64: Optional[str] = None) -> str:
         if not self._google_key:
@@ -679,7 +855,7 @@ class PlannerProvider:
                     return resp.json()["candidates"][0]["content"]["parts"][0]["text"]
             except httpx.HTTPStatusError as e:
                 last_err = e
-                if e.response.status_code == 429 or e.response.status_code >= 500:
+                if e.response.status_code in (402, 429) or e.response.status_code >= 500:
                     time.sleep(2 ** attempt)
                     continue
                 raise
@@ -693,7 +869,7 @@ class PlannerProvider:
         
         content: List[Any] = [{"type": "text", "text": prompt}]
         if screenshot_b64 and ("llava" in model.lower() or "vision" in model.lower()):
-            content.insert(0, {"type": "image_url", "image_url": {"url": f"data:image/png;base64,{screenshot_b64} "}})
+            content.insert(0, {"type": "image_url", "image_url": {"url": f"data:image/png;base64,{screenshot_b64}"}})
             
         messages = [
             {"role": "system", "content": system},
@@ -714,7 +890,7 @@ class PlannerProvider:
                     return _extract_chat_message_text(resp.json())
             except httpx.HTTPStatusError as e:
                 last_err = e
-                if e.response.status_code == 429 or e.response.status_code >= 500:
+                if e.response.status_code in (402, 429) or e.response.status_code >= 500:
                     time.sleep(2 ** attempt)
                     continue
                 raise
@@ -722,7 +898,6 @@ class PlannerProvider:
 
     # Fallback model chain: when a provider 429s, try the next one
     _FALLBACK_MODELS = [
-        "openrouter/nvidia/nemotron-3-super-120b-a12b:free",
         "openrouter/google/gemma-4-31b-it:free",
         "openrouter/meta-llama/llama-3.3-70b-instruct:free",
         "openrouter/qwen/qwen3-coder:free",
@@ -750,8 +925,8 @@ class PlannerProvider:
             # Check if this is a rate-limit (429) or server error (5xx)
             is_retryable = False
             if isinstance(primary_err, httpx.HTTPStatusError):
-                is_retryable = primary_err.response.status_code == 429 or primary_err.response.status_code >= 500
-            elif "rate" in str(primary_err).lower() or "429" in str(primary_err):
+                is_retryable = primary_err.response.status_code in (402, 429) or primary_err.response.status_code >= 500
+            elif "rate" in str(primary_err).lower() or "429" in str(primary_err) or "402" in str(primary_err):
                 is_retryable = True
 
             if not is_retryable or not self._openrouter_key:
@@ -780,11 +955,11 @@ class PlannerProvider:
     async def stream_chat(self, system: str, messages: List[Dict[str, Any]], screenshot_b64: Optional[str] = None):
         """Async generator that streams tokens from OpenRouter/OpenAI."""
         import httpx
-        
+
         # If no key, fallback to standard error
         if not self._openrouter_key and not self._openai_key and not self._groq_key:
              raise RuntimeError("No API key available for streaming (OPENROUTER/OPENAI/GROQ).")
-        
+
         # Determine endpoint and key
         if self._is_openai():
             url = "https://api.openai.com/v1/chat/completions"
@@ -794,43 +969,264 @@ class PlannerProvider:
             url = "https://api.groq.com/openai/v1/chat/completions"
             key = self._groq_key
             model = self.model.replace("groq/", "")
+            models_to_try = [model]
         else: # Default OpenRouter
             url = "https://openrouter.ai/api/v1/chat/completions"
             key = self._openrouter_key
-            model = self.model.replace("openrouter/", "")
+            models_to_try = self._openrouter_models_to_try(
+                self.model.replace("openrouter/", ""), screenshot_b64
+            )
+            model = models_to_try[0]
 
-        formatted_messages = [{"role": "system", "content": system}]
-        for m in messages:
-            if m["role"] == "user" and screenshot_b64 and m == messages[-1]:
-                # Attach screenshot to the latest user message if vision is supported
-                formatted_messages.append({
-                    "role": "user", 
-                    "content": [
-                        {"type": "image_url", "image_url": {"url": f"data:image/png;base64,{screenshot_b64}"}},
-                        {"type": "text", "text": m["content"]}
-                    ]
-                })
-            else:
-                formatted_messages.append({"role": m["role"], "content": [{"type": "text", "text": m["content"]}]})
+        if not self._is_openai() and not self._is_groq():
+            # model already set above
+            pass
+        else:
+            models_to_try = [model]
 
-        payload = {"model": model, "messages": formatted_messages, "stream": True}
+        last_err = None
+        for current_model in models_to_try:
+            is_vision_model = any(
+                x in current_model.lower()
+                for x in ["vision", "vl", "gemini", "claude", "gpt-4o", "gpt-4-turbo", "pixtral", "llava", "gemma"]
+            )
+
+            formatted_messages = [{"role": "system", "content": system}]
+            for m in messages:
+                if m["role"] == "user" and screenshot_b64 and m == messages[-1] and is_vision_model:
+                    # Attach screenshot to the latest user message if vision is supported
+                    formatted_messages.append({
+                        "role": "user",
+                        "content": [
+                            {"type": "image_url", "image_url": {"url": f"data:image/png;base64,{screenshot_b64}"}},
+                            {"type": "text", "text": m["content"]}
+                        ]
+                    })
+                elif m["role"] == "tool":
+                    formatted_messages.append({
+                        "role": "user",
+                        "content": [{"type": "text", "text": f"<observation>\n{m.get('content', '')}\n</observation>"}],
+                    })
+                elif m["role"] == "assistant" and "tool_calls" in m:
+                    tool_xml_parts = []
+                    for tc in m.get("tool_calls", []):
+                        fn = tc.get("function", {}) if isinstance(tc, dict) else {}
+                        name = fn.get("name", "tool_call")
+                        arguments = fn.get("arguments", "{}")
+                        tool_xml_parts.append(
+                            f"<action type=\"{name}\">\n{arguments}\n</action>"
+                        )
+                    assistant_text = "\n".join(
+                        part for part in [m.get("content", "") or "", *tool_xml_parts] if part
+                    )
+                    formatted_messages.append({
+                        "role": "assistant",
+                        "content": [{"type": "text", "text": assistant_text}],
+                    })
+                else:
+                    formatted_messages.append({"role": m["role"], "content": [{"type": "text", "text": m["content"]}]})
+
+            payload = {"model": current_model, "messages": formatted_messages, "stream": True}
+
+            # When OpenRouter already has a model fallback chain, fail over quickly
+            # instead of spending a full backoff ladder on a rate-limited first choice.
+            _retry_delays = [] if len(models_to_try) > 1 else [5, 15, 30]
+            for _attempt, _delay in enumerate([0] + _retry_delays):
+                if _delay:
+                    await asyncio.sleep(_delay)
+                try:
+                    _timeout = httpx.Timeout(connect=15.0, read=90.0, write=30.0, pool=10.0)
+                    async with httpx.AsyncClient(timeout=_timeout) as client:
+                        async with client.stream("POST", url, headers={"Authorization": f"Bearer {key}"}, json=payload) as resp:
+                            if resp.status_code in (402, 429) and _attempt < len(_retry_delays):
+                                continue  # retry same model
+                            resp.raise_for_status()
+                            async for chunk in resp.aiter_lines():
+                                if chunk.startswith("data: "):
+                                    data_str = chunk[6:]
+                                    if data_str.strip() == "[DONE]":
+                                        break
+                                    try:
+                                        data = json.loads(data_str)
+                                        if "choices" in data and len(data["choices"]) > 0:
+                                            delta = data["choices"][0].get("delta", {})
+                                            if "content" in delta and delta["content"]:
+                                                yield delta["content"]
+                                    except json.JSONDecodeError:
+                                        pass
+                    return
+                except httpx.HTTPStatusError as e:
+                    last_err = e
+                    if e.response.status_code in (402, 429) and _attempt < len(_retry_delays):
+                        continue
+                    if e.response.status_code in (402, 429):
+                        break  # move to next model fallback
+                    raise
+
+        if last_err:
+            raise last_err
+
+    async def stream_chat_with_tools(self, system: str, messages: List[Dict[str, Any]], tools: List[Dict[str, Any]], screenshot_b64: Optional[str] = None):
+        """Async generator that streams tool calls via native function calling.
         
-        async with httpx.AsyncClient(timeout=300) as client:
-            async with client.stream("POST", url, headers={"Authorization": f"Bearer {key}"}, json=payload) as resp:
-                resp.raise_for_status()
-                async for chunk in resp.aiter_lines():
-                    if chunk.startswith("data: "):
-                        data_str = chunk[6:]
-                        if data_str.strip() == "[DONE]": 
-                            break
-                        try:
-                            data = json.loads(data_str)
-                            if "choices" in data and len(data["choices"]) > 0:
-                                delta = data["choices"][0].get("delta", {})
-                                if "content" in delta and delta["content"]:
-                                    yield delta["content"]
-                        except json.JSONDecodeError:
-                            pass
+        Yields dicts with structure:
+            {"type": "thought", "content": "..."} — assistant reasoning text
+            {"type": "tool_call", "name": "...", "args": {...}} — structured tool call
+            {"type": "done"} — stream finished
+        """
+        import httpx
+
+        if not self._openrouter_key and not self._openai_key and not self._groq_key:
+            raise RuntimeError("No API key available for streaming (OPENROUTER/OPENAI/GROQ).")
+
+        # Determine endpoint and key
+        if self._is_openai():
+            url = "https://api.openai.com/v1/chat/completions"
+            key = self._openai_key
+            model = self.model
+        elif self._is_groq():
+            url = "https://api.groq.com/openai/v1/chat/completions"
+            key = self._groq_key
+            model = self.model.replace("groq/", "")
+            models_to_try = [model]
+        else:
+            url = "https://openrouter.ai/api/v1/chat/completions"
+            key = self._openrouter_key
+            models_to_try = self._openrouter_models_to_try(
+                self.model.replace("openrouter/", ""), screenshot_b64
+            )
+            model = models_to_try[0]
+
+        if not self._is_openai() and not self._is_groq():
+            pass
+        else:
+            models_to_try = [model]
+
+        last_err = None
+        for current_model in models_to_try:
+            is_vision_model = any(
+                x in current_model.lower()
+                for x in ["vision", "vl", "gemini", "claude", "gpt-4o", "gpt-4-turbo", "pixtral", "llava", "gemma"]
+            )
+
+            formatted_messages = [{"role": "system", "content": system}]
+            for m in messages:
+                if m["role"] == "user" and screenshot_b64 and m == messages[-1] and is_vision_model:
+                    formatted_messages.append({
+                        "role": "user",
+                        "content": [
+                            {"type": "image_url", "image_url": {"url": f"data:image/png;base64,{screenshot_b64}"}},
+                            {"type": "text", "text": m["content"]}
+                        ]
+                    })
+                elif m["role"] == "tool":
+                    # Tool result messages pass through directly
+                    formatted_messages.append(m)
+                elif m["role"] == "assistant" and "tool_calls" in m:
+                    # Preserve tool_calls in assistant messages for multi-turn tool calling
+                    formatted_messages.append({
+                        "role": "assistant",
+                        "content": m.get("content", "") or None,
+                        "tool_calls": m["tool_calls"],
+                    })
+                else:
+                    formatted_messages.append({"role": m["role"], "content": m.get("content", "")})
+
+            payload = {
+                "model": current_model,
+                "messages": formatted_messages,
+                "tools": tools,
+                "stream": True,
+            }
+
+            thought_buffer = ""
+            tool_name = ""
+            tool_args_buffer = ""
+            tool_call_id = ""
+            has_tool_call = False
+
+            # When OpenRouter already has a model fallback chain, fail over quickly
+            # instead of spending a full backoff ladder on a rate-limited first choice.
+            _retry_delays = [] if len(models_to_try) > 1 else [5, 15, 30]
+            for _attempt, _delay in enumerate([0] + _retry_delays):
+                if _delay:
+                    await asyncio.sleep(_delay)
+                try:
+                    _timeout = httpx.Timeout(connect=15.0, read=90.0, write=30.0, pool=10.0)
+                    async with httpx.AsyncClient(timeout=_timeout) as client:
+                        async with client.stream("POST", url, headers={"Authorization": f"Bearer {key}"}, json=payload) as resp:
+                            if resp.status_code in (402, 429) and _attempt < len(_retry_delays):
+                                continue  # retry same model
+                            resp.raise_for_status()
+                            async for chunk in resp.aiter_lines():
+                                if chunk.startswith("data: "):
+                                    data_str = chunk[6:]
+                                    if data_str.strip() == "[DONE]":
+                                        break
+                                    try:
+                                        data = json.loads(data_str)
+                                        if "choices" not in data or not data["choices"]:
+                                            continue
+                                        choice = data["choices"][0]
+                                        delta = choice.get("delta", {})
+                                        finish_reason = choice.get("finish_reason")
+
+                                        # Content (thought/reasoning text)
+                                        if "content" in delta and delta["content"]:
+                                            thought_buffer += delta["content"]
+                                            yield {"type": "thought", "content": delta["content"]}
+
+                                        # Tool calls
+                                        if "tool_calls" in delta:
+                                            has_tool_call = True
+                                            for tc in delta["tool_calls"]:
+                                                if "id" in tc:
+                                                    tool_call_id = tc["id"]
+                                                fn = tc.get("function", {})
+                                                if "name" in fn:
+                                                    tool_name = fn["name"]
+                                                if "arguments" in fn:
+                                                    tool_args_buffer += fn["arguments"]
+
+                                        # Finish
+                                        if finish_reason == "tool_calls" or (finish_reason == "stop" and has_tool_call):
+                                            try:
+                                                args = json.loads(tool_args_buffer) if tool_args_buffer else {}
+                                            except json.JSONDecodeError:
+                                                try:
+                                                    args = json.loads(_sanitize_json_text(tool_args_buffer))
+                                                except:
+                                                    args = {}
+                                            yield {
+                                                "type": "tool_call",
+                                                "id": tool_call_id,
+                                                "name": tool_name,
+                                                "args": args,
+                                                "thought": thought_buffer,
+                                            }
+                                            return
+
+                                        if finish_reason == "stop" and not has_tool_call:
+                                            yield {"type": "text_only", "content": thought_buffer}
+                                            return
+
+                                    except json.JSONDecodeError:
+                                        pass
+                    break
+                except httpx.HTTPStatusError as e:
+                    last_err = e
+                    if e.response.status_code in (402, 429) and _attempt < len(_retry_delays):
+                        continue
+                    if e.response.status_code in (402, 429):
+                        break  # move to next model fallback
+                    raise
+
+        if last_err:
+            raise last_err
+
+        # If we reach here without a tool call, yield what we have
+        if thought_buffer:
+            yield {"type": "text_only", "content": thought_buffer}
 
     def plan_hierarchical(
         self,
@@ -951,6 +1347,7 @@ __all__ = [
     "_get_active_window_rect",
     "_get_hwnd_for_title",
     "_capture_hwnd_screenshot_b64",
+    "infer_isolated_app_name",
     "_extract_json",
     "CODING_SYSTEM_PROMPT",
     "HIERARCHICAL_SYSTEM_PROMPT",

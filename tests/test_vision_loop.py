@@ -24,6 +24,7 @@ def test_capture_screenshot_b64(monkeypatch):
 
     b64 = _capture_screenshot_b64(100, 100)
     data = base64.b64decode(b64)
-    assert data.startswith(b"\x89PNG")
+    # Screenshots are now JPEG (smaller/faster) — JFIF magic bytes
+    assert data[:3] == b"\xff\xd8\xff"
     assert get_scale_factor(1920, 1080) < 1.0
     assert get_scale_factor(800, 600) == 1.0
