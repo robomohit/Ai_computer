@@ -189,7 +189,7 @@ class SubTaskWorker:
 
                 results.append(res.output)
                 actions_taken.append(action.model_dump())
-                self.agent_service.memory.add_action_result(self.task_id, action.id, res.output)
+                await asyncio.to_thread(self.agent_service.memory.add_action_result, self.task_id, action.id, res.output)
                 history.append(f"[{self.worker_id}] Action: {action.type.value} -> {res.output}")
 
                 await self._emit("action_result", {
@@ -235,8 +235,9 @@ class SubTaskWorker:
                                 shot_payload["window_rect"] = window_rect
                         await self._emit("screenshot", shot_payload)
 
-            # Reflection
-            if self.complexity != "atomic":
+            # Reflection — skip when atomic OR all actions succeeded (C4: no extra LLM call on success)
+            _had_failures = self.consecutive_fails > 0 or (bool(results) and not actions_taken[-1].get("ok", True) if actions_taken else False)
+            if self.complexity != "atomic" and _had_failures:
                 reflect_screenshot = None if (is_coding or is_computer_use) else _capture_screenshot_b64(self.screen_width, self.screen_height)
                 reflection = await self.agent_service._run_with_phase_updates(
                     self.task_id,
@@ -285,9 +286,9 @@ class SubTaskWorker:
                     success = retry_reflection.get("success", True)
                     reason = retry_reflection.get("reason", reason)
             else:
-                # Atomic tasks skip reflection
+                # Atomic tasks or all-success subtasks skip reflection
                 success = True
-                reason = "Atomic fast-path success"
+                reason = "Atomic fast-path success" if self.complexity == "atomic" else "Subtask completed successfully."
 
             
             self.sub_task.status = TaskStatus.done if success else TaskStatus.failed
@@ -364,7 +365,7 @@ class AgentService:
         await self._emit(task_id, "reasoning", payload)
 
     async def _run_with_phase_updates(
-        self, task_id: str, waiting_message: str, progress_label: str, fn: Callable[..., Any], *args: Any, timeout: float = 180.0, heartbeat_interval: float = 1.0, **kwargs: Any,
+        self, task_id: str, waiting_message: str, progress_label: str, fn: Callable[..., Any], *args: Any, timeout: float = 180.0, heartbeat_interval: float = 0.05, **kwargs: Any,
     ) -> Any:
         await self._emit(task_id, "status", {"message": waiting_message})
         await self._emit_reasoning(task_id, progress_label, waiting_message, live=True, elapsed_seconds=0)
@@ -446,10 +447,7 @@ class AgentService:
                 if skill:
                     skill_instructions += f"\n{skill.manual}\n"
 
-        await asyncio.sleep(0.3)
-        # Only show the mode init message for computer/browser modes — for chat/coding/auto it's noise
-        if not is_coding_mode:
-            await self._emit(task_id, "status", {"message": f"Initializing {mode} mode...", "elapsed_seconds": 0})
+        await self._emit(task_id, "status", {"message": f"Initializing {mode} mode...", "elapsed_seconds": 0})
 
         try:
             # Setup Browser
@@ -520,10 +518,12 @@ class AgentService:
                 if complexity == "atomic":
                     env_context = f"\n\nWorkspace directory: {self.workspace.absolute()}"
                 else:
+                    await self._emit(task_id, "status", {"message": "Initializing: scanning workspace..."})
                     env_res = self.tools.system_info()
                     env_context = f"\n\nSystem environment:\n{env_res.output}"
                     if _goal_needs_tree:
-                        env_context += _workspace_tree(self.workspace, depth=2)
+                        await self._emit(task_id, "status", {"message": "Initializing: reading workspace tree..."})
+                        env_context += _workspace_tree(self.workspace, depth=1)
 
             
             # No screenshots for coding/chat — only for computer/desktop modes
@@ -536,10 +536,10 @@ class AgentService:
             else:
                 screenshot_b64 = _capture_screenshot_b64(screen_width, screen_height)
 
-            memories = self.memory.search(goal, limit=5)
+            memories = await asyncio.to_thread(self.memory.search, goal, 5)
             mem_context = "\n".join(f"- {m.content}" for m in memories) if memories else None
 
-            if mode in ("coding", "computer", "computer_isolated"):
+            if mode in ("computer", "computer_isolated"):
                 try:
                     if complexity == "atomic":
                         from .providers import _extract_json, _normalize_hierarchical_plan, get_tool_guidance, get_mode_packs
@@ -557,9 +557,9 @@ class AgentService:
                         )
 
                     history: List[str] = []
-                    all_success = True
                     final_reason = ""
-                    for idx, sub_task in enumerate(plan.sub_tasks):
+                    # C8: Run all subtasks in parallel with asyncio.gather (no dependency tracking yet)
+                    async def _run_subtask(idx: int, sub_task: SubTask) -> bool:
                         worker = SubTaskWorker(
                             worker_id=f"worker-{idx + 1}",
                             task_id=task_id,
@@ -570,36 +570,31 @@ class AgentService:
                             complexity=complexity,
                             system_prompt_extension=skill_instructions or None,
                         )
-                        ok = await worker.run(provider, history)
-                        all_success = all_success and ok
-                        final_entries = [entry for entry in history if entry.startswith("[FINAL] ")]
-                        if final_entries:
-                            final_reason = final_entries[-1].replace("[FINAL] ", "", 1).strip()
-                            break
+                        return await worker.run(provider, history)
+
+                    subtask_results = await asyncio.gather(
+                        *(_run_subtask(idx, sub_task) for idx, sub_task in enumerate(plan.sub_tasks)),
+                        return_exceptions=False,
+                    )
+                    all_success = all(subtask_results)
+                    final_entries = [entry for entry in history if entry.startswith("[FINAL] ")]
+                    if final_entries:
+                        final_reason = final_entries[-1].replace("[FINAL] ", "", 1).strip()
 
                     if final_reason:
                         complete = all_success
                         reason = final_reason
-                    elif complexity == "atomic":
-                        complete = all_success
-                        reason = "Atomic task completed." if complete else "Atomic task failed."
                     else:
-                        evaluation = provider.evaluate(
-                            goal,
-                            history,
-                            screenshot_b64,
-                            mode=mode,
-                            system_prompt_extension=skill_instructions or None,
-                        )
-                        complete = bool(evaluation.get("complete", all_success)) and all_success
-                        reason = evaluation.get("reason", "Task complete." if complete else "Task failed.")
+                        # C5: Replace LLM evaluate() call with simple heuristic — saves one round-trip
+                        complete = all_success
+                        reason = "Task complete." if complete else "Task failed."
                     self._finalize(task_id, "done" if complete else "failed", reason)
                     await self._emit(task_id, "done", {
                         "complete": complete,
                         "reason": reason,
                         "finished_at": datetime.now(timezone.utc).isoformat(),
                     })
-                    self.memory.add("task_outcome", f"Goal: {goal} | Outcome: {complete} | Reason: {reason}")
+                    await asyncio.to_thread(self.memory.add, "task_outcome", f"Goal: {goal} | Outcome: {complete} | Reason: {reason}")
                     return
                 except Exception as planning_err:
                     await self._emit(task_id, "status", {"message": f"Structured planning failed; using streaming loop. ({planning_err})"})
@@ -738,7 +733,7 @@ class AgentService:
                 # ── Auto-inject workspace tree when workspace has files ────────
                 auto_context = ""
                 try:
-                    tree = self._workspace_tree(self.tools.workspace, max_depth=3)
+                    tree = _workspace_tree(self.tools.workspace, depth=1)
                     if tree and tree.strip():
                         auto_context = f"\n\nWorkspace:\n{tree}"
                 except Exception:
@@ -789,7 +784,7 @@ class AgentService:
                             # Full desktop
                             screenshot_b64 = _capture_screenshot_b64(screen_width, screen_height)
 
-                    # ── History compression: truncate old observation results ──
+                    # ── History compression: truncate old observation results and assistant tool calls ──
                     if len(messages) > 6:
                         for i in range(1, len(messages) - 4):
                             m = messages[i]
@@ -797,11 +792,34 @@ class AgentService:
                                 messages[i] = {**m, "content": m["content"][:500] + "\n...(truncated)"}
                             elif m["role"] == "user" and "<observation>" in m.get("content", "") and len(m["content"]) > 500:
                                 messages[i] = {**m, "content": m["content"][:500] + "\n...(truncated)</observation>"}
+                            elif m["role"] == "assistant":
+                                if "tool_calls" in m:
+                                    new_tool_calls = []
+                                    for tc in m["tool_calls"]:
+                                        if "function" in tc and "arguments" in tc["function"]:
+                                            args_str = tc["function"]["arguments"]
+                                            if len(args_str) > 500:
+                                                import json as _json
+                                                try:
+                                                    parsed = _json.loads(args_str)
+                                                    for k, v in parsed.items():
+                                                        if isinstance(v, str) and len(v) > 200:
+                                                            parsed[k] = v[:200] + "...(truncated)"
+                                                    tc["function"]["arguments"] = _json.dumps(parsed)
+                                                except Exception:
+                                                    tc["function"]["arguments"] = args_str[:500] + '...{"truncated": true}'
+                                        new_tool_calls.append(tc)
+                                    messages[i] = {**m, "tool_calls": new_tool_calls}
+                                elif len(m.get("content", "")) > 500 and "<action" in m.get("content", ""):
+                                    import re
+                                    truncated_content = re.sub(r'(<action[^>]*>).*?(</action>)', r'\1\n...(truncated args)...\n\2', m["content"], flags=re.DOTALL)
+                                    messages[i] = {**m, "content": truncated_content}
 
                     try:
                         # ── TRY NATIVE TOOL CALLING FIRST ──
                         if use_native_tools:
                             try:
+                                await self._emit(task_id, "status", {"message": f"Thinking: sending request to {model} (step {step+1})..."})
                                 native_stream = self._stream_with_idle_timeout(
                                     provider.stream_chat_with_tools(
                                         system,
@@ -812,7 +830,11 @@ class AgentService:
                                     timeout=MODEL_STREAM_IDLE_TIMEOUT_SECONDS,
                                     stream_name="native tool",
                                 )
+                                _got_first_token = False
                                 async for event in native_stream:
+                                    if not _got_first_token:
+                                        _got_first_token = True
+                                        await self._emit(task_id, "status", {"message": f"Thinking: model responded, parsing step {step+1}..."})
                                     if event["type"] == "thought":
                                         thought_text += event["content"]
                                         await self._emit(task_id, "reasoning", {"stage": f"Step {step+1}", "summary": "Thinking...", "detail": thought_text, "live": True, "elapsed_seconds": _step_elapsed()})
@@ -831,8 +853,7 @@ class AgentService:
                                         })
                                     elif event["type"] == "text_only":
                                         thought_text = event.get("content", "")
-                                        if thought_text:
-                                            await self._emit(task_id, "reasoning", {"stage": f"Step {step+1}", "summary": thought_text[:50]+"...", "detail": thought_text, "live": False, "elapsed_seconds": _step_elapsed()})
+                                        # The card will be finalized at the end of the loop
                             except Exception as e:
                                 _log.warning(f"Native tool calling failed, falling back to XML: {e}")
                                 use_native_tools = False
@@ -848,7 +869,8 @@ class AgentService:
                             in_action = False
                             action_args_json = ""
                             delegate_info = None
-                            
+
+                            await self._emit(task_id, "status", {"message": f"Thinking: sending request to {model} (step {step+1})..."})
                             stream_gen = self._stream_with_idle_timeout(
                                 provider.stream_chat(
                                     xml_system,
@@ -859,7 +881,11 @@ class AgentService:
                                 stream_name="XML",
                             )
                             import re
+                            _got_first_chunk = False
                             async for chunk in stream_gen:
+                                if not _got_first_chunk:
+                                    _got_first_chunk = True
+                                    await self._emit(task_id, "status", {"message": f"Thinking: model responded, parsing step {step+1}..."})
                                 buffer += chunk
                                 if not in_action:
                                     # Stream text before <action> tag regardless of <thought> wrapping
@@ -945,9 +971,9 @@ class AgentService:
                         # Model gave a text-only response — that IS the answer.
                         # Emit as a finalized response card only (no duplicate live card).
                         if thought_text and thought_text.strip():
-                            # Only emit the final card; the live card was already emitted during streaming
+                            # Finalize the current step as a reply rather than creating a duplicate "Response" card
                             await self._emit(task_id, "reasoning", {
-                                "stage": "Response", "summary": thought_text[:80],
+                                "stage": f"Step {step+1}", "summary": thought_text[:80],
                                 "detail": thought_text, "live": False,
                                 "elapsed_seconds": _step_elapsed(), "is_reply": True
                             })
@@ -966,7 +992,7 @@ class AgentService:
 
                     # ── Anti-waste: detect exact duplicate consecutive calls ──
                     _call_key = (action_type, json.dumps(args, sort_keys=True))
-                    if _call_key in _recent_calls and action_type not in ("finish", "bash", "run_tests"):
+                    if _call_key in _recent_calls and action_type not in ("finish", "bash", "run_tests", "run_command"):
                         _cached_obs = f"[Duplicate call skipped] You just called {action_type} with the same arguments. The result was already provided above — use it to proceed."
                         if use_native_tools and tool_call_id:
                             messages.append({"role": "assistant", "content": thought_text, "tool_calls": [{"id": tool_call_id, "type": "function", "function": {"name": action_type, "arguments": json.dumps(args)}}]})
@@ -1003,6 +1029,9 @@ class AgentService:
                         continue
 
                     # Approval handling
+                    # M3: safety.evaluate is also called inside SubTaskWorker.run() but that is a
+                    # different code path (hierarchical plan). The streaming loop here runs only when
+                    # the hierarchical planner is not used or falls back — no double-evaluation occurs.
                     decision = self.safety.evaluate(act, safe_mode=not is_auto_approve)
                     if act.requires_approval or decision.requires_approval:
                         await self._emit(task_id, "approval_required", {
@@ -1016,6 +1045,7 @@ class AgentService:
                             self._finalize(task_id, "cancelled", "Action rejected by user.")
                             return
 
+                    await self._emit(task_id, "status", {"message": f"Executing: {act.type.value} — {str(args)[:60]}"})
                     await self._emit(task_id, "action_start", {
                         "action_id": act.id,
                         "action_type": act.type.value,
@@ -1068,11 +1098,11 @@ class AgentService:
                             post_shot = _capture_screenshot_b64(screen_width, screen_height)
                         if post_shot:
                             await self._emit(task_id, "screenshot", {"data": post_shot, "isolated": bool(isolated_hwnd), "worker_id": "planner"})
-                            screenshot_b64 = post_shot  # use for next step too
+                            del screenshot_b64
+                            screenshot_b64 = post_shot
 
                     # ── Append result to conversation ──
-                    # Coding mode needs more context (test failures, file contents, lint output)
-                    obs_limit = 6000 if is_coding_mode else 2000
+                    obs_limit = 3000 if is_coding_mode else 1000
                     obs_text = res.output[:obs_limit] + ("\n...(truncated)" if len(res.output) > obs_limit else "")
                     if use_native_tools and tool_call_id:
                         messages.append({"role": "assistant", "content": thought_text, "tool_calls": [{"id": tool_call_id, "type": "function", "function": {"name": action_type, "arguments": json.dumps(args)}}]})
@@ -1081,16 +1111,16 @@ class AgentService:
                         messages.append({"role": "assistant", "content": f"<thought>{thought_text}</thought>\n<action type=\"{action_type}\">\n{json.dumps(args)}\n</action>"})
                         messages.append({"role": "user", "content": f"<observation>\n{obs_text}\n</observation>"})
                     
-                    # Update budget
-                    provider._total_input_tokens += len(messages[-1].get("content", "").split()) * 1.3
-                    provider._total_output_tokens += len(thought_text.split()) * 1.3
+                    # Update budget (chars/4 is a better token approximation than word count)
+                    provider._total_input_tokens += len(messages[-1].get("content", "")) // 4
+                    provider._total_output_tokens += len(thought_text) // 4
                     if await self._check_token_budget(task_id, provider, token_budget):
                         return
                     
                     if act.type == AT.finish:
                         self._finalize(task_id, "done", res.output)
                         await self._emit(task_id, "done", {"complete": True, "reason": res.output, "finished_at": datetime.now(timezone.utc).isoformat()})
-                        self.memory.add("task_outcome", f"Goal: {goal} | Outcome: True | Reason: {res.output}")
+                        await asyncio.to_thread(self.memory.add, "task_outcome", f"Goal: {goal} | Outcome: True | Reason: {res.output}")
                         return
 
                 if self.is_killed(task_id):
@@ -1103,7 +1133,7 @@ class AgentService:
                 reason = f"Max steps reached ({max_steps}) without finish action."
                 self._finalize(task_id, "failed", reason)
                 await self._emit(task_id, "done", {"complete": False, "reason": reason, "finished_at": datetime.now(timezone.utc).isoformat()})
-                self.memory.add("task_outcome", f"Goal: {goal} | Outcome: False | Reason: {reason}")
+                await asyncio.to_thread(self.memory.add, "task_outcome", f"Goal: {goal} | Outcome: False | Reason: {reason}")
 
         except asyncio.CancelledError:
             if self.is_killed(task_id):
@@ -1137,6 +1167,10 @@ class AgentService:
 
     def _finalize(self, task_id: str, status: str, reason: str = ""):
         if self._on_task_complete: self._on_task_complete(task_id, status, reason)
+        self._paused_tasks.discard(task_id)
+        self._approvals.pop(task_id, None)
+        self._permission_waits.pop(task_id, None)
+        self._pause_events.pop(task_id, None)
 
     async def _wait_for_approval(self, task_id: str, action_id: str) -> bool:
         fut = self._approvals.setdefault(f"{task_id}:{action_id}", asyncio.Future())
@@ -1221,7 +1255,10 @@ def _summarize_args(action_type: str, args: dict) -> str:
     if action_type in ("read_file", "write_file", "move_file"): return args.get("path") or args.get("src") or ""
     return ""
 
-_SKIP_DIRS = frozenset({'__pycache__', 'node_modules', '.gemini', '.claude', '.git', 'venv', '.venv', 'dist', 'build', '.tempmediaStorage'})
+_SKIP_DIRS = frozenset({'__pycache__', 'node_modules', '.gemini', '.claude', '.git', 'venv', '.venv', 'dist', 'build', '.tempmediaStorage', '.idea', '.vscode', '.cache', 'coverage', '.pytest_cache', 'htmlcov', 'egg-info'})
+
+# M4: Module-level cache for workspace tree (valid for the process lifetime; workspace doesn't change)
+_workspace_tree_cache: dict = {}
 
 def _workspace_tree(root: Path, depth: int = 2) -> str:
     if not root.exists():
