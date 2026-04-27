@@ -869,6 +869,22 @@ class AgentService:
                             # Full desktop
                             screenshot_b64 = _capture_screenshot_b64(screen_width, screen_height)
 
+                    # ── Hard cap on message count: keep system prompt(s) + last
+                    # MAX_TURNS conversation messages. Prevents unbounded growth
+                    # on long-horizon tasks (50+ steps) where even truncated
+                    # entries accumulate token cost.
+                    MAX_TURNS = 30
+                    if len(messages) > MAX_TURNS + 2:
+                        # Keep leading system messages, drop oldest non-system
+                        # until we're back at the cap.
+                        sys_prefix = []
+                        i = 0
+                        while i < len(messages) and messages[i].get("role") == "system":
+                            sys_prefix.append(messages[i])
+                            i += 1
+                        tail = messages[-MAX_TURNS:]
+                        messages = sys_prefix + tail
+
                     # ── History compression: truncate old observation results and assistant tool calls ──
                     if len(messages) > 6:
                         for i in range(1, len(messages) - 4):

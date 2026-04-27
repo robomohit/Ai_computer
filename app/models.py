@@ -86,6 +86,7 @@ class ActionType(str, Enum):
     pixel_color_at = "pixel_color_at"
     diff_files = "diff_files"
     extract_links = "extract_links"
+    todo_write = "todo_write"
 
 
 class Action(BaseModel):

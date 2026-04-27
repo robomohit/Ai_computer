@@ -51,10 +51,11 @@ TOOL_DESCRIPTIONS = {
     ActionType.pixel_color_at: "pixel_color_at: {\"x\": int, \"y\": int} — read the RGB hex color at a desktop pixel. Useful to verify a button state or confirm a UI element painted before clicking.",
     ActionType.diff_files: "diff_files: {\"path_a\": str, \"path_b\": str} — return a unified diff between two files. Use after editing to verify a patch applied correctly without re-reading both files.",
     ActionType.extract_links: "extract_links: {\"url\": str} — fetch a URL and return a structured list of (text, href) pairs. More reliable than scraping links from web_fetch text.",
+    ActionType.todo_write: "todo_write: {\"items\": list} — maintain an explicit task plan across loop iterations. Each item: {content: str, activeForm: str, status: \"pending\"|\"in_progress\"|\"completed\"}. Call this once at task start to lay out steps, and again whenever you finish or add a step. Exactly one item should be in_progress at a time.",
 }
 
 TOOL_PACKS = {
-    "core": [ActionType.system_info, ActionType.finish, ActionType.request_permission],
+    "core": [ActionType.system_info, ActionType.finish, ActionType.request_permission, ActionType.todo_write],
     "filesystem": [ActionType.read_file, ActionType.write_file, ActionType.list_directory, ActionType.move_file, ActionType.file_glob, ActionType.file_grep],
     "terminal": [ActionType.run_command, ActionType.bash, ActionType.git, ActionType.run_tests, ActionType.lint_code, ActionType.find_symbol, ActionType.list_processes, ActionType.kill_process],
     "editing": [ActionType.text_view, ActionType.text_create, ActionType.text_str_replace, ActionType.text_insert, ActionType.text_undo_edit, ActionType.text_editor],

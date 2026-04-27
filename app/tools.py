@@ -1002,6 +1002,59 @@ class ToolExecutor:
                     pass
         return ToolResult(ok=True, output="\n".join(matches) if matches else "No matches found.")
 
+    def todo_write(self, items):
+        """Persist an explicit task plan for this task.
+
+        Stored on the executor instance + mirrored to a small JSON file in the
+        workspace so the agent can survive restarts and the UI can pick it up
+        via a future endpoint. Returns the structured list back as the output.
+        """
+        if not isinstance(items, list):
+            return ToolResult(ok=False, output="todo_write: 'items' must be a list of objects")
+        cleaned = []
+        valid_status = {"pending", "in_progress", "completed"}
+        in_progress_count = 0
+        for raw in items:
+            if not isinstance(raw, dict):
+                return ToolResult(ok=False, output="todo_write: each item must be an object with content/activeForm/status")
+            content = str(raw.get("content", "")).strip()
+            active = str(raw.get("activeForm", "") or content).strip()
+            status = str(raw.get("status", "pending")).strip().lower()
+            if not content:
+                continue
+            if status not in valid_status:
+                status = "pending"
+            if status == "in_progress":
+                in_progress_count += 1
+            cleaned.append({"content": content, "activeForm": active, "status": status})
+        if in_progress_count > 1:
+            # Coerce to one — keep the first in_progress, demote the rest.
+            seen = False
+            for item in cleaned:
+                if item["status"] == "in_progress":
+                    if seen:
+                        item["status"] = "pending"
+                    else:
+                        seen = True
+        # Persist on the executor (per-task) and to disk for observability.
+        try:
+            self._todos = cleaned
+        except Exception:
+            pass
+        try:
+            todos_path = self.workspace / ".agent_todos.json"
+            todos_path.write_text(json.dumps(cleaned, ensure_ascii=False, indent=2), encoding="utf-8")
+        except Exception:
+            pass
+        # Pretty-print summary for the LLM's own next-iteration context.
+        lines = []
+        for item in cleaned:
+            mark = {"completed": "[x]", "in_progress": "[~]", "pending": "[ ]"}.get(item["status"], "[ ]")
+            label = item["activeForm"] if item["status"] == "in_progress" else item["content"]
+            lines.append(f"{mark} {label}")
+        summary = f"Plan ({len(cleaned)} item{'s' if len(cleaned) != 1 else ''}):\n" + "\n".join(lines) if cleaned else "Plan cleared."
+        return ToolResult(ok=True, output=summary, data={"todos": cleaned})
+
     def pixel_color_at(self, x: int, y: int):
         """Read the RGB hex of a single desktop pixel."""
         try:
@@ -1549,6 +1602,7 @@ class ToolExecutor:
             ActionType.pixel_color_at: lambda a: self.pixel_color_at(a.args["x"], a.args["y"]),
             ActionType.diff_files: lambda a: self.diff_files(a.args["path_a"], a.args["path_b"]),
             ActionType.extract_links: lambda a: self.extract_links(a.args["url"]),
+            ActionType.todo_write: lambda a: self.todo_write(a.args.get("items", [])),
         }
         if action.type in handlers:
             try:
