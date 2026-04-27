@@ -51,7 +51,7 @@ TOOL_DESCRIPTIONS = {
     ActionType.pixel_color_at: "pixel_color_at: {\"x\": int, \"y\": int} — read the RGB hex color at a desktop pixel. Useful to verify a button state or confirm a UI element painted before clicking.",
     ActionType.diff_files: "diff_files: {\"path_a\": str, \"path_b\": str} — return a unified diff between two files. Use after editing to verify a patch applied correctly without re-reading both files.",
     ActionType.extract_links: "extract_links: {\"url\": str} — fetch a URL and return a structured list of (text, href) pairs. More reliable than scraping links from web_fetch text.",
-    ActionType.todo_write: "todo_write: {\"items\": list} — maintain an explicit task plan across loop iterations. Each item: {content: str, activeForm: str, status: \"pending\"|\"in_progress\"|\"completed\"}. Call this once at task start to lay out steps, and again whenever you finish or add a step. Exactly one item should be in_progress at a time.",
+    ActionType.todo_write: "todo_write: {\"items\": list} — maintain a task plan across loop iterations. Each item: {content: str, activeForm: str, status: \"pending\"|\"in_progress\"|\"completed\"}. USE ONLY when the task has 3+ genuinely distinct steps that benefit from tracking. SKIP for single-step tasks (\"read X\", \"answer this\", \"run this command\"), trivial 2-step tasks, and pure conversation. Calling this on a simple task wastes a turn. When you do use it, exactly one item is in_progress at a time and update only when status genuinely changes.",
 }
 
 TOOL_PACKS = {

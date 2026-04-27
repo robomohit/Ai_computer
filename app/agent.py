@@ -388,19 +388,24 @@ class AgentService:
         await self._emit(task_id, "reasoning", payload)
 
     async def _run_with_phase_updates(
-        self, task_id: str, waiting_message: str, progress_label: str, fn: Callable[..., Any], *args: Any, timeout: float = 180.0, heartbeat_interval: float = 0.05, **kwargs: Any,
+        self, task_id: str, waiting_message: str, progress_label: str, fn: Callable[..., Any], *args: Any, timeout: float = 180.0, poll_interval: float = 0.1, heartbeat_seconds: float = 1.0, **kwargs: Any,
     ) -> Any:
         await self._emit(task_id, "status", {"message": waiting_message})
         await self._emit_reasoning(task_id, progress_label, waiting_message, live=True, elapsed_seconds=0)
         work = asyncio.create_task(asyncio.to_thread(partial(fn, *args, **kwargs)))
         start = asyncio.get_running_loop().time()
+        last_heartbeat = 0.0
         while not work.done():
-            await asyncio.sleep(heartbeat_interval)
-            elapsed = int(asyncio.get_running_loop().time() - start)
-            if elapsed >= timeout:
+            await asyncio.sleep(poll_interval)
+            now = asyncio.get_running_loop().time() - start
+            if now >= timeout:
                 work.cancel()
                 raise TimeoutError(f"{progress_label} timed out.")
-            await self._emit(task_id, "status", {"message": f"{progress_label}... {elapsed}s", "elapsed_seconds": elapsed, "heartbeat": True})
+            # Emit at most one heartbeat per second so the UI feels alive
+            # without being flooded with 20 status events per second.
+            if now - last_heartbeat >= heartbeat_seconds:
+                last_heartbeat = now
+                await self._emit(task_id, "status", {"message": f"{progress_label}... {int(now)}s", "elapsed_seconds": int(now), "heartbeat": True})
         return await work
 
     async def _stream_with_idle_timeout(
@@ -932,13 +937,40 @@ class AgentService:
                                     stream_name="native tool",
                                 )
                                 _got_first_token = False
+                                # Background heartbeat while we wait for the
+                                # model's first token. Without this the UI sees
+                                # nothing for the full TTFT (5–15s on free
+                                # tiers) and feels frozen. Cancelled the moment
+                                # the first token arrives.
+                                async def _ttft_heartbeat():
+                                    waited = 0
+                                    try:
+                                        while True:
+                                            await asyncio.sleep(1.5)
+                                            waited += 2  # approx; granularity ok
+                                            await self._emit(task_id, "status", {
+                                                "message": f"Thinking… waiting on model (step {step+1}, {waited}s)",
+                                                "elapsed_seconds": waited,
+                                                "heartbeat": True,
+                                            })
+                                    except asyncio.CancelledError:
+                                        return
+                                _ttft_task = asyncio.create_task(_ttft_heartbeat())
+                                # Throttle reasoning emits so a fast token
+                                # stream doesn't flood the SSE channel.
+                                _last_reason_emit = 0.0
+                                _REASON_MIN_INTERVAL = 0.2  # max 5/sec
                                 async for event in native_stream:
                                     if not _got_first_token:
                                         _got_first_token = True
+                                        _ttft_task.cancel()
                                         await self._emit(task_id, "status", {"message": f"Thinking: model responded, parsing step {step+1}..."})
                                     if event["type"] == "thought":
                                         thought_text += event["content"]
-                                        await self._emit(task_id, "reasoning", {"stage": f"Step {step+1}", "summary": "Thinking...", "detail": thought_text, "live": True, "elapsed_seconds": _step_elapsed()})
+                                        _now = asyncio.get_running_loop().time()
+                                        if _now - _last_reason_emit >= _REASON_MIN_INTERVAL:
+                                            _last_reason_emit = _now
+                                            await self._emit(task_id, "reasoning", {"stage": f"Step {step+1}", "summary": "Thinking...", "detail": thought_text, "live": True, "elapsed_seconds": _step_elapsed()})
                                     elif event["type"] == "tool_call":
                                         action_type = event["name"]
                                         args = event.get("args", {})
@@ -959,6 +991,13 @@ class AgentService:
                                 _log.warning(f"Native tool calling failed, falling back to XML: {e}")
                                 use_native_tools = False
                                 await self._emit(task_id, "status", {"message": f"Native tool stream stalled or failed; falling back to XML. ({e})"})
+                            finally:
+                                # Make sure the TTFT heartbeat task can't leak
+                                # if the stream raised before the first token.
+                                try:
+                                    _ttft_task.cancel()
+                                except (NameError, AttributeError):
+                                    pass
                         
                         # ── XML FALLBACK ──
                         if not use_native_tools and action_type is None:

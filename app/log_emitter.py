@@ -1,5 +1,6 @@
 from __future__ import annotations
 import asyncio
+import concurrent.futures
 import logging
 from datetime import datetime, timezone
 from typing import Dict, List
@@ -26,6 +27,12 @@ class LogEmitter:
         self._offsets: Dict[str, List[int]] = {}
         self.log_dir = Path("workspace/logs")
         self.log_dir.mkdir(parents=True, exist_ok=True)
+        # Single-worker pool for disk writes so emit() never blocks the
+        # asyncio event loop on slow/AV-scanned filesystems. One worker is
+        # enough because the loads are tiny and we want strict ordering.
+        self._writer = concurrent.futures.ThreadPoolExecutor(
+            max_workers=1, thread_name_prefix="log-writer"
+        )
 
     def subscribe(self, task_id: str) -> asyncio.Queue:
         q: asyncio.Queue = asyncio.Queue(maxsize=200)
@@ -140,34 +147,55 @@ class LogEmitter:
             **payload,
         }
         self._seqs[task_id] = seq + 1
-        
-        # Persistent logging
-        log_file = self.log_path(task_id)
+
+        # Push to live SSE subscribers FIRST (instant, in-memory) so the UI
+        # sees the event without waiting for any disk work.
+        for q in list(self._queues.get(task_id, [])):
+            try:
+                q.put_nowait(msg)
+            except asyncio.QueueFull:
+                _log.warning("SSE subscriber queue full for task %s — event dropped", task_id)
+
+        # Persistent logging — offloaded to a single background writer thread
+        # so emit() returns immediately. Strict FIFO order is preserved by the
+        # max_workers=1 executor.
         if task_id not in self._disk_logging_disabled:
+            disk_msg = self._sanitize_for_disk(event_type, msg)
+            try:
+                self._writer.submit(self._write_to_disk, task_id, disk_msg)
+            except RuntimeError:
+                # Executor already shut down (e.g. during process exit).
+                pass
+
+    def _write_to_disk(self, task_id: str, disk_msg: dict) -> None:
+        """Append a single event to the persistent log file. Runs on the
+        background writer thread so it never blocks the asyncio loop."""
+        try:
+            log_file = self.log_path(task_id)
+        except ValueError:
+            return
+        if task_id in self._disk_logging_disabled:
+            return
+        try:
             if log_file.exists() and log_file.stat().st_size >= MAX_LOG_FILE_BYTES:
                 self._disk_logging_disabled.add(task_id)
                 truncation_notice = {
                     "type": "status",
                     "task_id": task_id,
-                    "seq": seq,
+                    "seq": disk_msg.get("seq"),
                     "ts": datetime.now(timezone.utc).isoformat(),
                     "message": "Persistent log limit reached; further events omitted to protect disk space.",
                     "persistent_log_truncated": True,
                 }
                 with open(log_file, "a", encoding="utf-8") as f:
                     f.write(json.dumps(truncation_notice) + "\n")
-            else:
-                disk_msg = self._sanitize_for_disk(event_type, msg)
-                with open(log_file, "ab") as f:
-                    byte_offset = f.tell()
-                    self._offsets.setdefault(task_id, []).append(byte_offset)
-                    f.write((json.dumps(disk_msg) + "\n").encode("utf-8"))
-            
-        for q in list(self._queues.get(task_id, [])):
-            try:
-                q.put_nowait(msg)
-            except asyncio.QueueFull:
-                _log.warning("SSE subscriber queue full for task %s — event dropped", task_id)
+                return
+            with open(log_file, "ab") as f:
+                byte_offset = f.tell()
+                self._offsets.setdefault(task_id, []).append(byte_offset)
+                f.write((json.dumps(disk_msg) + "\n").encode("utf-8"))
+        except Exception as exc:
+            _log.warning("Disk log write failed for task %s: %s", task_id, exc)
 
     def cleanup_task(self, task_id: str) -> None:
         """Release in-memory state for a completed/failed task.
