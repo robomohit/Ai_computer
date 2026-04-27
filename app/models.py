@@ -87,6 +87,7 @@ class ActionType(str, Enum):
     diff_files = "diff_files"
     extract_links = "extract_links"
     todo_write = "todo_write"
+    memory_recall = "memory_recall"
 
 
 class Action(BaseModel):

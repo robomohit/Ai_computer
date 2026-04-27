@@ -332,7 +332,7 @@ class AgentService:
         self.permissions = PermissionStore()
         self.plugin_registry = PluginRegistry()
         self.plugin_registry.load_defaults()
-        self.tools = ToolExecutor(self.workspace, plugin_registry=self.plugin_registry, home_dir=self.home_dir)
+        self.tools = ToolExecutor(self.workspace, plugin_registry=self.plugin_registry, home_dir=self.home_dir, memory=self.memory)
         self._task_tools: Dict[str, ToolExecutor] = {}
         self._task_environments: Dict[str, Dict[str, Any]] = {}
         self._active_tasks: dict[str, asyncio.Task] = {}
@@ -351,7 +351,7 @@ class AgentService:
         atexit.register(self._sync_emergency_cleanup)
 
     def _create_task_tools(self, workspace: Path) -> ToolExecutor:
-        return ToolExecutor(workspace, plugin_registry=self.plugin_registry, home_dir=self.home_dir)
+        return ToolExecutor(workspace, plugin_registry=self.plugin_registry, home_dir=self.home_dir, memory=self.memory)
 
     def _assign_task_tools(self, task_id: str, workspace: Path) -> ToolExecutor:
         tools = self._create_task_tools(workspace.resolve())
@@ -627,6 +627,12 @@ class AgentService:
 
             memories = await asyncio.to_thread(self.memory.search, goal, 5)
             mem_context = "\n".join(f"- {m.content}" for m in memories) if memories else None
+            prior_sessions = await asyncio.to_thread(self.memory.recall_sessions, goal, 5)
+            relevant_history_block = (
+                "<relevant_history>\n"
+                + "\n".join(f"- {s.content}" for s in prior_sessions)
+                + "\n</relevant_history>"
+            ) if prior_sessions else ""
 
             if mode in ("computer", "computer_isolated"):
                 try:
@@ -683,7 +689,7 @@ class AgentService:
                         "reason": reason,
                         "finished_at": datetime.now(timezone.utc).isoformat(),
                     })
-                    await asyncio.to_thread(self.memory.add, "task_outcome", f"Goal: {goal} | Outcome: {complete} | Reason: {reason}")
+                    await asyncio.to_thread(self.memory.summarize_session, task_id, goal, complete, reason, mode)
                     return
                 except Exception as planning_err:
                     await self._emit(task_id, "status", {"message": f"Structured planning failed; using streaming loop. ({planning_err})"})
@@ -818,6 +824,9 @@ class AgentService:
                 if skill_instructions:
                     system += f"\n\n{skill_instructions}"
                     xml_system += f"\n\n{skill_instructions}"
+                if relevant_history_block:
+                    system += f"\n\n{relevant_history_block}"
+                    xml_system += f"\n\n{relevant_history_block}"
 
                 # ── Auto-inject workspace tree when workspace has files ────────
                 auto_context = ""
@@ -1291,7 +1300,7 @@ class AgentService:
                     if act.type == AT.finish:
                         self._finalize(task_id, "done", res.output)
                         await self._emit(task_id, "done", {"complete": True, "reason": res.output, "finished_at": datetime.now(timezone.utc).isoformat()})
-                        await asyncio.to_thread(self.memory.add, "task_outcome", f"Goal: {goal} | Outcome: True | Reason: {res.output}")
+                        await asyncio.to_thread(self.memory.summarize_session, task_id, goal, True, res.output, mode)
                         return
 
                 if self.is_killed(task_id):
@@ -1304,7 +1313,7 @@ class AgentService:
                 reason = f"Max steps reached ({max_steps}) without finish action."
                 self._finalize(task_id, "failed", reason)
                 await self._emit(task_id, "done", {"complete": False, "reason": reason, "finished_at": datetime.now(timezone.utc).isoformat()})
-                await asyncio.to_thread(self.memory.add, "task_outcome", f"Goal: {goal} | Outcome: False | Reason: {reason}")
+                await asyncio.to_thread(self.memory.summarize_session, task_id, goal, False, reason, mode)
 
         except asyncio.CancelledError:
             if self.is_killed(task_id):

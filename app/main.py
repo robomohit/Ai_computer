@@ -32,6 +32,8 @@ _lifespan_log = _logging.getLogger(__name__)
 @asynccontextmanager
 async def _lifespan(application):
     from .mcp_manager import mcp_manager
+    from .integrations.telegram import start_telegram
+    from .integrations.discord import start_discord
 
     async def _init_mcp():
         try:
@@ -47,6 +49,8 @@ async def _lifespan(application):
             _lifespan_log.warning("MCP server initialization failed: %s", exc)
 
     asyncio.create_task(_init_mcp())
+    asyncio.create_task(start_telegram(service))
+    asyncio.create_task(start_discord(service))
     yield
     # Shutdown: clean up background browsers
     await service.shutdown()
@@ -433,6 +437,12 @@ async def get_mcp():
             "tools": srv.tools
         })
     return {"servers": servers}
+
+@app.get("/api/mcp/health")
+async def mcp_health():
+    from .mcp_manager import mcp_manager
+    return {"servers": mcp_manager.health(), "ready": mcp_manager._is_ready}
+
 
 @app.post("/api/session")
 async def create_session(response: Response):

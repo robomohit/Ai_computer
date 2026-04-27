@@ -52,10 +52,11 @@ TOOL_DESCRIPTIONS = {
     ActionType.diff_files: "diff_files: {\"path_a\": str, \"path_b\": str} — return a unified diff between two files. Use after editing to verify a patch applied correctly without re-reading both files.",
     ActionType.extract_links: "extract_links: {\"url\": str} — fetch a URL and return a structured list of (text, href) pairs. More reliable than scraping links from web_fetch text.",
     ActionType.todo_write: "todo_write: {\"items\": list} — maintain a task plan across loop iterations. Each item: {content: str, activeForm: str, status: \"pending\"|\"in_progress\"|\"completed\"}. USE ONLY when the task has 3+ genuinely distinct steps that benefit from tracking. SKIP for single-step tasks (\"read X\", \"answer this\", \"run this command\"), trivial 2-step tasks, and pure conversation. Calling this on a simple task wastes a turn. When you do use it, exactly one item is in_progress at a time and update only when status genuinely changes.",
+    ActionType.memory_recall: "memory_recall: {\"query\": str} — search long-term memory for relevant past session summaries. Returns up to 5 semantically similar prior sessions. Use to recall what was done in previous related tasks.",
 }
 
 TOOL_PACKS = {
-    "core": [ActionType.system_info, ActionType.finish, ActionType.request_permission, ActionType.todo_write],
+    "core": [ActionType.system_info, ActionType.finish, ActionType.request_permission, ActionType.todo_write, ActionType.memory_recall],
     "filesystem": [ActionType.read_file, ActionType.write_file, ActionType.list_directory, ActionType.move_file, ActionType.file_glob, ActionType.file_grep],
     "terminal": [ActionType.run_command, ActionType.bash, ActionType.git, ActionType.run_tests, ActionType.lint_code, ActionType.find_symbol, ActionType.list_processes, ActionType.kill_process],
     "editing": [ActionType.text_view, ActionType.text_create, ActionType.text_str_replace, ActionType.text_insert, ActionType.text_undo_edit, ActionType.text_editor],

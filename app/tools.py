@@ -18,6 +18,9 @@ except ImportError:
     pytesseract = None
 
 from .models import Action, ActionType, ToolError, ToolResult
+from typing import TYPE_CHECKING
+if TYPE_CHECKING:
+    from .memory import MemoryStore
 from .providers import get_scale_factor
 
 try:
@@ -128,11 +131,12 @@ def _validate_public_http_url(url: str) -> str:
 
 
 class ToolExecutor:
-    def __init__(self, workspace: Path, text_editor=None, plugin_registry=None, *, home_dir: Optional[Path] = None):
+    def __init__(self, workspace: Path, text_editor=None, plugin_registry=None, *, home_dir: Optional[Path] = None, memory: Optional["MemoryStore"] = None):
         self.workspace = workspace.resolve()
         self.home_dir = (home_dir or Path.home()).expanduser().resolve()
         self.text_editor = text_editor or TextEditorTool(self.workspace, home_dir=self.home_dir)
         self.plugin_registry = plugin_registry
+        self.memory = memory
         self._bash_cwd = self.workspace
         # Background browser for sandboxed GUI — set by AgentService
         self._bg_browser = None
@@ -1055,6 +1059,23 @@ class ToolExecutor:
         summary = f"Plan ({len(cleaned)} item{'s' if len(cleaned) != 1 else ''}):\n" + "\n".join(lines) if cleaned else "Plan cleared."
         return ToolResult(ok=True, output=summary, data={"todos": cleaned})
 
+    def memory_recall(self, query: str) -> ToolResult:
+        """Search long-term memory for relevant past session summaries."""
+        if not query or not query.strip():
+            return ToolResult(ok=False, output="memory_recall: query must not be empty")
+        if self.memory is None:
+            return ToolResult(ok=True, output="memory_recall: no memory store attached to this executor")
+        try:
+            items = self.memory.recall_sessions(query.strip(), n=5)
+            if not items:
+                items = self.memory.search(query.strip(), limit=5)
+            if not items:
+                return ToolResult(ok=True, output="No relevant memories found.")
+            lines = [f"[{i+1}] {item.content}" for i, item in enumerate(items)]
+            return ToolResult(ok=True, output="Relevant past sessions:\n" + "\n".join(lines))
+        except Exception as e:
+            return ToolResult(ok=False, output=f"memory_recall error: {e}")
+
     def pixel_color_at(self, x: int, y: int):
         """Read the RGB hex of a single desktop pixel."""
         try:
@@ -1603,6 +1624,7 @@ class ToolExecutor:
             ActionType.diff_files: lambda a: self.diff_files(a.args["path_a"], a.args["path_b"]),
             ActionType.extract_links: lambda a: self.extract_links(a.args["url"]),
             ActionType.todo_write: lambda a: self.todo_write(a.args.get("items", [])),
+            ActionType.memory_recall: lambda a: self.memory_recall(a.args.get("query", "")),
         }
         if action.type in handlers:
             try:
