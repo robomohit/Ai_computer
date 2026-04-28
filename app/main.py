@@ -444,6 +444,19 @@ async def mcp_health():
     return {"servers": mcp_manager.health(), "ready": mcp_manager._is_ready}
 
 
+@app.get("/api/memory/health")
+async def memory_health():
+    """Counts by kind, short-term session count, last consolidation timestamp."""
+    return service.memory.health()
+
+
+@app.post("/api/memory/consolidate", dependencies=[Depends(verify_token)])
+async def memory_consolidate():
+    """Manually trigger a consolidation pass (merge near-duplicates, prune
+    stale never-recalled summaries). Safe to run repeatedly."""
+    return service.memory.consolidate()
+
+
 @app.post("/api/session")
 async def create_session(response: Response):
     token = secrets.token_urlsafe(32)

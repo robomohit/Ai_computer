@@ -690,6 +690,7 @@ class AgentService:
                         "finished_at": datetime.now(timezone.utc).isoformat(),
                     })
                     await asyncio.to_thread(self.memory.summarize_session, task_id, goal, complete, reason, mode)
+                    await asyncio.to_thread(self.memory.maybe_auto_consolidate)
                     return
                 except Exception as planning_err:
                     await self._emit(task_id, "status", {"message": f"Structured planning failed; using streaming loop. ({planning_err})"})
@@ -1301,6 +1302,7 @@ class AgentService:
                         self._finalize(task_id, "done", res.output)
                         await self._emit(task_id, "done", {"complete": True, "reason": res.output, "finished_at": datetime.now(timezone.utc).isoformat()})
                         await asyncio.to_thread(self.memory.summarize_session, task_id, goal, True, res.output, mode)
+                        await asyncio.to_thread(self.memory.maybe_auto_consolidate)
                         return
 
                 if self.is_killed(task_id):
@@ -1314,6 +1316,7 @@ class AgentService:
                 self._finalize(task_id, "failed", reason)
                 await self._emit(task_id, "done", {"complete": False, "reason": reason, "finished_at": datetime.now(timezone.utc).isoformat()})
                 await asyncio.to_thread(self.memory.summarize_session, task_id, goal, False, reason, mode)
+                await asyncio.to_thread(self.memory.maybe_auto_consolidate)
 
         except asyncio.CancelledError:
             if self.is_killed(task_id):
