@@ -82,3 +82,12 @@ _(Discovery cron will append below. You can seed items manually.)_
 - **Out of scope:** Changing the async write design for production paths; adding flush calls outside the test.
 - **Status:** done
 
+### [IDEA-2026-04-30-08] Fix pre-existing test suite failures exposed by full (non -x) run
+
+- **Source app / link:** `tests/test_security.py:33,60,76`, `tests/test_fast_path.py:49,88`, `tests/test_hierarchical.py:23,44,70`, `tests/test_project_folder_runtime.py:44,86,102`, `tests/test_vision_loop.py:28`, `tests/test_visual_verification.py:20`
+- **Why it fits Ai_computer:** First full non-`-x` suite run (2026-04-30) revealed 12 pre-existing test failures hidden because previous runs stopped at the first failure. These are real bugs: auth endpoints returning 401, routing assertions never true, memory.search result `m.content` access, JPEG magic-byte mismatch, and LogEmitter seek-replay race.
+- **Scope (this PR only):** Fix the authentication failures first (3 tests in `test_security.py` return 401 — likely a test fixture API key env-var propagation issue). After auth is green, triage fast-path routing and hierarchical failures. For the LogEmitter seek-replay test (`test_project_folder_runtime.py:102`): add `emitter.flush()` calls before each `read_log()` — flush() already exists from IDEA-2026-04-29-07.
+- **Acceptance criteria:** All 12 previously-failing tests pass. Full `pytest -q` (no `-x`) is green.
+- **Out of scope:** New feature work; changes to app/safety.py or auth/security middleware beyond what the test fixtures need.
+- **Status:** queued
+
