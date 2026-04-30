@@ -626,11 +626,11 @@ class AgentService:
                 screenshot_b64 = _capture_screenshot_b64(screen_width, screen_height)
 
             memories = await asyncio.to_thread(self.memory.search, goal, 5)
-            mem_context = "\n".join(f"- {m.content}" for m in memories) if memories else None
+            mem_context = "\n".join(f"- {getattr(m, 'content', m)}" for m in memories) if memories else None
             prior_sessions = await asyncio.to_thread(self.memory.recall_sessions, goal, 5)
             relevant_history_block = (
                 "<relevant_history>\n"
-                + "\n".join(f"- {s.content}" for s in prior_sessions)
+                + "\n".join(f"- {getattr(s, 'content', s)}" for s in prior_sessions)
                 + "\n</relevant_history>"
             ) if prior_sessions else ""
 

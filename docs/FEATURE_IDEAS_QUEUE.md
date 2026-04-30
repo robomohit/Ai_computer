@@ -70,9 +70,6 @@ _(Discovery cron will append below. You can seed items manually.)_
 ### [IDEA-2026-04-29-06] Fix memory.search returning strings instead of objects with .content
 
 - **Source app / link:** `app/agent.py:629`, `tests/test_agent.py::test_delegate_parser`
-- **Why it fits Ai_computer:** `self.memory.search()` is returning plain strings but `agent.py:629` calls `.content` on each result, causing `AttributeError` that crashes task execution and fails the test suite. This is a regression that blocks all future automated runs.
-- **Scope (this PR only):** Find where `memory.search` returns results, ensure it returns objects with a `.content` attribute (or update `agent.py:629` to handle plain strings). Fix the same pattern at `agent.py:631` for `recall_sessions`. Re-run `pytest tests/test_agent.py` until green. ~20–40 LOC.
-- **Acceptance criteria:** `pytest -x -q` passes with zero failures; `test_delegate_parser` specifically passes; no changes to test assertions.
-- **Out of scope:** Refactoring the memory layer beyond fixing the return type.
-- **Status:** queued
+- **Resolution:** Made lines 629/633 tolerant of both objects-with-.content and plain strings via `getattr(m, 'content', m)`. Test green.
+- **Status:** done
 
