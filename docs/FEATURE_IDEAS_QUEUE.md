@@ -82,12 +82,62 @@ _(Discovery cron will append below. You can seed items manually.)_
 - **Out of scope:** Changing the async write design for production paths; adding flush calls outside the test.
 - **Status:** done
 
-### [IDEA-2026-04-30-08] Fix pre-existing test suite failures exposed by full (non -x) run
+### [IDEA-2026-04-30-08] Master ticket: 12 pre-existing failures (split into 08a–08f below)
 
-- **Source app / link:** `tests/test_security.py:33,60,76`, `tests/test_fast_path.py:49,88`, `tests/test_hierarchical.py:23,44,70`, `tests/test_project_folder_runtime.py:44,86,102`, `tests/test_vision_loop.py:28`, `tests/test_visual_verification.py:20`
-- **Why it fits Ai_computer:** First full non-`-x` suite run (2026-04-30) revealed 12 pre-existing test failures hidden because previous runs stopped at the first failure. These are real bugs: auth endpoints returning 401, routing assertions never true, memory.search result `m.content` access, JPEG magic-byte mismatch, and LogEmitter seek-replay race.
-- **Scope (this PR only):** Fix the authentication failures first (3 tests in `test_security.py` return 401 — likely a test fixture API key env-var propagation issue). After auth is green, triage fast-path routing and hierarchical failures. For the LogEmitter seek-replay test (`test_project_folder_runtime.py:102`): add `emitter.flush()` calls before each `read_log()` — flush() already exists from IDEA-2026-04-29-07.
-- **Acceptance criteria:** All 12 previously-failing tests pass. Full `pytest -q` (no `-x`) is green.
-- **Out of scope:** New feature work; changes to app/safety.py or auth/security middleware beyond what the test fixtures need.
+- **Source:** First full non-`-x` suite run (2026-04-30) surfaced 12 pre-existing failures hidden by `-x`.
+- **Status:** split (do not work this directly — pick a sub-ticket)
+
+### [IDEA-2026-04-30-08a] Fix LogEmitter seek-replay race in test_project_folder_runtime
+
+- **Source app / link:** `tests/test_project_folder_runtime.py::test_log_emitter_seek_replay_uses_binary_offsets_for_utf8`
+- **Why it fits Ai_computer:** Same async-write race already fixed in IDEA-07. `flush()` exists; this test just needs to call it.
+- **Scope (this PR only):** Add `emitter.flush()` calls before each `read_log()` in this test only. ~3 LOC.
+- **Acceptance criteria:** Target test passes. No other tests change.
+- **Out of scope:** Changing flush() itself or any production code.
+- **Status:** queued
+
+### [IDEA-2026-04-30-08b] Fix auth 401 failures in test_security
+
+- **Source app / link:** `tests/test_security.py:33,60,76`
+- **Why it fits Ai_computer:** Three tests get 401 instead of expected codes — likely a fixture/env-var propagation issue with the API key.
+- **Scope (this PR only):** Investigate the test fixture / `AGENT_API_KEY` propagation. Fix the fixture (or test client setup) so it sends the right auth header. Do NOT modify auth/security middleware itself.
+- **Acceptance criteria:** All 3 target tests pass. No changes to `app/safety.py` or any file with "auth" / "security" / "sandbox" in the name.
+- **Out of scope:** Production auth changes.
+- **Status:** queued
+
+### [IDEA-2026-04-30-08c] Fix hierarchical/memory `.content` AttributeErrors
+
+- **Source app / link:** `tests/test_hierarchical.py:23,44,70`
+- **Why it fits Ai_computer:** Same family as IDEA-06 — code calls `.content` on memory results that may be plain strings under test mocking.
+- **Scope (this PR only):** Find the `.content` access points in the hierarchical code path and apply the same `getattr(x, 'content', x)` defensive pattern used in `agent.py:629/633`.
+- **Acceptance criteria:** All 3 target tests pass. No production behavior change for real (object) memory items.
+- **Out of scope:** Refactoring memory return types.
+- **Status:** queued
+
+### [IDEA-2026-04-30-08d] Fix fast-path routing `call_llm_called` assertion failures
+
+- **Source app / link:** `tests/test_fast_path.py:49,88`
+- **Why it fits Ai_computer:** `call_llm_called` stays False — the routing path that's supposed to invoke the LLM isn't being hit.
+- **Scope (this PR only):** Read the failing tests, trace what routing condition they expect, and fix either the production routing logic or the mock setup (whichever is wrong). Stay strictly inside the fast-path codepath; do not modify provider routing.
+- **Acceptance criteria:** Both target tests pass.
+- **Out of scope:** LLM provider routing layer changes.
+- **Status:** queued
+
+### [IDEA-2026-04-30-08e] Fix JPEG magic-byte / vision-loop screenshot decoding
+
+- **Source app / link:** `tests/test_vision_loop.py:28`, `tests/test_visual_verification.py:20`
+- **Why it fits Ai_computer:** Tests expect base64-decoded payload to start with JPEG magic bytes; currently it doesn't. Likely a fixture using PNG bytes or a wrong encoder.
+- **Scope (this PR only):** Fix whichever side is wrong (the screenshot encoder if it should produce JPEG; or the test if expectations are stale). ~10–30 LOC.
+- **Acceptance criteria:** Both target tests pass.
+- **Out of scope:** Changing the screenshot capture pipeline beyond the encoding format.
+- **Status:** queued
+
+### [IDEA-2026-04-30-08f] Fix remaining project-folder-runtime failures
+
+- **Source app / link:** `tests/test_project_folder_runtime.py:44,86`
+- **Why it fits Ai_computer:** Two failures in this file beyond 08a. Triage after 08a lands.
+- **Scope (this PR only):** Read the two failing tests, identify root cause, fix narrowly.
+- **Acceptance criteria:** Both target tests pass.
+- **Out of scope:** Anything outside `app/project_folder*` or related test fixtures.
 - **Status:** queued
 
