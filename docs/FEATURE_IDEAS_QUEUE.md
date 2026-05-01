@@ -164,7 +164,7 @@ _(Discovery cron will append below. You can seed items manually.)_
 - **Source:** `static/index.html` (run cards), `app/agent.py` SSE event emission
 - **Why it fits Ai_computer:** Today users can't see how many tokens a run consumed or what it cost until after — Cursor/Aider/OpenHands all show this live. Encourages tighter prompts and helps users stay within free-tier limits.
 - **Scope (this PR only):** Emit a new SSE event `usage_update` with `{prompt_tokens, completion_tokens, cost_usd}` after each LLM call. Render a small live-updating badge in the run card ("12.4k tok · $0.03"). Cost = sum across calls; use a hardcoded provider price table in `app/providers.py`.
-- **Acceptance criteria:** Free-tier OpenRouter run shows `$0.00`; paid model shows nonzero. Unit test on the cost calculator. UI smoke verifies badge updates mid-run.
+- **Acceptance criteria:** Free-tier OpenRouter run shows `$0.00 · 23s`; paid model shows nonzero. Unit test on the cost calculator. UI smoke verifies badge updates mid-run.
 - **Out of scope:** Aggregate dashboard, daily/weekly cost rollups, exporting usage data.
 - **Status:** queued
 
@@ -177,3 +177,11 @@ _(Discovery cron will append below. You can seed items manually.)_
 - **Out of scope:** Changing how `mcp_manager` itself initializes.
 - **Status:** queued
 
+### [IDEA-2026-05-01-01] Limit TextEditorTool undo history to prevent unbounded memory growth
+
+- **Source app / link:** `app/text_editor.py:49,67` — `str_replace`/`insert` store entire pre-edit file text in `self._history` per path with no bounds
+- **Why it fits Ai_computer:** Text editor tool is used for file modifications; on large files or long editing sessions, `self._history` can grow unbounded (stores full file text for every edit). This wastes memory and has no practical limit.
+- **Scope (this PR only):** Add a max history limit (e.g., 50 or 100 entries total across all files, or per-file cap of ~10 undo levels). Trim oldest history when limit exceeded. ~10–15 LOC in `text_editor.py`.
+- **Acceptance criteria:** After exceeding the limit, oldest history entries are dropped; `undo_edit` still works for recent edits. Unit test verifies cap is enforced. No change to external API or behavior for within-limit cases.
+- **Out of scope:** Changing undo semantics, adding redo support, or persisting history across restarts.
+- **Status:** queued
