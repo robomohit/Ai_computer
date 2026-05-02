@@ -178,3 +178,48 @@ _(Discovery cron will append below. You can seed items manually.)_
 - **Acceptance criteria:** Page load shows coloured provider chips. Grey chip visible when OPENROUTER_API_KEY is unset. No regression on existing Playwright smoke test.
 - **Out of scope:** Alert banners, tooltip explanations, keyboard accessibility.
 - **Status:** queued
+
+### [IDEA-2026-05-02-02] Auto-resize composer textarea (grow with content, max 8 lines)
+
+- **Source app / link:** `static/index.html:2674` — `<textarea id="input">` is fixed-height
+- **Why it fits Ai_computer:** Every modern agent UI (Cursor, Aider, ChatGPT, Claude.ai) auto-grows the input as the user types and shrinks back when cleared. Currently you have to scroll inside a tiny box for multi-line goals. Big ergonomics win, low risk.
+- **Scope (this PR only):** Add an `input` event listener on `#input` that sets `style.height = 'auto'` then `style.height = el.scrollHeight + 'px'`, capped at 8 line-heights. Reset on send. ~15 LOC inline JS + 3 LOC CSS for `min-height` and `max-height`. No HTML structure change.
+- **Acceptance criteria:** Typing 5 lines shows all 5 lines without inner scrollbar. Typing 20 lines hits the 8-line cap and starts inner-scrolling. Sending the task resets to single-line height. No regression in existing keyboard shortcuts.
+- **Out of scope:** Markdown preview, syntax highlighting, file attachment.
+- **Status:** queued
+
+### [IDEA-2026-05-02-03] Toast confirmation when copying log to clipboard
+
+- **Source app / link:** `static/index.html:4345` — `navigator.clipboard.writeText(...)` runs silently
+- **Why it fits Ai_computer:** The toast system already exists (line 2109). Copy-to-clipboard currently provides zero feedback — users click and have no idea if it worked, often clicking again and overwriting their own clipboard accidentally.
+- **Scope (this PR only):** After the existing `navigator.clipboard.writeText` call succeeds, dispatch an info-level toast: "Log copied (N events)." Wrap in try/catch so a clipboard failure shows an error toast instead. ~8 LOC. Reuse existing `showToast(msg, type)` helper.
+- **Acceptance criteria:** Clicking the copy-log button shows a green checkmark toast with the event count. Disabling clipboard permissions in devtools and clicking shows an error toast. Existing test for log download (if any) still passes.
+- **Out of scope:** Adding copy buttons elsewhere; refactoring the toast system.
+- **Status:** queued
+
+### [IDEA-2026-05-02-04] Empty state for run history list
+
+- **Source app / link:** `static/index.html:2578` — `<input id="history-search">` exists but no visible empty state when zero tasks have run
+- **Why it fits Ai_computer:** First-time users (or after `_tasks` eviction lands in IDEA-13) see a search bar pointing at nothing. Industry standard is a friendly empty state — Aider, Continue, OpenHands all do this. Reduces "is it broken?" confusion.
+- **Scope (this PR only):** When the history list is empty, render a small placeholder block: muted text "No tasks yet — describe one above to get started" + a subtle icon (use existing brand-mark or an inline SVG). Hides the moment a task is added. ~20 LOC HTML + CSS. No JS state changes; just toggle visibility based on existing list-empty check.
+- **Acceptance criteria:** Fresh page load with no tasks shows the empty state. Submitting a task hides it. Light + dark theme both render readably.
+- **Out of scope:** Onboarding tour, persistent dismissal, illustrated graphics.
+- **Status:** queued
+
+### [IDEA-2026-05-02-05] Keyboard shortcut help overlay (`?` to open)
+
+- **Source app / link:** `static/index.html:4760` — many shortcuts exist (Ctrl+K, Enter, Esc, Space) but no discovery surface
+- **Why it fits Ai_computer:** README documents 5 shortcuts; the UI shows none of them centrally. The `mini-chip` items in the composer hint at 2 (`↵`, `⇧↵`) but the rest are invisible. Power users in similar tools (Linear, GitHub, Notion) all use `?` to open a shortcut cheatsheet.
+- **Scope (this PR only):** Add a `?` global keydown handler (skip if focus is in input/textarea) that opens an existing-pattern modal listing all current shortcuts. Reuse the cmdk-overlay or tweaks-modal styling for consistency. Static HTML — no backend, no state. ~50 LOC HTML + 10 LOC JS. Press `?` or `Esc` to close.
+- **Acceptance criteria:** Pressing `?` outside an input opens the overlay. Pressing `?` while typing in the composer inserts a literal `?` (no overlay). All 5 shortcuts from README are listed with their keybindings.
+- **Out of scope:** Customizing shortcuts, recording new ones, exporting to PDF.
+- **Status:** queued
+
+### [IDEA-2026-05-02-06] Light theme audit pass
+
+- **Source app / link:** `static/index.html:97` light-theme block; comparison vs dark-theme block at line 56
+- **Why it fits Ai_computer:** Dark theme has ~2× the per-component overrides as light (greppable: `[data-theme='dark']` appears 40+ times, `[data-theme='light']` appears ~25). The light theme is likely visually janky in spots — low contrast on muted text, wrong accent shade on hover, etc. No bug reports because nobody uses light. But a quick audit + fixes would make the toggle worth using.
+- **Scope (this PR only):** Run a light-theme manual audit: load each major surface (sidebar, run card, command palette, tweaks modal, composer, action log, history list) with `data-theme='light'` and screenshot. File any visual issue ≥ minor as bullet points in this IDEA's resolution. Then fix the top 3 issues found, capped at 50 LOC of CSS-only changes. No new design system work.
+- **Acceptance criteria:** Resolution section enumerates ≥3 specific fixes (file:line). Light theme has no missing-text or unreadable-contrast surfaces. Dark theme unchanged.
+- **Out of scope:** Adding new themes, redesigning the palette, system-theme auto-detection.
+- **Status:** queued
