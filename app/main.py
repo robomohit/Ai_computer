@@ -438,6 +438,29 @@ async def health():
         "active_tasks": sum(1 for t in _tasks.values() if t.status in ("pending", "running")),
     }
 
+_HEALTHZ_PROVIDERS = {
+    "openrouter": "OPENROUTER_API_KEY",
+    "anthropic": "ANTHROPIC_API_KEY",
+    "openai": "OPENAI_API_KEY",
+    "google": "GOOGLE_API_KEY",
+    "groq": "GROQ_API_KEY",
+}
+_healthz_cache: dict = {"ts": 0.0, "result": None}
+
+@app.get("/healthz")
+async def healthz():
+    """Provider key status check, cached 30s."""
+    if time.time() - _healthz_cache["ts"] < 30 and _healthz_cache["result"] is not None:
+        return _healthz_cache["result"]
+    providers = {
+        name: ("ok" if os.environ.get(env_var) else "missing_key")
+        for name, env_var in _HEALTHZ_PROVIDERS.items()
+    }
+    result = {"server": "ok", "providers": providers}
+    _healthz_cache["ts"] = time.time()
+    _healthz_cache["result"] = result
+    return result
+
 @app.get("/api/skills")
 async def get_skills():
     return {"skills": skill_manager.get_all_skills()}

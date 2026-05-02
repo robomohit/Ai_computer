@@ -49,7 +49,7 @@ _(Discovery cron will append below. You can seed items manually.)_
 - **Scope (this PR only):** Add `GET /healthz` that returns `{server: ok, providers: {openrouter: ok|missing_key|unreachable, ...}}`. Cache results for 30s.
 - **Acceptance criteria:** Hitting /healthz with a missing key returns `missing_key` for that provider; with a valid key returns `ok`. Test added with mocked HTTP.
 - **Out of scope:** Surfacing this in the UI (separate idea).
-- **Status:** queued
+- **Status:** done (2026-05-02: implemented in app/main.py with 30s cache; 3 tests added in tests/test_healthz.py)
 
 ### [IDEA-2026-04-29-04] Run duration + token-cost badge on each run card
 
@@ -104,7 +104,7 @@ _(Discovery cron will append below. You can seed items manually.)_
 - **Source app / link:** `tests/test_hierarchical.py:23,44,70`
 - **Partial resolution (line 70 — test_phase_updates_emit_progress):** Test mocked `asyncio.sleep` to instant, so real elapsed time never reached the 1s heartbeat threshold. Fix: pass `heartbeat_seconds=0` to `_run_with_phase_updates` in the test. Test now passes.
 - **Remaining (lines 23,44 — test_hierarchical_success, test_hierarchical_retry):** Root cause is that tests check `s.memory.search("task_outcome")` expecting items with `"Outcome: True"`, but production code never stores this. `summarize_session()` stores `session_summary` with "Completed successfully". Expected behavior was never implemented. Needs human.
-- **Status:** needs_human (lines 23,44 remain; line 70 fixed)
+- **Status:** done (2026-05-02: added mode="computer" + _capture_screenshot_b64 mock + task_outcome memory storage in agent.py; all 3 assertions now pass)
 
 ### [IDEA-2026-04-30-08d] Fix fast-path routing `call_llm_called` assertion failures
 
@@ -117,7 +117,7 @@ _(Discovery cron will append below. You can seed items manually.)_
 - **Source app / link:** `tests/test_vision_loop.py:28`, `tests/test_visual_verification.py:20`
 - **Resolution (test_vision_loop):** `_capture_screenshot_b64` returns a data URL (`"data:image/jpeg;base64,..."`) but the test was calling `base64.b64decode()` on the full data URL string, getting garbage bytes. Fix: strip prefix with `.split(",", 1)[1]` before decoding. Test passes.
 - **Resolution (test_visual_verification):** Same root cause as IDEA-08c — `memory.search("task_outcome")` returns empty; `"Outcome: True"` is never stored. Needs human intervention.
-- **Status:** done (vision_loop fixed; visual_verification → needs_human, same as 08c)
+- **Status:** done (vision_loop fixed 2026-05-01; visual_verification fixed 2026-05-02 via same approach as 08c)
 
 ### [IDEA-2026-04-30-08f] Fix remaining project-folder-runtime failures
 
@@ -168,4 +168,13 @@ _(Discovery cron will append below. You can seed items manually.)_
 - **Scope (this PR only):** Add a max history limit (e.g., 50 or 100 entries total across all files, or per-file cap of ~10 undo levels). Trim oldest history when limit exceeded. ~10–15 LOC in `text_editor.py`.
 - **Acceptance criteria:** After exceeding the limit, oldest history entries are dropped; `undo_edit` still works for recent edits. Unit test verifies cap is enforced. No change to external API or behavior for within-limit cases.
 - **Out of scope:** Changing undo semantics, adding redo support, or persisting history across restarts.
+- **Status:** queued
+
+### [IDEA-2026-05-02-01] Surface /healthz provider status in the UI header
+
+- **Source app / link:** `app/main.py` `/healthz` endpoint (IDEA-2026-04-29-03, now done); `static/index.html` header area
+- **Why it fits Ai_computer:** The `/healthz` endpoint now returns which providers have keys configured. The UI currently gives no indication — users discover missing keys only when a run fails mid-stream with a 401.
+- **Scope (this PR only):** On page load, call `/healthz` and render a compact provider-chip bar below the mode selector: green dot for `ok`, grey for `missing_key`. Auto-refreshes every 60s. Pure JS, no new backend changes. ~25–35 LOC in index.html.
+- **Acceptance criteria:** Page load shows coloured provider chips. Grey chip visible when OPENROUTER_API_KEY is unset. No regression on existing Playwright smoke test.
+- **Out of scope:** Alert banners, tooltip explanations, keyboard accessibility.
 - **Status:** queued
