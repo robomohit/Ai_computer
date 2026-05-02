@@ -1,57 +1,88 @@
-# PM Brief — 2026-04-30 (overnight run)
+# PM Brief — 2026-05-01 (morning run)
 
-**Starting commit:** 3c56b8e  →  **Ending commit:** 61a5668
-**Run duration:** ~20 minutes
-**Run type:** repair
+**Starting commit:** 1773ec2  →  **Ending commit:** 3526ba1
+**Run duration:** ~90 minutes (bulk of time: fast_path tests take 5 min each due to real agent loop)
+**Run type:** repair (mixed)
+**LOC budget used:** 11/200
 
 ## What I did
 
-- Synced `feature/new-updates` — already up to date at 3c56b8e.
-- Read PM_NOTES and queue; identified IDEA-2026-04-29-07 as the target baseline repair.
-- Ran `pytest -x -q` — 1 failure: `test_persistent_logs_omit_raw_screenshot_payload` (same as previous runs).
-- Applied IDEA-2026-04-29-07: added `flush()` method to `LogEmitter` (`app/log_emitter.py`) that submits a no-op sentinel to the single-worker executor and blocks on `.result()`, guaranteeing all prior background writes have completed before returning. Called `emitter.flush()` in `test_persistent_logs_omit_raw_screenshot_payload` between `emit()` and `read_log()`.
-- Ran full `pytest -q` (without `-x`) to verify — this was the first full non-stopping suite run; it exposed 12 additional pre-existing failures hidden by previous `-x` usage.
-- Confirmed all 12 additional failures are pre-existing and unrelated to my change (auth 401s, routing assertions, JPEG format mismatch, memory.search `.content` access).
-- Filed IDEA-2026-04-30-08 documenting all 12 pre-existing failures for the next run to triage.
+- Synced `feature/new-updates` — already up to date at 1773ec2 (openclaw discovery commit).
+- Read last 5 PM_NOTES entries, full queue, and this morning's RESEARCH_NOTES section.
+- Ran full `pytest -q` — 13 failed, 72 passed (same as prior run; no new regressions).
+- Repaired 10 of 13 failures across 5 sub-tickets (08a, 08b, 08c-partial, 08d, 08e-partial, 08f).
+- Marked 2 sub-tickets `needs_human` (08c lines 23/44, 08e visual_verification) — root cause is tests checking for behavior (`"Outcome: True"` in memory) that was never implemented.
+- Updated queue status for all 08x sub-tickets.
 
 ## Tests
 
-- Unit/integration: **72 passed, 13 failed, 1 skipped** (full suite, 429s) — 12 failures are pre-existing; 1 failure (the targeted test) is now fixed
-- The targeted test `test_persistent_logs_omit_raw_screenshot_payload`: **PASSED** ✓
-- UI smoke: **skipped** — suite is still red on pre-existing failures; no queue item targets them
+- Unit/integration (excluding fast_path): **80 passed, 3 failed, 1 skipped** in 4m — down from 72p/13f last run
+- fast_path (separately verified): **2 passed** in 5m
+- Full suite effective total: **82 passed, 3 failed, 1 skipped**
+- UI smoke: skipped (3 needs_human failures remain; not blocking per rules — all known)
+
+## Repaired
+
+- **IDEA-08a:** `emitter.flush()` before `read_log()` in seek-replay test (1 LOC)
+- **IDEA-08b:** `monkeypatch.setattr(m, "API_KEY", "token123")` in `test_security._client()` — root cause: `load_dotenv(override=True)` in `main.py:3` clobbers monkeypatched env var during `importlib.reload()`. All 7 security tests now pass. (1 LOC)
+- **IDEA-08c (partial):** `heartbeat_seconds=0` in `_run_with_phase_updates` test call — heartbeat never fired because mocked `asyncio.sleep` prevented real clock from advancing past 1s threshold. (1 LOC)
+- **IDEA-08d:** Added `mode="computer"` + mocked `_capture_screenshot_b64` in both fast_path tests — hierarchical routing block only activates for computer modes, not default "coding". (4 LOC)
+- **IDEA-08e (partial):** Stripped data URL prefix before `base64.b64decode()` in `test_vision_loop` — `_capture_screenshot_b64` returns a `"data:image/jpeg;base64,..."` URL, not raw base64. (2 LOC)
+- **IDEA-08f:** Same `m.API_KEY` patch in `test_project_folder_runtime._client()` — same load_dotenv root cause as 08b. Both project-folder tests now pass. (1 LOC)
 
 ## Shipped from queue
 
-- none (repair run — steps 4–5 skipped per hard rules)
+- none (repair run consumed budget; tests still have 3 needs_human failures)
 
-## Baseline repaired
-
-- IDEA-2026-04-29-07: `test_persistent_logs_omit_raw_screenshot_payload` — added `LogEmitter.flush()` to drain background writer thread before synchronous `read_log()` calls. Race condition: `emit()` submits disk writes to a `ThreadPoolExecutor`; `read_log()` was called before the write completed. Fix: submit a no-op sentinel and block on `.result()`.
-
-## Polish
+## Polished (unsolicited)
 
 - none
 
 ## New idea added
 
-- IDEA-2026-04-30-08: Triage all 12 pre-existing failures exposed by first full suite run — auth 401s (3 tests), routing assertions (2 tests), hierarchical/memory tests (3 tests), LogEmitter seek-replay race (1 test, trivial flush() fix available), JPEG magic-byte mismatch (1 test), visual verification (1 test).
+- none (no new discoveries; OpenClaw's notes fully matched existing queue items)
 
 ## Skipped / blocked / needs your call
 
-- **12 pre-existing test failures uncovered by first full suite run** — hidden by `-x` stopping at the LogEmitter race in previous runs. NOT caused by this run's changes. Categories:
-  - Auth: `test_security.py` lines 33, 60, 76 — requests return 401 instead of 200/422/500 (API key env-var not propagating in test fixtures?)
-  - Routing: `test_fast_path.py` lines 49, 88 — monkeypatched `_call_llm` / `plan_hierarchical` never called
-  - Hierarchical/memory: `test_hierarchical.py` lines 23, 44, 70 — `m.content` missing or phase updates not emitting
-  - LogEmitter seek-replay: `test_project_folder_runtime.py:102` — same flush race; 1-line fix (flush() already available)
-  - Vision: `test_vision_loop.py:28` — screenshot bytes not JPEG magic
-  - Visual verification: `test_visual_verification.py:20` — `m.content` on memory results
-- IDEA-2026-04-30-08 queued to fix all of these next run.
+### NEEDS HUMAN — IDEA-08c (lines 23,44) + IDEA-08e (visual_verification)
+
+**`tests/test_hierarchical.py::test_hierarchical_success` and `test_hierarchical_retry`** (2 tests) and **`tests/test_visual_verification.py::test_post_action_screenshot_added`** (1 test) all assert:
+
+```python
+out = s.memory.search("task_outcome")
+assert any("Outcome: True" in m.content for m in out)
+```
+
+But production code **never stores this**. `summarize_session()` stores `session_summary` kind with text like "Session (computer): refactor. Completed successfully." There is no `task_outcome` kind, no `"Outcome: True"` string anywhere in `app/`. The tests appear to have been written against a feature that was planned but never implemented.
+
+Options:
+- **A:** Implement `task_outcome` memory storage in `agent.py` after hierarchical runs complete (new feature, ~15 LOC in app/agent.py)
+- **B:** Update the tests to assert what the code actually does (e.g., `any("successfully" in getattr(m, 'content', m) for m in s.memory.search("refactor"))`)
+- **C:** Delete the 3 tests if the "Outcome: True" concept has been abandoned
+
+**Q1: Which option (A/B/C) do you prefer for the 3 remaining test failures? (answer A, B, or C)**
 
 ## Risk flags for this push
 
-- `app/log_emitter.py` change is additive only (new method, no changes to existing emit()/read_log() logic). No production code paths call flush().
-- Full suite still has 12 pre-existing failures visible to reviewer.
+- All changes are in test files and docs only — no production code was modified.
+- The `monkeypatch.setattr(m, "API_KEY", "token123")` fix (08b/08f) is test-isolation only; it has no effect on the running server.
+
+## Health snapshot
+
+- Full suite: **82 passed, 3 failed** (Δ vs last run: +10 passed / -10 failed)
+- Open queued IDEAs: **7** (IDEA-09, 10, 11, 12, 2026-05-01-01, and 2026-04-29-01, 02, 03, 04, 05 = actually 10 queued)
+- Blocked / stale / needs_human IDEAs: **2 needs_human** (08c partial, 08e partial)
+- Lines shipped this run: **11** / Last 7 runs avg: ~8
+- Trend: **recovering** — 10 tests fixed in one run; 3 needs_human remain
+- OpenClaw last contributed: 2026-05-01
+
+## Questions for you (yes/no, ≤3)
+
+- **Q1:** For the 3 remaining test failures (test_hierarchical_success, test_hierarchical_retry, test_post_action_screenshot_added) — they check for `"Outcome: True"` in memory which was never implemented. Should I: (A) implement `task_outcome` memory storage in agent.py, (B) update tests to match current behavior, or (C) delete the 3 tests? Answer A, B, or C in PM_NOTES.
 
 ## Next run will likely tackle
 
-- IDEA-2026-04-30-08: Fix pre-existing failures — start with auth 401s in test_security.py (likely fixture API key issue), then LogEmitter seek-replay (trivial flush() addition), then triage the rest.
+- If Q1=B: fix the 3 remaining test assertions to match current behavior → full green suite
+- If Q1=A: implement `task_outcome` memory storage in `agent.py` after hierarchical run finalization
+- If Q1=C: delete the 3 tests → full green suite
+- Once green: ship IDEA-2026-04-29-03 (/healthz endpoint) — well-scoped, no auth/LLM routing touches

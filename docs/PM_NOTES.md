@@ -156,3 +156,74 @@ The latest brief is always also at `docs/PM_BRIEF_LATEST.md`.
 - IDEA-2026-04-30-08: Fix pre-existing failures — auth 401s first, then LogEmitter seek-replay, then the rest.
 
 ---
+
+# PM Brief — 2026-05-01 (morning run)
+
+**Starting commit:** 1773ec2  →  **Ending commit:** 3526ba1
+**Run duration:** ~90 minutes (bulk of time: fast_path tests take 5 min each due to real agent loop)
+**Run type:** repair (mixed)
+**LOC budget used:** 11/200
+
+## What I did
+
+- Synced `feature/new-updates` — already up to date at 1773ec2 (openclaw discovery commit).
+- Read last 5 PM_NOTES entries, full queue, and this morning's RESEARCH_NOTES section.
+- Ran full `pytest -q` — 13 failed, 72 passed (same as prior run; no new regressions).
+- Repaired 10 of 13 failures across 5 sub-tickets (08a, 08b, 08c-partial, 08d, 08e-partial, 08f).
+- Marked 2 sub-tickets `needs_human` (08c lines 23/44, 08e visual_verification).
+- Updated queue status for all 08x sub-tickets.
+
+## Tests
+
+- Unit/integration (excluding fast_path): **80 passed, 3 failed, 1 skipped** in 4m — down from 72p/13f last run
+- fast_path (separately verified): **2 passed** in 5m
+- Full suite effective total: **82 passed, 3 failed, 1 skipped**
+- UI smoke: skipped (3 needs_human failures remain; all known)
+
+## Repaired
+
+- **IDEA-08a:** `emitter.flush()` before `read_log()` in seek-replay test (1 LOC)
+- **IDEA-08b:** `monkeypatch.setattr(m, "API_KEY", "token123")` in `test_security._client()` — `load_dotenv(override=True)` in `main.py:3` clobbers monkeypatched env var during `importlib.reload()`. All 7 security tests pass. (1 LOC)
+- **IDEA-08c (partial):** `heartbeat_seconds=0` in `_run_with_phase_updates` test — heartbeat never fired because mocked `asyncio.sleep` prevented real clock from advancing past 1s. (1 LOC)
+- **IDEA-08d:** `mode="computer"` + mocked `_capture_screenshot_b64` in both fast_path tests — hierarchical routing block only activates for computer modes, not default "coding". (4 LOC)
+- **IDEA-08e (partial):** Stripped data URL prefix before `base64.b64decode()` in vision_loop test. (2 LOC)
+- **IDEA-08f:** Same `m.API_KEY` patch in `test_project_folder_runtime._client()`. Both project-folder tests pass. (1 LOC)
+
+## Shipped from queue
+
+- none (repair run)
+
+## Polished (unsolicited)
+
+- none
+
+## New idea added
+
+- none
+
+## NEEDS HUMAN
+
+**`tests/test_hierarchical.py::test_hierarchical_success`, `test_hierarchical_retry`** and **`tests/test_visual_verification.py::test_post_action_screenshot_added`** check `s.memory.search("task_outcome")` expecting items containing `"Outcome: True"`. Production code never stores this — `summarize_session()` stores `session_summary` kind with "Completed successfully" phrasing. Feature was never implemented. Options: (A) implement task_outcome storage in agent.py, (B) update tests to check actual behavior, (C) delete the 3 tests. **→ Q1: A, B, or C?**
+
+## Risk flags for this push
+
+- All changes are in test files and docs only — no production code modified.
+
+## Health snapshot
+
+- Full suite: **82 passed, 3 failed** (Δ vs last run: +10 passed / -10 failed)
+- Open queued IDEAs: **10 queued**, **2 needs_human**
+- Lines shipped this run: **11** / Last 7 runs avg: ~8
+- Trend: **recovering** — 10 tests fixed; 3 needs_human remain
+- OpenClaw last contributed: 2026-05-01
+
+## Questions for you (yes/no, ≤3)
+
+- **Q1:** 3 remaining failures check `"Outcome: True"` in memory — never implemented. (A) implement in agent.py, (B) fix tests to match current behavior, or (C) delete the 3 tests?
+
+## Next run will likely tackle
+
+- Apply Q1 answer to close the 3 remaining failures
+- Once green: ship IDEA-2026-04-29-03 (/healthz endpoint)
+
+---
