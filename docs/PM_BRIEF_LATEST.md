@@ -1,88 +1,55 @@
-# PM Brief — 2026-05-01 (morning run)
-
-**Starting commit:** 1773ec2  →  **Ending commit:** 3526ba1
-**Run duration:** ~90 minutes (bulk of time: fast_path tests take 5 min each due to real agent loop)
-**Run type:** repair (mixed)
-**LOC budget used:** 11/200
+# PM Brief — 2026-05-02 09:00 local
+**Starting commit:** fb3072b  →  **Ending commit:** 9f4f449
+**Run duration:** ~20 minutes  |  **LOC budget used:** ~55/200
+**Run type:** mixed (repair + feature)
 
 ## What I did
-
-- Synced `feature/new-updates` — already up to date at 1773ec2 (openclaw discovery commit).
-- Read last 5 PM_NOTES entries, full queue, and this morning's RESEARCH_NOTES section.
-- Ran full `pytest -q` — 13 failed, 72 passed (same as prior run; no new regressions).
-- Repaired 10 of 13 failures across 5 sub-tickets (08a, 08b, 08c-partial, 08d, 08e-partial, 08f).
-- Marked 2 sub-tickets `needs_human` (08c lines 23/44, 08e visual_verification) — root cause is tests checking for behavior (`"Outcome: True"` in memory) that was never implemented.
-- Updated queue status for all 08x sub-tickets.
+- Synced `feature/new-updates` — already up to date at fb3072b.
+- Read last 5 PM_NOTES entries, full queue, latest RESEARCH_NOTES section.
+- Ran full `pytest -q` — 3 failed (same `needs_human` trio from last run), 82 passed.
+- Resolved Q1 autonomously per standing policy: implemented option A (add `task_outcome` storage + fix test setup).
+- Fixed all 3 remaining failures: added `mode="computer"` + `_capture_screenshot_b64` mock to hierarchical tests (same IDEA-08d pattern), plus `memory.add("task_outcome", ...)` in `app/agent.py` hierarchical completion path.
+- Full suite green: 85 passed, 0 failed (second full-suite run).
+- Ran UI smoke: server returned 200 on `/`. `e2e_test.py` passed (no output = clean). `start_and_test.py` skipped (missing `psutil`). Server killed, no orphans.
+- Shipped IDEA-2026-04-29-03: `/healthz` endpoint with provider key status and 30s cache. 3 tests added. Full suite: 88 passed, 0 failed.
+- Updated queue: IDEA-08c, 08e, 03 → `done`. Added IDEA-2026-05-02-01 (UI provider chips).
 
 ## Tests
-
-- Unit/integration (excluding fast_path): **80 passed, 3 failed, 1 skipped** in 4m — down from 72p/13f last run
-- fast_path (separately verified): **2 passed** in 5m
-- Full suite effective total: **82 passed, 3 failed, 1 skipped**
-- UI smoke: skipped (3 needs_human failures remain; not blocking per rules — all known)
+- Unit/integration: **88 passed, 0 failed, 1 skipped** (323s) — first fully-green suite
+- UI smoke: **pass** — server up, GET / → 200, e2e_test.py clean, server killed cleanly
 
 ## Repaired
-
-- **IDEA-08a:** `emitter.flush()` before `read_log()` in seek-replay test (1 LOC)
-- **IDEA-08b:** `monkeypatch.setattr(m, "API_KEY", "token123")` in `test_security._client()` — root cause: `load_dotenv(override=True)` in `main.py:3` clobbers monkeypatched env var during `importlib.reload()`. All 7 security tests now pass. (1 LOC)
-- **IDEA-08c (partial):** `heartbeat_seconds=0` in `_run_with_phase_updates` test call — heartbeat never fired because mocked `asyncio.sleep` prevented real clock from advancing past 1s threshold. (1 LOC)
-- **IDEA-08d:** Added `mode="computer"` + mocked `_capture_screenshot_b64` in both fast_path tests — hierarchical routing block only activates for computer modes, not default "coding". (4 LOC)
-- **IDEA-08e (partial):** Stripped data URL prefix before `base64.b64decode()` in `test_vision_loop` — `_capture_screenshot_b64` returns a `"data:image/jpeg;base64,..."` URL, not raw base64. (2 LOC)
-- **IDEA-08f:** Same `m.API_KEY` patch in `test_project_folder_runtime._client()` — same load_dotenv root cause as 08b. Both project-folder tests now pass. (1 LOC)
+- **IDEA-08c (lines 23/44):** `test_hierarchical_success` + `test_hierarchical_retry` — added `mode="computer"` + `_capture_screenshot_b64` mock so tests enter hierarchical path; added `memory.add("task_outcome", ...)` in `agent.py:692` hierarchical completion
+- **IDEA-08e (visual_verification):** `test_post_action_screenshot_added` — same fix as above
 
 ## Shipped from queue
-
-- none (repair run consumed budget; tests still have 3 needs_human failures)
+- **IDEA-2026-04-29-03:** `GET /healthz` — returns `{server: ok, providers: {name: ok|missing_key}}`. 30s module-level cache. Covers openrouter, anthropic, openai, google, groq. 3 tests: missing-key path, configured-key path, cache-hit path.
 
 ## Polished (unsolicited)
-
-- none
+- Removed unused `importlib` import from `tests/test_healthz.py` (noticed during write, fixed inline — 0 net LOC)
 
 ## New idea added
+- **IDEA-2026-05-02-01:** Surface `/healthz` provider status as coloured chips in the UI header (~25–35 LOC JS, follow-on to IDEA-03)
 
-- none (no new discoveries; OpenClaw's notes fully matched existing queue items)
+## Decisions I made (and why)
+- **Q1 (needs_human from last run) → Option A (implement task_outcome storage):** The tests clearly intended the hierarchical path and clearly expected outcome storage. The missing piece was twofold: tests lacked `mode="computer"` (so the hierarchical block was never entered), and `agent.py` never wrote a `task_outcome` memory entry. Per autonomy rule 1 ("honor what the test/code clearly intends, never delete or weaken"), option A was the correct choice. Options B and C both involved weakening or removing assertions.
+- **test import-order issue in test_healthz.py:** Moving `import app.main as _m` to module level forces `load_dotenv` to run at collection time, before any `monkeypatch.delenv` call. This is the correct pattern for tests that delete env vars set by load_dotenv.
 
-## Skipped / blocked / needs your call
-
-### NEEDS HUMAN — IDEA-08c (lines 23,44) + IDEA-08e (visual_verification)
-
-**`tests/test_hierarchical.py::test_hierarchical_success` and `test_hierarchical_retry`** (2 tests) and **`tests/test_visual_verification.py::test_post_action_screenshot_added`** (1 test) all assert:
-
-```python
-out = s.memory.search("task_outcome")
-assert any("Outcome: True" in m.content for m in out)
-```
-
-But production code **never stores this**. `summarize_session()` stores `session_summary` kind with text like "Session (computer): refactor. Completed successfully." There is no `task_outcome` kind, no `"Outcome: True"` string anywhere in `app/`. The tests appear to have been written against a feature that was planned but never implemented.
-
-Options:
-- **A:** Implement `task_outcome` memory storage in `agent.py` after hierarchical runs complete (new feature, ~15 LOC in app/agent.py)
-- **B:** Update the tests to assert what the code actually does (e.g., `any("successfully" in getattr(m, 'content', m) for m in s.memory.search("refactor"))`)
-- **C:** Delete the 3 tests if the "Outcome: True" concept has been abandoned
-
-**Q1: Which option (A/B/C) do you prefer for the 3 remaining test failures? (answer A, B, or C)**
+## Skipped / blocked / NEEDS HUMAN
+- none
 
 ## Risk flags for this push
-
-- All changes are in test files and docs only — no production code was modified.
-- The `monkeypatch.setattr(m, "API_KEY", "token123")` fix (08b/08f) is test-isolation only; it has no effect on the running server.
+- `app/agent.py` change is additive: one new `memory.add` call on the hierarchical completion path. No existing callers affected.
+- `app/main.py` adds 2 module-level globals and 1 new GET route. No auth on `/healthz` — intentional (reveals only key presence, not values).
 
 ## Health snapshot
-
-- Full suite: **82 passed, 3 failed** (Δ vs last run: +10 passed / -10 failed)
-- Open queued IDEAs: **7** (IDEA-09, 10, 11, 12, 2026-05-01-01, and 2026-04-29-01, 02, 03, 04, 05 = actually 10 queued)
-- Blocked / stale / needs_human IDEAs: **2 needs_human** (08c partial, 08e partial)
-- Lines shipped this run: **11** / Last 7 runs avg: ~8
-- Trend: **recovering** — 10 tests fixed in one run; 3 needs_human remain
-- OpenClaw last contributed: 2026-05-01
-
-## Questions for you (yes/no, ≤3)
-
-- **Q1:** For the 3 remaining test failures (test_hierarchical_success, test_hierarchical_retry, test_post_action_screenshot_added) — they check for `"Outcome: True"` in memory which was never implemented. Should I: (A) implement `task_outcome` memory storage in agent.py, (B) update tests to match current behavior, or (C) delete the 3 tests? Answer A, B, or C in PM_NOTES.
+- Full suite: **88 passed, 0 failed, 1 skipped**  (Δ vs last run: +3 passed / -3 failed)
+- Open queued IDEAs: **10 queued**  (Δ: net 0 — +1 new, -1 shipped)
+- Blocked / stale / needs_human IDEAs: **0 / 0 / 0**
+- Lines shipped this run: **~55**  /  Last 7 runs avg: ~15
+- Trend: **healthy** — first fully-green suite; all long-standing failures resolved; feature shipped
+- Haiku research last contributed: 2026-05-01
 
 ## Next run will likely tackle
-
-- If Q1=B: fix the 3 remaining test assertions to match current behavior → full green suite
-- If Q1=A: implement `task_outcome` memory storage in `agent.py` after hierarchical run finalization
-- If Q1=C: delete the 3 tests → full green suite
-- Once green: ship IDEA-2026-04-29-03 (/healthz endpoint) — well-scoped, no auth/LLM routing touches
+- IDEA-2026-05-01-01: Limit TextEditorTool undo history (~10–15 LOC)
+- Or IDEA-2026-05-02-01: UI provider chips (~25–35 LOC JS, higher user-visible impact)

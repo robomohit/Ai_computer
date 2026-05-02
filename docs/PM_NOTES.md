@@ -240,3 +240,59 @@ If options are genuinely 50/50, pick the smaller scope. Only escalate to `## NEE
 - Once green: ship IDEA-2026-04-29-03 (/healthz endpoint)
 
 ---
+
+# PM Brief — 2026-05-02 09:00 local
+**Starting commit:** fb3072b  →  **Ending commit:** 9f4f449
+**Run duration:** ~20 minutes  |  **LOC budget used:** ~55/200
+**Run type:** mixed (repair + feature)
+
+## What I did
+- Synced `feature/new-updates` — already up to date at fb3072b.
+- Ran full `pytest -q` — 3 failed (same `needs_human` trio from last run), 82 passed.
+- Resolved Q1 autonomously per standing policy (Option A).
+- Fixed all 3 remaining failures: `mode="computer"` + `_capture_screenshot_b64` mock + `memory.add("task_outcome",...)` in agent.py hierarchical path.
+- Full suite green: 85 → 88 passed, 0 failed.
+- UI smoke: GET / → 200, e2e_test.py clean, server killed.
+- Shipped IDEA-2026-04-29-03: `GET /healthz` with 30s cache, 3 tests.
+- Queue: IDEA-08c, 08e, 03 → done. Added IDEA-2026-05-02-01.
+
+## Tests
+- Unit/integration: **88 passed, 0 failed, 1 skipped** — first fully-green suite
+- UI smoke: **pass**
+
+## Repaired
+- IDEA-08c (lines 23/44): test_hierarchical_success + test_hierarchical_retry — mode="computer" + mock + task_outcome storage
+- IDEA-08e (visual_verification): test_post_action_screenshot_added — same fix
+
+## Shipped from queue
+- IDEA-2026-04-29-03: GET /healthz — provider key status, 30s cache, 3 tests
+
+## Polished (unsolicited)
+- Removed unused importlib import in test_healthz.py (inline, 0 net LOC)
+
+## New idea added
+- IDEA-2026-05-02-01: UI provider status chips from /healthz (~25–35 LOC JS)
+
+## Decisions I made (and why)
+- Q1 → Option A: tests clearly intended hierarchical path + task_outcome storage. Autonomy rule 1 prohibits weakening assertions; implementing missing behavior is correct. Root cause was missing `mode="computer"` argument in test setup (same class as IDEA-08d).
+- test_healthz.py import at module level: forces load_dotenv at collection time, before monkeypatch.delenv runs. Correct pattern for env-var tests.
+
+## Skipped / blocked / NEEDS HUMAN
+- none
+
+## Risk flags for this push
+- agent.py: one additive memory.add call on hierarchical completion path only
+- main.py: new /healthz route, no auth (intentional — reveals key presence only)
+
+## Health snapshot
+- Full suite: **88 passed, 0 failed, 1 skipped**  (Δ: +3 passed / -3 failed)
+- Open queued IDEAs: **10 queued** / Blocked: 0 / Stale: 0 / Needs_human: 0
+- Lines shipped this run: ~55  /  Last 7 runs avg: ~15
+- Trend: **healthy** — first fully-green suite
+- Haiku research last contributed: 2026-05-01
+
+## Next run will likely tackle
+- IDEA-2026-05-01-01: TextEditorTool undo history cap (~10–15 LOC)
+- IDEA-2026-05-02-01: UI provider chips (~25–35 LOC JS)
+
+---
