@@ -690,6 +690,7 @@ class AgentService:
                         "finished_at": datetime.now(timezone.utc).isoformat(),
                     })
                     await asyncio.to_thread(self.memory.summarize_session, task_id, goal, complete, reason, mode)
+                    await asyncio.to_thread(self.memory.add, "task_outcome", f"Outcome: {complete}. Goal: {goal}. Reason: {reason}")
                     await asyncio.to_thread(self.memory.maybe_auto_consolidate)
                     return
                 except Exception as planning_err:
