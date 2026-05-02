@@ -5,6 +5,19 @@ The latest brief is always also at `docs/PM_BRIEF_LATEST.md`.
 
 ---
 
+## Standing user policy
+
+**FULL AUTONOMY.** Never ask yes/no questions. Make the call yourself, document it in the brief under `## Decisions I made (and why)`, and ship. The user reads briefs after the fact and will revert if they disagree.
+
+When the prompt's old `## Questions for you` section appears, treat it as `## Decisions I made (and why)` instead. Pick the option that:
+1. Honors what the test/code clearly intends (don't delete tests or weaken assertions to escape decisions).
+2. Costs the least LOC.
+3. Doesn't touch never-touch files.
+
+If options are genuinely 50/50, pick the smaller scope. Only escalate to `## NEEDS HUMAN` if the decision would genuinely break something for the user (e.g. would touch a never-touch file, would require a paid API, would publicly expose secrets).
+
+---
+
 # PM Brief — 2026-04-29 09:00 local
 
 **Starting commit:** dca562e  →  **Ending commit:** dca562e (no feature shipped — see below)
