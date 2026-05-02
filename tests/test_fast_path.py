@@ -38,13 +38,14 @@ async def test_atomic_fast_path_routing(monkeypatch, workspace):
     monkeypatch.setattr("app.providers.PlannerProvider._call_llm", mock_call_llm)
     monkeypatch.setattr("app.providers.PlannerProvider.plan_hierarchical", mock_plan_hierarchical)
     monkeypatch.setattr("app.providers.PlannerProvider.evaluate", lambda *a, **k: {"complete": True})
-    
+    monkeypatch.setattr("app.providers._capture_screenshot_b64", lambda *a, **k: None)
+
     # Mock the tool execution to avoid actual file system changes or other tool side effects
     async def mock_run_action(*a, **k):
         return type('obj', (object,), {'ok': True, 'output': 'done', 'base64_image': None})
     monkeypatch.setattr("app.tools.ToolExecutor.run_action", mock_run_action)
 
-    await s.run_task("atomic-task", goal)
+    await s.run_task("atomic-task", goal, mode="computer")
     
     assert call_llm_called is True
     assert plan_hierarchical_called is False
@@ -77,11 +78,12 @@ async def test_complex_task_routing(monkeypatch, workspace):
     monkeypatch.setattr("app.providers.PlannerProvider.plan_hierarchical", mock_plan_hierarchical)
     monkeypatch.setattr("app.providers.PlannerProvider.evaluate", lambda *a, **k: {"complete": True})
     monkeypatch.setattr("app.providers.PlannerProvider.reflect_on_subtask", lambda *a, **k: {"success": True})
+    monkeypatch.setattr("app.providers._capture_screenshot_b64", lambda *a, **k: None)
     async def mock_run_action(*a, **k):
         return type('obj', (object,), {'ok': True, 'output': 'done', 'base64_image': None})
     monkeypatch.setattr("app.tools.ToolExecutor.run_action", mock_run_action)
 
-    await s.run_task("complex-task", goal)
+    await s.run_task("complex-task", goal, mode="computer")
     
     # In the complex path, plan_hierarchical is called. 
     # (Note: plan_hierarchical ITSELF calls _call_llm, but here we are checking the AgentService routing)

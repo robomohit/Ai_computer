@@ -11,6 +11,7 @@ def _client(monkeypatch, origins="http://localhost:8000"):
     import app.main as m
 
     importlib.reload(m)
+    monkeypatch.setattr(m, "API_KEY", "token123")
     return TestClient(m.app), m
 
 

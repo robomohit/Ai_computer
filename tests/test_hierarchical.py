@@ -64,7 +64,7 @@ async def test_phase_updates_emit_progress(monkeypatch, workspace):
         time.sleep(0.03)
         return "ok"
 
-    result = await s._run_with_phase_updates("task", "Thinking", "Still planning", slow_fn)
+    result = await s._run_with_phase_updates("task", "Thinking", "Still planning", slow_fn, heartbeat_seconds=0)
     assert result == "ok"
     assert any(msg == "Thinking" for msg in seen)
     assert any("Still planning" in msg for msg in seen)

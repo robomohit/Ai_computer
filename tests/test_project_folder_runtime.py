@@ -27,6 +27,7 @@ def _client(monkeypatch, tmp_path):
     import app.main as m
 
     importlib.reload(m)
+    monkeypatch.setattr(m, "API_KEY", "token123")
     return TestClient(m.app), m, home
 
 
@@ -96,6 +97,7 @@ def test_log_emitter_seek_replay_uses_binary_offsets_for_utf8(tmp_path, monkeypa
     emitter.emit("utf8-task", "status", {"message": "warmup"})
     emitter.emit("utf8-task", "status", {"message": "emoji 😀"})
     emitter.emit("utf8-task", "status", {"message": "done"})
+    emitter.flush()
 
     replay = emitter.read_log("utf8-task", since=1)
 
