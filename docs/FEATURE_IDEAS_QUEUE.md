@@ -195,7 +195,7 @@ _(Discovery cron will append below. You can seed items manually.)_
 - **Scope (this PR only):** After the existing `navigator.clipboard.writeText` call succeeds, dispatch an info-level toast: "Log copied (N events)." Wrap in try/catch so a clipboard failure shows an error toast instead. ~8 LOC. Reuse existing `showToast(msg, type)` helper.
 - **Acceptance criteria:** Clicking the copy-log button shows a green checkmark toast with the event count. Disabling clipboard permissions in devtools and clicking shows an error toast. Existing test for log download (if any) still passes.
 - **Out of scope:** Adding copy buttons elsewhere; refactoring the toast system.
-- **Status:** queued
+- **Status:** done (2026-05-03: already implemented — `copyCurrentLog()` at index.html:4261 wraps clipboard write in try/catch with `toast('Copied log to clipboard.', 'ok')` on success and error toast on failure)
 
 ### [IDEA-2026-05-02-04] Empty state for run history list
 
@@ -245,7 +245,7 @@ _(Discovery cron will append below. You can seed items manually.)_
 - **Scope (this PR only):** Remove `#status-pill` HTML (lines 2541–2544 in `static/index.html`). In `setStatus()` (line 3183–3191), remove the `#status-pill` write but keep the `#sb-status` write. Confirmed no JS reads from the pill DOM. ~25 LOC net change.
 - **Acceptance criteria:** No pill visible top-right. Bottom statusbar still updates as task transitions through ready → running → complete. UI smoke playwright snapshot of running task verifies no regression.
 - **Out of scope:** Adding a topbar status indicator (Phase B handles that as a small dot beside the breadcrumb).
-- **Status:** queued
+- **Status:** in_progress
 
 ### [IDEA-2026-05-02-09] UI Phase B — Topbar breadcrumb with task goal · mode · model
 
