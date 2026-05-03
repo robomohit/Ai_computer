@@ -44,3 +44,27 @@ def test_healthz_cache(monkeypatch):
     resp = client.get("/healthz")
     assert resp.status_code == 200
     assert resp.json() == cached
+
+
+def test_get_mcp_not_ready_returns_initializing(monkeypatch):
+    from app.mcp_manager import mcp_manager
+    monkeypatch.setattr(mcp_manager, "_is_ready", False)
+    client = _client(monkeypatch)
+    resp = client.get("/api/mcp")
+    assert resp.status_code == 200
+    data = resp.json()
+    assert data["servers"] == []
+    assert data["initializing"] is True
+
+
+def test_get_mcp_ready_no_reinit(monkeypatch):
+    from app.mcp_manager import mcp_manager
+    monkeypatch.setattr(mcp_manager, "_is_ready", True)
+    monkeypatch.setattr(mcp_manager, "servers", {})
+    reinit_called = []
+    monkeypatch.setattr(mcp_manager, "initialize_default_servers", lambda *a, **kw: reinit_called.append(1))
+    client = _client(monkeypatch)
+    resp = client.get("/api/mcp")
+    assert resp.status_code == 200
+    assert resp.json() == {"servers": []}
+    assert reinit_called == []

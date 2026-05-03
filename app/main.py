@@ -468,7 +468,8 @@ async def get_skills():
 @app.get("/api/mcp")
 async def get_mcp():
     from .mcp_manager import mcp_manager
-    await mcp_manager.initialize_default_servers(mcp_manager._workspace_path or str(HOME_DIR))
+    if not mcp_manager._is_ready:
+        return {"servers": [], "initializing": True}
     servers = []
     for name, srv in mcp_manager.servers.items():
         servers.append({
