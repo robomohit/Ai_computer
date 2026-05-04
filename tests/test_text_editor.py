@@ -35,6 +35,16 @@ def test_text_editor(workspace):
         t.view(str((workspace.parent / "escape.txt").resolve()))
 
 
+def test_undo_preserves_utf8(workspace):
+    t = TextEditorTool(workspace)
+    f = workspace / "utf8.txt"
+    original = "héllo wörld — 日本語\n"
+    f.write_text(original, encoding="utf-8")
+    t.str_replace("utf8.txt", "héllo", "hello")
+    t.undo_edit("utf8.txt")
+    assert f.read_text(encoding="utf-8") == original
+
+
 def test_history_cap_enforced(workspace):
     t = TextEditorTool(workspace)
     f = workspace / "cap.txt"

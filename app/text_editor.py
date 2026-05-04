@@ -94,5 +94,5 @@ class TextEditorTool:
         if key not in self._history or not self._history[key]:
             raise ToolError("No edit history for path")
         old = self._history[key].pop()
-        p.write_text(old)
+        p.write_text(old, encoding="utf-8")
         return ToolResult(ok=True, output="Undo complete")

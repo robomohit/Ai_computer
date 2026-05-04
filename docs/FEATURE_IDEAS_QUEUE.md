@@ -305,4 +305,4 @@ _(Discovery cron will append below. You can seed items manually.)_
 - **Scope (this PR only):** Add `encoding="utf-8"` to `p.write_text(old)` at `text_editor.py:88`. 1 LOC.
 - **Acceptance criteria:** `test_undo_preserves_utf8` creates a file with non-ASCII content, calls `str_replace`, then `undo_edit`, and asserts the restored content matches the original byte-for-byte. Test passes on all platforms.
 - **Out of scope:** Encoding detection for non-UTF-8 source files.
-- **Status:** queued
+- **Status:** done (2026-05-04: added encoding="utf-8" to p.write_text in undo_edit; test_undo_preserves_utf8 added to test_text_editor.py)
