@@ -682,8 +682,15 @@
     white-space: nowrap;
     overflow: hidden;
     text-overflow: ellipsis;
-    max-width: 560px;
+    max-width: 480px;
   }
+  .topbar-row { display: flex; align-items: center; gap: 6px; min-width: 0; overflow: hidden; }
+  .topbar-dot { width: 7px; height: 7px; border-radius: 50%; flex-shrink: 0; }
+  .topbar-dot.running { background: var(--accent); animation: dot-pulse 1.5s infinite; }
+  .topbar-dot.done    { background: var(--ok); }
+  .topbar-dot.failed  { background: var(--err); }
+  .topbar-dot.paused  { background: var(--warn); }
+  .topbar-ctx { font-size: var(--fs-sm); color: var(--muted-2); font-weight: 400; white-space: nowrap; overflow: hidden; text-overflow: ellipsis; flex-shrink: 1; }
 
   .project-folder-trigger {
     position: relative;
@@ -2510,7 +2517,11 @@
           <svg width="16" height="16" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2.2" stroke-linecap="round" stroke-linejoin="round"><line x1="3" y1="12" x2="21" y2="12"/><line x1="3" y1="6" x2="21" y2="6"/><line x1="3" y1="18" x2="21" y2="18"/></svg>
         </button>
         <div class="topbar-title">
-          <h2 id="task-title">Stream</h2>
+          <div class="topbar-row">
+            <span class="topbar-dot" id="topbar-dot"></span>
+            <h2 id="task-title">Stream</h2>
+            <span class="topbar-ctx" id="topbar-ctx"></span>
+          </div>
         </div>
       </div>
       <div class="safety-strip">
@@ -3158,6 +3169,9 @@
     currentStatus = key;
     const sb = $('sb-status');
     if (sb) { sb.className = `sb-item sb-status sb-status-${key}`; sb.innerHTML = `<span class="sb-dot"></span><span class="sb-val">${map[key] || humanize(key)}</span>`; }
+    const dotCls = { running: 'running', paused: 'paused', complete: 'done', failed: 'failed', error: 'failed' };
+    const dot = $('topbar-dot');
+    if (dot) dot.className = 'topbar-dot' + (dotCls[key] ? ' ' + dotCls[key] : '');
   };
 
   const isDesktopMode = (mode = currentMode) => mode === 'computer' || mode === 'computer_isolated';
@@ -3246,7 +3260,17 @@
     const e = $('sb-elapsed-val'); if (e) e.textContent = fmt;
   };
 
-  const setTaskTitle = (title) => { $('task-title').textContent = title || 'Stream'; };
+  const setTaskTitle = (title, ctx = {}) => {
+    const idleName = projectFolderState.selectedPath ? pathLeaf(projectFolderState.selectedPath) : 'Stream';
+    $('task-title').textContent = title || idleName;
+    const dot = $('topbar-dot');
+    if (dot) dot.className = 'topbar-dot' + (ctx.status ? ' ' + ctx.status : '');
+    const ctxEl = $('topbar-ctx');
+    if (ctxEl) {
+      const parts = [ctx.mode, ctx.model].filter(Boolean);
+      ctxEl.textContent = parts.length ? '· ' + parts.join(' · ') : '';
+    }
+  };
 
   const renderHistoryItem = (taskRecord, makeActive = false) => {
     const item = document.createElement('button');
@@ -4136,7 +4160,7 @@
     appendMessage(goal, 'user');
     $('input').value = ''; updateCharCount(); autoGrow();
 
-    setTaskTitle(goal);
+    setTaskTitle(goal, { mode: requestedMode, model: $('model-id').value, status: 'running' });
     setStatus('running');
     $('btn-pause').classList.remove('hidden');
     $('btn-cancel').classList.remove('hidden');
@@ -4209,7 +4233,7 @@
       task = result.task_id; currentViewedTask = task;
       resetTaskView();
       appendMessage(title, 'user');
-      setTaskTitle(title);
+      setTaskTitle(title, { mode: $('mode-id').value, model: $('model-id').value, status: 'running' });
       setStatus('running');
       $('btn-pause').classList.remove('hidden');
       $('btn-cancel').classList.remove('hidden');
@@ -4301,7 +4325,7 @@
     task = null; currentViewedTask = null; activeHistoryItem = null;
     historyItems.forEach((item) => item.classList.remove('active'));
     resetTaskView();
-    setTaskTitle('Stream');
+    setTaskTitle();
     $('input').value = ''; updateCharCount(); autoGrow(); $('input').focus();
   };
 
@@ -4338,7 +4362,7 @@
     resetTaskView();
     const goal = 'Bootstrap a FastAPI dashboard with SQLite, auth, and a test harness.';
     appendMessage(goal, 'user');
-    setTaskTitle(goal);
+    setTaskTitle(goal, { status: 'running' });
     setStatus('running');
     addActiveHistoryItem(goal);
     startTime = Date.now();

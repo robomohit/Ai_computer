@@ -254,7 +254,7 @@ _(Discovery cron will append below. You can seed items manually.)_
 - **Scope (this PR only):** Replace `<h2 id="task-title">Stream</h2>` with a flex-row breadcrumb structure showing project folder name when idle, and `<truncated-goal> · <mode> · <model>` with subtle separator dots when a task is running. Extend `setTaskTitle()` (line 3279) signature from `(title) => …` to `(title, ctx) => …` where `ctx = { mode, model, status }`. Add a small status dot beside the breadcrumb (replaces the dropped pill from Phase D — IDEA-08). All call-sites of `setTaskTitle` (lines 4169, 4287, 4334) updated. ~50 LOC.
 - **Acceptance criteria:** Idle state: topbar shows project folder name (or empty). Running state: shows truncated goal + mode label + model name with `·` separators + small status dot. Pytest green. UI smoke verifies the breadcrumb updates on task start.
 - **Out of scope:** Clickable breadcrumb segments; multi-task tabs.
-- **Status:** queued (depends on Phase D — IDEA-08 — having shipped first to free the topbar slot)
+- **Status:** done (2026-05-04: added topbar-row flex container with status dot + ctx span; extended setTaskTitle(title, ctx) to render mode·model context; setStatus() syncs dot color; all 5 call sites updated)
 
 ### [IDEA-2026-05-02-10] UI Phase C1 — Terser one-line tool-call summaries in feed cards
 
