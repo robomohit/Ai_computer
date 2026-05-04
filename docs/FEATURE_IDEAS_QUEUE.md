@@ -177,7 +177,7 @@ _(Discovery cron will append below. You can seed items manually.)_
 - **Scope (this PR only):** On page load, call `/healthz` and render a compact provider-chip bar below the mode selector: green dot for `ok`, grey for `missing_key`. Auto-refreshes every 60s. Pure JS, no new backend changes. ~25–35 LOC in index.html.
 - **Acceptance criteria:** Page load shows coloured provider chips. Grey chip visible when OPENROUTER_API_KEY is unset. No regression on existing Playwright smoke test.
 - **Out of scope:** Alert banners, tooltip explanations, keyboard accessibility.
-- **Status:** queued
+- **Status:** done (2026-05-04: added .provider-chip CSS, #provider-chips div in sidebar footer below mode selector, refreshProviderChips() polls /healthz on load and every 60s; ok=green dot, missing_key=grey)
 
 ### [IDEA-2026-05-02-02] Auto-resize composer textarea (grow with content, max 8 lines)
 
