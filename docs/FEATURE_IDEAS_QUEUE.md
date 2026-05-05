@@ -33,7 +33,7 @@ _(Discovery cron will append below. You can seed items manually.)_
 - **Scope (this PR only):** Save selected mode to localStorage on change; restore on page load. Fall back to auto-detect if absent.
 - **Acceptance criteria:** Refresh the page after picking Browser mode → Browser is still selected. Unit/UI smoke test covers the round-trip.
 - **Out of scope:** Persisting other UI state (model, API key prefs).
-- **Status:** queued
+- **Status:** in_progress
 
 ### [IDEA-2026-04-29-02] Copy-task button on completed runs
 
