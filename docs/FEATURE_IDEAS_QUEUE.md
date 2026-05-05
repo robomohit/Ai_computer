@@ -314,7 +314,7 @@ _(Discovery cron will append below. You can seed items manually.)_
 - **Scope (this PR only):** In `loadTask()` (line ~4285), extract `mode` and `model` from the `task_created` event and pass as ctx to `setTaskTitle(title, { mode, model })`. No backend changes. ~5 LOC.
 - **Acceptance criteria:** Clicking a past task in history shows the correct mode and model in the topbar breadcrumb. Pytest stays green. UI smoke verifies topbar ctx is populated after loading a history item.
 - **Out of scope:** Showing mode/model in the history list item itself; real-time mode tracking during live stream.
-- **Status:** in_progress
+- **Status:** done (2026-05-05: extracted createdEvent from loadTaskLog; passed mode+model as ctx to setTaskTitle — topbar breadcrumb now populated on task replay)
 
 ### [IDEA-2026-05-05-01] Handle multiple parallel tool calls in streaming response
 

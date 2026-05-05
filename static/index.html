@@ -4282,9 +4282,10 @@
     activeHistoryItem = sourceEl || null;
     requestAnimationFrame(() => { const fs = $('feed-scroll'); if (fs) fs.scrollTop = 0; });
 
-    const firstGoal = events.find((e) => e.type === 'task_created')?.goal;
+    const createdEvent = events.find((e) => e.type === 'task_created');
+    const firstGoal = createdEvent?.goal;
     const title = sourceEl?.querySelector('.history-goal')?.textContent || firstGoal || 'Past task';
-    setTaskTitle(title);
+    setTaskTitle(title, { mode: createdEvent?.mode, model: createdEvent?.model });
     appendMessage(title, 'user');
     $('btn-retry').classList.remove('hidden');
     $('btn-copy-log').classList.remove('hidden');
