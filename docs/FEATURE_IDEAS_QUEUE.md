@@ -325,3 +325,12 @@ _(Discovery cron will append below. You can seed items manually.)_
 - **Out of scope:** Executor-side changes to handle parallel execution. This IDEA only ensures the streaming layer doesn't drop tool_calls.
 - **Status:** queued
 
+### [IDEA-2026-05-05-02] Guard _extract_json against non-dict top-level return
+
+- **Source:** `app/providers.py:483–527` — `_extract_json()` returns `Any`; all callers assume a dict
+- **Why it fits Ai_computer:** The JSON repair pipeline handles common LLM malformations, but if an LLM returns a top-level JSON array or plain string, `_extract_json` propagates that to callers that index into it as a dict, causing a `TypeError` or `AttributeError` and silently aborting the agent loop. Defensive wrapping costs ~5 LOC and prevents a hard-to-debug crash.
+- **Scope (this PR only):** After the final fallback parse in `_extract_json`, add a check: if the result is not a `dict`, wrap it as `{"result": result}` (or return `{}`). ~5–10 LOC in `app/providers.py`. Add one unit test asserting that an array-returning mock produces a dict.
+- **Acceptance criteria:** `_extract_json('[1,2,3]')` returns a dict (not a raw list). `_extract_json('{}')` and `_extract_json('{"key":"val"}')` are unaffected. Unit test added.
+- **Out of scope:** Caller-side type narrowing; refactoring the repair pipeline.
+- **Status:** queued
+
