@@ -334,3 +334,12 @@ _(Discovery cron will append below. You can seed items manually.)_
 - **Out of scope:** Caller-side type narrowing; refactoring the repair pipeline.
 - **Status:** queued
 
+### [IDEA-2026-05-06-01] Await MCP initialization at startup to close race window
+
+- **Source:** `app/main.py:32–56` — `_lifespan` fires `_init_mcp()` via `asyncio.create_task()` without awaiting; yields immediately
+- **Why it fits Ai_computer:** First client requests may arrive before MCP server init completes, hitting the `initializing:true` response path and adding latency. While mitigated by UI retries, the race is unnecessary — startup is already blocking for other reasons (lifespan events are sequential in practice). Deterministic init improves startup UX.
+- **Scope (this PR only):** Replace `asyncio.create_task(_init_mcp)` with `await asyncio.gather(_init_mcp(), ...)` or `await _init_mcp()` directly (keep telegram/discord as fire-and-forget if they have their own timeout resilience). ~2 LOC change in `app/main.py:51`.
+- **Acceptance criteria:** MCP manager is fully initialized before lifespan yields. First GET `/api/mcp` after server startup returns `initializing:false` or omits the field (indicates ready). Test: start server, immediately hit `/api/mcp`, assert no `initializing:true` in response.
+- **Out of scope:** Lazy MCP initialization, making MCP optional.
+- **Status:** queued
+
