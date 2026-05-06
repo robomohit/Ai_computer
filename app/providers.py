@@ -1233,10 +1233,8 @@ class PlannerProvider:
             }
 
             thought_buffer = ""
-            tool_name = ""
-            tool_args_buffer = ""
-            tool_call_id = ""
-            has_tool_call = False
+            # Keyed by tool_call index; each entry: {id, name, args_buffer}
+            tool_calls_accum: dict[int, dict] = {}
 
             # When OpenRouter already has a model fallback chain, fail over quickly
             # instead of spending a full backoff ladder on a rate-limited first choice.
@@ -1269,37 +1267,43 @@ class PlannerProvider:
                                             thought_buffer += delta["content"]
                                             yield {"type": "thought", "content": delta["content"]}
 
-                                        # Tool calls
+                                        # Tool calls — accumulate per-index to support parallel calls
                                         if "tool_calls" in delta:
-                                            has_tool_call = True
                                             for tc in delta["tool_calls"]:
+                                                idx = tc.get("index", 0)
+                                                if idx not in tool_calls_accum:
+                                                    tool_calls_accum[idx] = {"id": "", "name": "", "args_buffer": ""}
+                                                entry = tool_calls_accum[idx]
                                                 if "id" in tc:
-                                                    tool_call_id = tc["id"]
+                                                    entry["id"] = tc["id"]
                                                 fn = tc.get("function", {})
                                                 if "name" in fn:
-                                                    tool_name = fn["name"]
+                                                    entry["name"] = fn["name"]
                                                 if "arguments" in fn:
-                                                    tool_args_buffer += fn["arguments"]
+                                                    entry["args_buffer"] += fn["arguments"]
 
-                                        # Finish
-                                        if finish_reason == "tool_calls" or (finish_reason == "stop" and has_tool_call):
-                                            try:
-                                                args = json.loads(tool_args_buffer) if tool_args_buffer else {}
-                                            except json.JSONDecodeError:
+                                        # Finish — emit all accumulated tool calls in index order
+                                        if finish_reason in ("tool_calls", "stop") and tool_calls_accum:
+                                            for idx in sorted(tool_calls_accum):
+                                                entry = tool_calls_accum[idx]
+                                                buf = entry["args_buffer"]
                                                 try:
-                                                    args = json.loads(_sanitize_json_text(tool_args_buffer))
-                                                except (json.JSONDecodeError, ValueError, TypeError):
-                                                    args = {}
-                                            yield {
-                                                "type": "tool_call",
-                                                "id": tool_call_id,
-                                                "name": tool_name,
-                                                "args": args,
-                                                "thought": thought_buffer,
-                                            }
+                                                    args = json.loads(buf) if buf else {}
+                                                except json.JSONDecodeError:
+                                                    try:
+                                                        args = json.loads(_sanitize_json_text(buf))
+                                                    except (json.JSONDecodeError, ValueError, TypeError):
+                                                        args = {}
+                                                yield {
+                                                    "type": "tool_call",
+                                                    "id": entry["id"],
+                                                    "name": entry["name"],
+                                                    "args": args,
+                                                    "thought": thought_buffer,
+                                                }
                                             return
 
-                                        if finish_reason == "stop" and not has_tool_call:
+                                        if finish_reason == "stop" and not tool_calls_accum:
                                             yield {"type": "text_only", "content": thought_buffer}
                                             return
 

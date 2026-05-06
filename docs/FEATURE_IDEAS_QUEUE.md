@@ -323,7 +323,7 @@ _(Discovery cron will append below. You can seed items manually.)_
 - **Scope (this PR only):** Modify `stream_chat_with_tools()` to collect ALL tool_calls from the response into a list instead of returning after the first one. Emit each as a separate `{"type": "tool_call", "name": ..., "args": ...}` dict. Caller loops to handle multiple tool calls. ~25 LOC change in the accumulation and emission logic (lines 1232–1320).
 - **Acceptance criteria:** A mock OpenRouter response containing 2 sequential tool_calls in one SSE chunk yields both tool_calls to the caller in order. Existing single-tool_call responses still work (backward compatible). Test: `test_stream_chat_with_tools_multiple_calls` creates a payload with two tool_calls and asserts both are emitted.
 - **Out of scope:** Executor-side changes to handle parallel execution. This IDEA only ensures the streaming layer doesn't drop tool_calls.
-- **Status:** in_progress
+- **Status:** done (2026-05-06: replaced single-variable accumulators with dict keyed by tool_call index; all indices emitted in order on finish; test_providers.py added with single-call and multi-call coverage)
 
 ### [IDEA-2026-05-05-02] Guard _extract_json against non-dict top-level return
 
