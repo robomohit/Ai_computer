@@ -341,7 +341,7 @@ _(Discovery cron will append below. You can seed items manually.)_
 - **Scope (this PR only):** Replace `asyncio.create_task(_init_mcp)` with `await asyncio.gather(_init_mcp(), ...)` or `await _init_mcp()` directly (keep telegram/discord as fire-and-forget if they have their own timeout resilience). ~2 LOC change in `app/main.py:51`.
 - **Acceptance criteria:** MCP manager is fully initialized before lifespan yields. First GET `/api/mcp` after server startup returns `initializing:false` or omits the field (indicates ready). Test: start server, immediately hit `/api/mcp`, assert no `initializing:true` in response.
 - **Out of scope:** Lazy MCP initialization, making MCP optional.
-- **Status:** in_progress
+- **Status:** done (2026-05-08: changed asyncio.create_task(_init_mcp()) to await _init_mcp() in app/main.py; test_mcp_init_awaited_before_lifespan_yields added to test_healthz.py)
 
 ### [IDEA-2026-05-06-02] Cap SSE subscriber queue depth to prevent unbounded memory growth
 
@@ -350,7 +350,7 @@ _(Discovery cron will append below. You can seed items manually.)_
 - **Scope (this PR only):** In `log_emitter.subscribe()`, change `asyncio.Queue()` to `asyncio.Queue(maxsize=500)`. In the SSE emit path (`log_emitter.emit` or equivalent), catch `asyncio.QueueFull` and log a warning with the task ID. In the SSE handler (`app/main.py` stream endpoint), detect the disconnected state and break out of the stream loop. ~10–15 LOC total.
 - **Acceptance criteria:** A test fills the queue past 500 events without a consumer and verifies `QueueFull` is raised rather than growing indefinitely. Existing SSE tests still pass.
 - **Out of scope:** Per-subscriber configurable limits; back-pressure signaling to the agent.
-- **Status:** queued
+- **Status:** done (2026-05-08: pre-implemented — subscribe() already used maxsize=200, emit() already caught QueueFull with a warning log; test_sse_subscriber_queue_is_bounded added to test_computer_control_regressions.py)
 
 
 ### [IDEA-2026-05-08-01] Expose active task list API endpoint for real-time task visibility
@@ -360,4 +360,13 @@ _(Discovery cron will append below. You can seed items manually.)_
 - **Scope (this PR only):** Add `/api/active-tasks` GET endpoint in `app/main.py` that returns `{ tasks: [{ task_id: str, status: str, created_at: str, last_updated: str }, ...] }` by iterating `_active_tasks` dict. ~15–20 LOC in main.py. No changes to agent loop or SSE.
 - **Acceptance criteria:** GET `/api/active-tasks` returns a list of task objects with task_id, status, timestamps. When a task is created, it appears in the list. When task completes, it's removed. Smoke test: create a task and verify it appears in `/api/active-tasks` before finishing.
 - **Out of scope:** UI panel to display the task list; real-time push of task updates (use polling via endpoint); filtering or sorting tasks.
+- **Status:** queued
+
+### [IDEA-2026-05-08-02] Store telegram/discord asyncio.Task refs to prevent silent GC cancellation
+
+- **Source:** `app/main.py:52–53` — `asyncio.create_task(start_telegram(...))` and `asyncio.create_task(start_discord(...))` return Task objects that are immediately discarded
+- **Why it fits Ai_computer:** Python's asyncio GC can silently cancel a Task if its only reference is dropped. CPython doesn't GC immediately (refcount), but PyPy and some edge cases can kill the task mid-run without any exception visible to the server. Storing the task refs in module-level variables costs 2 LOC and eliminates the risk. Also enables clean shutdown: cancelling the stored tasks in the lifespan shutdown block instead of letting them leak.
+- **Scope (this PR only):** Store the two `create_task()` results in module-level `_telegram_task` and `_discord_task` variables in `app/main.py`. In the lifespan shutdown block (after `yield`), call `.cancel()` on each and await their cancellation. ~8 LOC.
+- **Acceptance criteria:** `_telegram_task` and `_discord_task` are set at startup. Lifespan teardown cancels them. Existing tests pass. No regression on server shutdown (uvicorn still exits cleanly).
+- **Out of scope:** Restarting failed integrations; monitoring integration health.
 - **Status:** queued
