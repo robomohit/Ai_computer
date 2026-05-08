@@ -48,7 +48,7 @@ async def _lifespan(application):
         except Exception as exc:
             _lifespan_log.warning("MCP server initialization failed: %s", exc)
 
-    asyncio.create_task(_init_mcp())
+    await _init_mcp()
     asyncio.create_task(start_telegram(service))
     asyncio.create_task(start_discord(service))
     yield

@@ -1,6 +1,8 @@
 import time
 import pytest
 import app.main as _m  # force import (and load_dotenv) at collection time
+import app.integrations.telegram as _tg
+import app.integrations.discord as _dc
 from fastapi.testclient import TestClient
 
 
@@ -68,3 +70,27 @@ def test_get_mcp_ready_no_reinit(monkeypatch):
     assert resp.status_code == 200
     assert resp.json() == {"servers": []}
     assert reinit_called == []
+
+
+@pytest.mark.asyncio
+async def test_mcp_init_awaited_before_lifespan_yields(monkeypatch):
+    """_lifespan must await MCP init so _is_ready is True before the first request."""
+    from app.mcp_manager import mcp_manager
+
+    ready_on_entry = []
+
+    async def mock_init(*a, **kw):
+        mcp_manager._is_ready = True
+
+    async def noop(*a, **kw):
+        pass
+
+    monkeypatch.setattr(mcp_manager, "_is_ready", False)
+    monkeypatch.setattr(mcp_manager, "initialize_default_servers", mock_init)
+    monkeypatch.setattr(_tg, "start_telegram", noop)
+    monkeypatch.setattr(_dc, "start_discord", noop)
+
+    async with _m._lifespan(_m.app):
+        ready_on_entry.append(mcp_manager._is_ready)
+
+    assert ready_on_entry[0] is True, "MCP init must complete before lifespan yields"

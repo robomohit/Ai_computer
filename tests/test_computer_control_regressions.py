@@ -471,6 +471,26 @@ def test_log_emitter_rejects_path_like_task_ids_and_cleans_queues(tmp_path, monk
     assert not (Path("workspace/logs") / "escape.jsonl").exists()
 
 
+def test_sse_subscriber_queue_is_bounded(tmp_path, monkeypatch):
+    """subscribe() queue has a maxsize; excess events are dropped without exception."""
+    monkeypatch.chdir(tmp_path)
+    emitter = LogEmitter()
+    q = emitter.subscribe("flood-task")
+
+    assert q.maxsize > 0, "Queue must be bounded"
+    cap = q.maxsize
+
+    for i in range(cap):
+        emitter.emit("flood-task", "status", {"message": f"e{i}"})
+    emitter.flush()
+    assert q.qsize() == cap
+
+    # One more emit past the cap must not raise — QueueFull is caught internally
+    emitter.emit("flood-task", "status", {"message": "overflow"})
+    emitter.flush()
+    assert q.qsize() == cap  # overflow event was dropped, size unchanged
+
+
 @pytest.mark.asyncio
 async def test_killed_task_finalizes_as_cancelled_not_max_steps(monkeypatch, workspace):
     service = AgentService(workspace, log_emitter=DummyLogEmitter())
