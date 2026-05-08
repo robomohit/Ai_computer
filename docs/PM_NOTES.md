@@ -18,6 +18,12 @@ If options are genuinely 50/50, pick the smaller scope. Only escalate to `## NEE
 
 ---
 
+## Pending answers from user
+
+**Q1: A** — IDEA-2026-04-30-10 (Persist AGENT_API_KEY): user approved option A. Implement persistence at `~/.config/ai_computer/.api_key` (honor `$XDG_CONFIG_HOME` if set, fall back to `~/.config/ai_computer/`). File mode 600. Generate once on first run if env var unset; reuse on subsequent restarts. ~15 LOC. Treat as authorized; clear `needs_human`, mark `queued`, ship next run. Do NOT modify anything in `workspace/`.
+
+---
+
 # PM Brief — 2026-04-29 09:00 local
 
 **Starting commit:** dca562e  →  **Ending commit:** dca562e (no feature shipped — see below)
