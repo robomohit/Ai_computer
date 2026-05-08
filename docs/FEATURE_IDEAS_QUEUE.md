@@ -352,3 +352,12 @@ _(Discovery cron will append below. You can seed items manually.)_
 - **Out of scope:** Per-subscriber configurable limits; back-pressure signaling to the agent.
 - **Status:** queued
 
+
+### [IDEA-2026-05-08-01] Expose active task list API endpoint for real-time task visibility
+
+- **Source:** OpenHands Task List tab (May 2026 update) — shows agent's current task list with status updates
+- **Why it fits Ai_computer:** Competitors (OpenHands, Devin) expose real-time agent task breakdowns in the UI. AI_computer tracks `_active_tasks` dict (app/agent.py:338) but exposes no endpoint for it. Users have no visibility into what the agent is currently working on — only historical task list. Adding `/api/active-tasks` endpoint would let the UI show a "Current Tasks" panel matching competitor parity and improving real-time visibility.
+- **Scope (this PR only):** Add `/api/active-tasks` GET endpoint in `app/main.py` that returns `{ tasks: [{ task_id: str, status: str, created_at: str, last_updated: str }, ...] }` by iterating `_active_tasks` dict. ~15–20 LOC in main.py. No changes to agent loop or SSE.
+- **Acceptance criteria:** GET `/api/active-tasks` returns a list of task objects with task_id, status, timestamps. When a task is created, it appears in the list. When task completes, it's removed. Smoke test: create a task and verify it appears in `/api/active-tasks` before finishing.
+- **Out of scope:** UI panel to display the task list; real-time push of task updates (use polling via endpoint); filtering or sorting tasks.
+- **Status:** queued
