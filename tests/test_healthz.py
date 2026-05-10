@@ -1,3 +1,4 @@
+import asyncio
 import time
 import pytest
 import app.main as _m  # force import (and load_dotenv) at collection time
@@ -94,3 +95,49 @@ async def test_mcp_init_awaited_before_lifespan_yields(monkeypatch):
         ready_on_entry.append(mcp_manager._is_ready)
 
     assert ready_on_entry[0] is True, "MCP init must complete before lifespan yields"
+
+
+def test_load_or_create_api_key_env_var(monkeypatch, tmp_path):
+    monkeypatch.setenv("AGENT_API_KEY", "mykey123")
+    assert _m._load_or_create_api_key() == "mykey123"
+
+
+def test_load_or_create_api_key_from_file(monkeypatch, tmp_path):
+    monkeypatch.delenv("AGENT_API_KEY", raising=False)
+    monkeypatch.setenv("XDG_CONFIG_HOME", str(tmp_path))
+    key_dir = tmp_path / "ai_computer"
+    key_dir.mkdir()
+    (key_dir / ".api_key").write_text("filekey456")
+    assert _m._load_or_create_api_key() == "filekey456"
+
+
+def test_load_or_create_api_key_generates_and_saves(monkeypatch, tmp_path):
+    monkeypatch.delenv("AGENT_API_KEY", raising=False)
+    monkeypatch.setenv("XDG_CONFIG_HOME", str(tmp_path))
+    key = _m._load_or_create_api_key()
+    assert len(key) == 64  # token_hex(32) produces 64 hex chars
+    key_file = tmp_path / "ai_computer" / ".api_key"
+    assert key_file.exists()
+    assert key_file.read_text().strip() == key
+
+
+@pytest.mark.asyncio
+async def test_lifespan_stores_and_cancels_integration_tasks(monkeypatch):
+    from app.mcp_manager import mcp_manager
+
+    async def mock_init(*a, **kw):
+        pass
+
+    async def long_running(*a, **kw):
+        await asyncio.sleep(9999)
+
+    monkeypatch.setattr(mcp_manager, "initialize_default_servers", mock_init)
+    monkeypatch.setattr(_tg, "start_telegram", long_running)
+    monkeypatch.setattr(_dc, "start_discord", long_running)
+
+    async with _m._lifespan(_m.app):
+        assert _m._telegram_task is not None and not _m._telegram_task.done()
+        assert _m._discord_task is not None and not _m._discord_task.done()
+
+    assert _m._telegram_task.done()
+    assert _m._discord_task.done()

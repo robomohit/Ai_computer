@@ -18,7 +18,21 @@ from .log_emitter import log_emitter
 from .models import AgentContext, TaskRecord
 from .skills import skill_manager
 
-API_KEY = os.environ.get("AGENT_API_KEY") or secrets.token_hex(32)
+def _load_or_create_api_key() -> str:
+    if env_key := os.environ.get("AGENT_API_KEY"):
+        return env_key
+    config_dir = Path(os.environ.get("XDG_CONFIG_HOME", str(Path.home() / ".config"))) / "ai_computer"
+    key_file = config_dir / ".api_key"
+    if key_file.exists():
+        return key_file.read_text().strip()
+    config_dir.mkdir(parents=True, exist_ok=True)
+    new_key = secrets.token_hex(32)
+    key_file.write_text(new_key)
+    key_file.chmod(0o600)
+    print(f"[AI_Computer] Generated new API key, saved to {key_file}", flush=True)
+    return new_key
+
+API_KEY = _load_or_create_api_key()
 print(f"[AI_Computer] Agent API key configured: {bool(os.environ.get('AGENT_API_KEY'))}", flush=True)
 SESSION_COOKIE_NAME = "ai_computer_session"
 SESSION_TTL_SECONDS = int(os.environ.get("SESSION_TTL_SECONDS", "43200"))
@@ -48,11 +62,19 @@ async def _lifespan(application):
         except Exception as exc:
             _lifespan_log.warning("MCP server initialization failed: %s", exc)
 
+    global _telegram_task, _discord_task
     await _init_mcp()
-    asyncio.create_task(start_telegram(service))
-    asyncio.create_task(start_discord(service))
+    _telegram_task = asyncio.create_task(start_telegram(service))
+    _discord_task = asyncio.create_task(start_discord(service))
     yield
-    # Shutdown: clean up background browsers
+    # Shutdown: cancel integrations, then clean up background browsers
+    for _t in (_telegram_task, _discord_task):
+        if _t and not _t.done():
+            _t.cancel()
+            try:
+                await _t
+            except asyncio.CancelledError:
+                pass
     await service.shutdown()
 
 app = FastAPI(title="AI Computer", lifespan=_lifespan)
@@ -60,6 +82,8 @@ _allowed_origins = [o.strip() for o in os.environ.get("ALLOWED_ORIGINS", "http:/
 app.add_middleware(CORSMiddleware, allow_origins=_allowed_origins, allow_credentials=True, allow_methods=["*"], allow_headers=["*"])
 bearer = HTTPBearer(auto_error=False)
 _tasks: Dict[str, TaskRecord] = {}
+_telegram_task: Optional[asyncio.Task] = None
+_discord_task: Optional[asyncio.Task] = None
 
 def _prune_sessions(now: Optional[datetime] = None) -> None:
     now = now or datetime.now(timezone.utc)
