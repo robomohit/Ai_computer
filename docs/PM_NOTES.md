@@ -663,3 +663,62 @@ If options are genuinely 50/50, pick the smaller scope. Only escalate to `## NEE
 - **IDEA-2026-04-29-02:** Copy-task button on completed runs (~25 LOC, frontend)
 
 ---
+
+# PM Brief — 2026-05-13 09:00 local
+**Starting commit:** 74e5ab5  →  **Ending commit:** 2d7eff1 (+ 1 docs commit)
+**Run duration:** ~25 minutes  |  **LOC budget used:** ~105/200
+**Run type:** mixed (2 features shipped)
+
+## What I did
+- Synced `feature/new-updates` — already up to date at 74e5ab5 (Haiku research commit, 1 ahead of origin).
+- Read last 5 PM_NOTES entries, full queue, and 2026-05-13 Haiku research notes (memory.py + mcp_manager.py scan).
+- Ran full `pytest -q` — **109 passed, 1 skipped, 0 failed** baseline (same as last run).
+- UI smoke: GET / → 200, /healthz returns provider statuses; server killed cleanly.
+- Shipped IDEA-2026-05-10-02: log fallback model selection + emit provider_info SSE event.
+- Shipped IDEA-2026-04-29-02: copy-task button on terminal-state history items.
+- Final suite: **111 passed, 1 skipped, 0 failed** (+2 from new tests).
+- Queue hygiene: no stale IDEAs (all < 15 days); no blocked IDEAs newly resolvable; no obsolete file refs.
+- Added IDEA-2026-05-13-03: Chroma vs FallbackCollection parity test (~30 LOC).
+
+## Tests
+- Unit/integration: **111 passed, 1 skipped, 0 failed** (325s)
+- UI smoke: GET / → 200, /healthz returns expected provider statuses; no orphan processes
+
+## Repaired
+- none (baseline was already green)
+
+## Shipped from queue
+- **IDEA-2026-05-10-02:** Log fallback model selection — `import logging` + `_log` added to `app/providers.py`; `_chat_openrouter` logs INFO on fallback; `stream_chat_with_tools` yields `{"type":"provider_info","model":...,"fallback":True}` before fallback stream. 1 new test in `tests/test_providers.py`. (~65 LOC)
+- **IDEA-2026-04-29-02:** Copy-task button — `.history-retask` CSS (hover-revealed); `renderHistoryItem` adds `terminal` class + `↻ Copy task` button; click fills `#input` + focuses; `stopPropagation` prevents task log load. 1 new test in `tests/test_ui_static_hardening.py`. (~40 LOC)
+
+## Polished (unsolicited)
+- none
+
+## New idea added
+- **IDEA-2026-05-13-03:** Parity test: Chroma vs FallbackCollection recall consistency (~30 LOC, auto-skips on CI).
+
+## Decisions I made (and why)
+- **`provider_info` event before fallback stream:** Callers see the model switch before first token — faster feedback than post-hoc.
+- **`tabindex="-1"` on retask button:** Prevents double-tab on each history item; parent button already in tab order.
+- **`inp.dispatchEvent(new Event('input'))` after setting value:** Triggers `autoGrow()` so textarea resizes correctly for multi-line goals.
+
+## Skipped / blocked / NEEDS HUMAN
+- none
+
+## Risk flags for this push
+- `app/providers.py`: additive only; fallback log only fires on actual fallback activation.
+- `static/index.html`: `stopPropagation` on retask button is load-bearing — prevents parent click handler from loading task log.
+
+## Health snapshot
+- Full suite: **111 passed, 1 skipped, 0 failed**  (Δ vs last run: +2 passed / ±0 failed)
+- Open queued IDEAs: **13 queued**  (Δ: -2 shipped, +1 new = -1 net)
+- Blocked / stale / needs_human IDEAs: 0
+- Lines shipped this run: ~105  /  Last 7 runs avg: ~65
+- Trend: **healthy** — suite fully green, 2 features shipped, queue shrinking
+- Haiku research last contributed: 2026-05-13
+
+## Next run will likely tackle
+- **IDEA-2026-05-13-01:** Run memory consolidation in background (~5 LOC, prevents agent loop hangs)
+- **IDEA-2026-05-13-02:** MCP server watchdog timer (~20 LOC)
+
+---

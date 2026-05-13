@@ -408,3 +408,12 @@ _(Discovery cron will append below. You can seed items manually.)_
 - **Acceptance criteria:** A test that stops an MCP server subprocess verifies status transitions to `"dead"` within 15s (watchdog interval) instead of 60s. Existing MCP server tests still pass. No regression on normal operation (rapid calls keep heartbeat fresh).
 - **Out of scope:** Auto-restart dead servers; WebSocket/gRPC upgrade (higher complexity).
 - **Status:** queued
+
+### [IDEA-2026-05-13-03] Parity test: Chroma vs FallbackCollection recall consistency
+
+- **Source:** `app/memory.py:17-78` — `_FallbackCollection` pure keyword matching vs ChromaDB cosine+BM25 hybrid. Two code paths diverge silently when `USE_CHROMA=0`.
+- **Why it fits Ai_computer:** Tests run with Chroma disabled (offline/CI) but production uses Chroma. A keyword search that returns "exact match" in fallback may return a very different ranking from Chroma cosine similarity. Regressions in recall quality are invisible because no parity test exists.
+- **Scope (this PR only):** Add `tests/test_memory_parity.py` — run the same sequence of `memory.add` + `memory.search` calls on both a real MemoryStore (Chroma) and a forced-fallback MemoryStore (`USE_CHROMA=0`). Assert top-1 result is the same item (not necessarily same rank). Use `pytest.importorskip("chromadb")` to skip if Chroma not installed. ~30 LOC.
+- **Acceptance criteria:** Test passes on machines with Chroma installed; auto-skips on CI where Chroma is absent. If the top-1 result diverges between backends for an obvious query, the test must fail and surface the difference.
+- **Out of scope:** Fixing any divergence (that's a separate IDEA); BM25 parameter tuning.
+- **Status:** queued
