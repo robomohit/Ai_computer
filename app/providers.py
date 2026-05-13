@@ -4,12 +4,15 @@ import asyncio
 import base64
 import io
 import json
+import logging
 import math
 import os
 import re
 import time
 from pathlib import Path
 from typing import Any, Dict, List, Optional
+
+_log = logging.getLogger(__name__)
 
 import httpx
 from PIL import Image
@@ -815,6 +818,8 @@ class PlannerProvider:
 
         last_err = None
         for current_model in models_to_try:
+            if current_model != models_to_try[0]:
+                _log.info("Fallback activated: using %s", current_model)
             is_vision_model = any(
                 x in current_model.lower()
                 for x in ["vision", "vl", "gemini", "claude", "gpt-4o", "gpt-4-turbo", "pixtral", "llava", "gemma"]
@@ -1193,6 +1198,9 @@ class PlannerProvider:
 
         last_err = None
         for current_model in models_to_try:
+            if current_model != models_to_try[0]:
+                _log.info("Fallback activated: using %s", current_model)
+                yield {"type": "provider_info", "model": current_model, "fallback": True}
             is_vision_model = any(
                 x in current_model.lower()
                 for x in ["vision", "vl", "gemini", "claude", "gpt-4o", "gpt-4-turbo", "pixtral", "llava", "gemma"]

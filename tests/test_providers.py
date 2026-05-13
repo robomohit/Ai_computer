@@ -104,3 +104,59 @@ async def test_stream_chat_multiple_tool_calls(provider, monkeypatch):
     assert tool_calls[0]["args"] == {"path": "a.txt"}
     assert tool_calls[1]["name"] == "run_command"
     assert tool_calls[1]["args"] == {"cmd": "ls"}
+
+
+def _make_client_cm_for_resp(mock_resp):
+    """Wrap a mock response in the nested async context managers httpx expects."""
+    stream_cm = AsyncMock()
+    stream_cm.__aenter__ = AsyncMock(return_value=mock_resp)
+    stream_cm.__aexit__ = AsyncMock(return_value=False)
+
+    client = AsyncMock()
+    client.stream = MagicMock(return_value=stream_cm)
+
+    client_cm = AsyncMock()
+    client_cm.__aenter__ = AsyncMock(return_value=client)
+    client_cm.__aexit__ = AsyncMock(return_value=False)
+    return client_cm
+
+
+@pytest.mark.asyncio
+async def test_stream_chat_fallback_emits_provider_info(monkeypatch):
+    """When primary model returns 429, fallback yields provider_info before streaming."""
+    import httpx as _httpx
+    monkeypatch.setenv("OPENROUTER_API_KEY", "test-key")
+    from app.providers import PlannerProvider
+    provider = PlannerProvider(model="openrouter/primary-model")
+
+    monkeypatch.setattr(provider, "_openrouter_models_to_try",
+                        lambda *a, **kw: ["primary-model", "fallback-model"])
+
+    # Primary: 429 — httpx raises HTTPStatusError
+    mock_429 = MagicMock()
+    mock_429.status_code = 429
+    mock_429.raise_for_status = MagicMock(
+        side_effect=_httpx.HTTPStatusError("429", request=MagicMock(), response=MagicMock(status_code=429))
+    )
+
+    # Fallback: 200 + text_only stop
+    fallback_sse = _sse_lines({"choices": [{"delta": {"content": "ok"}, "finish_reason": "stop"}]})
+
+    async def fake_aiter():
+        for line in fallback_sse:
+            yield line
+
+    mock_200 = AsyncMock()
+    mock_200.status_code = 200
+    mock_200.raise_for_status = MagicMock()
+    mock_200.aiter_lines = fake_aiter
+
+    client_cms = iter([_make_client_cm_for_resp(mock_429), _make_client_cm_for_resp(mock_200)])
+
+    with patch("app.providers.httpx.AsyncClient", side_effect=lambda **kw: next(client_cms)):
+        events = [e async for e in provider.stream_chat_with_tools("sys", [{"role": "user", "content": "go"}], [])]
+
+    pinfo = [e for e in events if e.get("type") == "provider_info"]
+    assert len(pinfo) == 1
+    assert pinfo[0]["model"] == "fallback-model"
+    assert pinfo[0]["fallback"] is True
