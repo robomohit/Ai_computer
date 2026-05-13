@@ -390,3 +390,21 @@ _(Discovery cron will append below. You can seed items manually.)_
 - **Acceptance criteria:** Server logs show which fallback model was selected. `provider_info` event visible in task SSE stream when fallback fires. Existing tests pass.
 - **Out of scope:** UI badge showing model name mid-run; persistent per-task model audit log.
 - **Status:** queued
+
+### [IDEA-2026-05-13-01] Run memory consolidation in background to prevent agent loop hangs
+
+- **Source:** `app/memory.py:466-571` — `consolidate()` is O(n²) Jaccard comparisons with no parallelization; runs synchronously via `maybe_auto_consolidate()` (line 573) triggered every 50 new summaries. At 500 summaries, this blocks the agent loop for seconds.
+- **Why it fits Ai_computer:** Long-running agents that write many session summaries (e.g., 50+ summaries = 500+ items after actions) will experience unpredictable latency spikes when consolidation fires mid-task. Users notice a stall in the agent's response time with no visible cause. Recommend: move consolidation to a background task so agent loop stays responsive.
+- **Scope (this PR only):** Change `maybe_auto_consolidate()` from synchronous to fire-and-forget: spawn `asyncio.create_task(self.consolidate())` instead of returning the result. Remove the return value (callers don't use it). Update one call-site in `app/agent.py` where `maybe_auto_consolidate()` is invoked. ~5 LOC.
+- **Acceptance criteria:** A test that triggers 50+ `summarize_session()` calls verifies that the consolidation task is enqueued (via mock/spy) rather than blocking. No latency regression in the fast path (agent loop). Existing test_memory.py tests still pass.
+- **Out of scope:** Reducing AUTO_CONSOLIDATE_EVERY or parallelizing Jaccard (those are tier-2 optimizations if background consolidation doesn't solve the issue).
+- **Status:** queued
+
+### [IDEA-2026-05-13-02] Add watchdog timer to detect dead MCP server listeners
+
+- **Source:** `app/mcp_manager.py:117-151` — `_listen()` catches exceptions and logs but silently exits; server.status stays `"running"`. Future `call()` requests timeout after 60s before detecting the dead listener.
+- **Why it fits Ai_computer:** If an MCP server listener crashes (e.g., OOM, segfault in subprocess), the caller gets no early feedback — they wait the full _CALL_TIMEOUT (60s) before learning the server is dead. For interactive agent workflows, 60s latency is unacceptable. Recommend: add a heartbeat check or detect listener silence early.
+- **Scope (this PR only):** In `MCPServer`, add a `_last_response_at` timestamp updated whenever the listener receives a response (line 139). Add an async `_watchdog()` task that checks if `time.time() - _last_response_at > 15s` and no call is in-flight, then mark status `"dead"`. Run watchdog alongside listener. Cancel it on stop. ~20 LOC.
+- **Acceptance criteria:** A test that stops an MCP server subprocess verifies status transitions to `"dead"` within 15s (watchdog interval) instead of 60s. Existing MCP server tests still pass. No regression on normal operation (rapid calls keep heartbeat fresh).
+- **Out of scope:** Auto-restart dead servers; WebSocket/gRPC upgrade (higher complexity).
+- **Status:** queued
