@@ -2070,11 +2070,11 @@
   }
   .toast.info { border-color: var(--line-3); }
   .toast.ok   { border-color: color-mix(in oklab, var(--ok) 45%, var(--line-2)); }
-  .toast.ok::before    { content: '✓ '; color: var(--ok); font-weight: 700; }
+  .toast.ok::before    { content: url("data:image/svg+xml;utf8,<svg xmlns='http://www.w3.org/2000/svg' width='14' height='14' viewBox='0 0 24 24' fill='none' stroke='%233fb950' stroke-width='2.5' stroke-linecap='round' stroke-linejoin='round'><polyline points='20 6 9 17 4 12'></polyline></svg>"); margin-right: 6px; display: inline-block; vertical-align: text-bottom; }
   .toast.warn { border-color: color-mix(in oklab, var(--warn) 45%, var(--line-2)); }
-  .toast.warn::before  { content: '⚠ '; color: var(--warn); font-weight: 700; }
+  .toast.warn::before  { content: url("data:image/svg+xml;utf8,<svg xmlns='http://www.w3.org/2000/svg' width='14' height='14' viewBox='0 0 24 24' fill='none' stroke='%23d29922' stroke-width='2.5' stroke-linecap='round' stroke-linejoin='round'><path d='M10.29 3.86L1.82 18a2 2 0 0 0 1.71 3h16.94a2 2 0 0 0 1.71-3L13.71 3.86a2 2 0 0 0-3.42 0z'></path><line x1='12' y1='9' x2='12' y2='13'></line><line x1='12' y1='17' x2='12.01' y2='17'></line></svg>"); margin-right: 6px; display: inline-block; vertical-align: text-bottom; }
   .toast.err  { border-color: color-mix(in oklab, var(--err) 45%, var(--line-2)); }
-  .toast.err::before   { content: '✕ '; color: var(--err); font-weight: 700; }
+  .toast.err::before   { content: url("data:image/svg+xml;utf8,<svg xmlns='http://www.w3.org/2000/svg' width='14' height='14' viewBox='0 0 24 24' fill='none' stroke='%23f85149' stroke-width='2.5' stroke-linecap='round' stroke-linejoin='round'><line x1='18' y1='6' x2='6' y2='18'></line><line x1='6' y1='6' x2='18' y2='18'></line></svg>"); margin-right: 6px; display: inline-block; vertical-align: text-bottom; }
 
   .overlay {
     position: fixed;
@@ -3310,7 +3310,7 @@
       <span class="history-copy">
         <span class="history-goal"></span>
         <span class="history-meta">${relTime(taskRecord.created_at || taskRecord.timestamp || taskRecord.finished_at) || humanize(status || 'saved')}</span>
-        <button type="button" class="history-retask" tabindex="-1">↻ Copy task</button>
+        <button type="button" class="history-retask" tabindex="-1"><svg width="12" height="12" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round" aria-hidden="true"><rect x="9" y="9" width="13" height="13" rx="2" ry="2"></rect><path d="M5 15H4a2 2 0 0 1-2-2V4a2 2 0 0 1 2-2h9a2 2 0 0 1 2 2v1"></path></svg> Copy task</button>
       </span>
     `;
     item.querySelector('.history-goal').textContent = taskRecord.goal || '(untitled)';
@@ -3584,8 +3584,8 @@
     row.className = `subtask-item ${state}`.trim();
     const icon = row.querySelector('.subtask-icon');
     if (!icon) return;
-    const fallback = icon.textContent;
-    icon.textContent = state === 'done' ? '✓' : state === 'running' ? '●' : state === 'failed' ? '✕' : fallback;
+    const fallback = icon.innerHTML;
+    icon.innerHTML = state === 'done' ? `<svg width="12" height="12" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2.5" stroke-linecap="round" stroke-linejoin="round" aria-label="Done"><polyline points="20 6 9 17 4 12"></polyline></svg>` : state === 'running' ? `<svg width="12" height="12" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2.5" stroke-linecap="round" stroke-linejoin="round" aria-label="Running"><circle cx="12" cy="12" r="10"></circle><polyline points="12 6 12 12 16 14"></polyline></svg>` : state === 'failed' ? `<svg width="12" height="12" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2.5" stroke-linecap="round" stroke-linejoin="round" aria-label="Failed"><line x1="18" y1="6" x2="6" y2="18"></line><line x1="6" y1="6" x2="18" y2="18"></line></svg>` : fallback;
   };
 
   const ensureActionCard = (actionId, actionType = 'action', summary = '') => {
@@ -4842,7 +4842,7 @@
       row.dataset.i = i;
       const icon = document.createElement('span');
       icon.className = 'cmdk-icon';
-      icon.textContent = '>';
+      icon.innerHTML = `<svg width="12" height="12" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round" aria-hidden="true"><polyline points="9 18 15 12 9 6"></polyline></svg>`;
       const label = document.createElement('span');
       label.className = 'cmdk-label';
       label.textContent = c.label;
