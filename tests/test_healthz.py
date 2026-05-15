@@ -163,6 +163,31 @@ def test_active_tasks_empty_when_no_tasks(monkeypatch):
     assert resp.json() == {"tasks": []}
 
 
+@pytest.mark.asyncio
+async def test_mcp_watchdog_marks_dead_when_pending_calls_get_no_response():
+    """Watchdog transitions status to 'dead' within the timeout when calls are in-flight but silent."""
+    from app.mcp_manager import MCPServer
+
+    server = MCPServer("test", ["echo"])
+    server.status = "running"
+    server._last_response_at = 0.0  # epoch — always expired relative to _WATCHDOG_TIMEOUT
+
+    loop = asyncio.get_running_loop()
+    fut = loop.create_future()
+    server._pending[1] = fut
+
+    task = asyncio.create_task(server._watchdog(poll=0.01))
+    await asyncio.sleep(0.05)  # let watchdog tick at least once
+
+    assert server.status == "dead"
+    assert fut.done()
+    task.cancel()
+    try:
+        await task
+    except asyncio.CancelledError:
+        pass
+
+
 def test_active_tasks_returns_non_terminal_only(monkeypatch):
     from app.models import AgentContext, TaskRecord
     running = TaskRecord(id="t1", status="running", context=AgentContext(goal="do stuff"), goal="do stuff", mode="coding", model="gpt-4")

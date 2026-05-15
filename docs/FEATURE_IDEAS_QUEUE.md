@@ -407,7 +407,7 @@ _(Discovery cron will append below. You can seed items manually.)_
 - **Scope (this PR only):** In `MCPServer`, add a `_last_response_at` timestamp updated whenever the listener receives a response (line 139). Add an async `_watchdog()` task that checks if `time.time() - _last_response_at > 15s` and no call is in-flight, then mark status `"dead"`. Run watchdog alongside listener. Cancel it on stop. ~20 LOC.
 - **Acceptance criteria:** A test that stops an MCP server subprocess verifies status transitions to `"dead"` within 15s (watchdog interval) instead of 60s. Existing MCP server tests still pass. No regression on normal operation (rapid calls keep heartbeat fresh).
 - **Out of scope:** Auto-restart dead servers; WebSocket/gRPC upgrade (higher complexity).
-- **Status:** queued
+- **Status:** done (2026-05-15: added _last_response_at timestamp + _watchdog() task to MCPServer; watchdog fires if pending calls get no response for _WATCHDOG_TIMEOUT=15s; starts on server startup, cancelled on stop/_kill_proc; _last_response_at updated in _listen() on each response; test_mcp_watchdog_marks_dead_when_pending_calls_get_no_response added)
 
 ### [IDEA-2026-05-13-03] Parity test: Chroma vs FallbackCollection recall consistency
 

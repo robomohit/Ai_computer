@@ -4,6 +4,7 @@ import json
 import subprocess
 import os
 import sys
+import time
 from pathlib import Path
 from typing import Any, Dict, List, Optional
 import logging
@@ -14,6 +15,8 @@ _log = logging.getLogger(__name__)
 _START_TIMEOUT = 60.0
 # Per-call timeout in seconds.
 _CALL_TIMEOUT = 60.0
+# Watchdog: if no response arrives for this many seconds while calls are pending → mark dead.
+_WATCHDOG_TIMEOUT = 15.0
 
 
 class MCPServer:
@@ -25,6 +28,8 @@ class MCPServer:
         self._id_counter = 0
         self._pending: Dict[int, asyncio.Future] = {}
         self._listener_task: Optional[asyncio.Task] = None
+        self._watchdog_task: Optional[asyncio.Task] = None
+        self._last_response_at: float = 0.0
         self.tools: List[Dict[str, Any]] = []
         # Health tracking
         self.status: str = "starting"   # starting | running | dead | unresponsive
@@ -80,6 +85,8 @@ class MCPServer:
             raise
 
         self.status = "running"
+        self._last_response_at = time.time()
+        self._watchdog_task = asyncio.create_task(self._watchdog())
         _log.info("MCP server %s started with %d tools.", self.name, len(self.tools))
         return True
 
@@ -94,6 +101,8 @@ class MCPServer:
         self.tools = res.get("tools", [])
 
     async def _kill_proc(self):
+        if self._watchdog_task:
+            self._watchdog_task.cancel()
         if self._listener_task:
             self._listener_task.cancel()
             try:
@@ -131,6 +140,7 @@ class MCPServer:
                     continue
                 if "id" in data:
                     req_id = data["id"]
+                    self._last_response_at = time.time()
                     fut = self._pending.pop(req_id, None)
                     if fut and not fut.done():
                         if "error" in data:
@@ -150,8 +160,23 @@ class MCPServer:
             if self._pending:
                 self._fail_pending(disconnect_error or RuntimeError(f"MCP server {self.name} disconnected"))
 
+    async def _watchdog(self, poll: float = 1.0) -> None:
+        """Cancel in-flight calls and mark server dead if no response arrives while calls are pending."""
+        while self.status == "running":
+            await asyncio.sleep(poll)
+            if self._pending and time.time() - self._last_response_at > _WATCHDOG_TIMEOUT:
+                _log.warning("MCP server %s watchdog: no response in %.0fs; marking dead", self.name, _WATCHDOG_TIMEOUT)
+                self.status = "dead"
+                self.error = f"watchdog: no response for {_WATCHDOG_TIMEOUT}s"
+                if self._listener_task:
+                    self._listener_task.cancel()
+                self._fail_pending(RuntimeError(f"MCP server {self.name}: watchdog timeout"))
+                return
+
     async def stop(self):
         self.status = "dead"
+        if self._watchdog_task:
+            self._watchdog_task.cancel()
         if self._listener_task:
             self._listener_task.cancel()
         if self.proc:
