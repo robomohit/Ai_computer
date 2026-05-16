@@ -3459,6 +3459,27 @@
     if (message) appendMessage(message, 'system-note');
   };
 
+  let _statusPollBusy = false;
+  // Safety net: if the SSE 'done' event is missed, the UI can look stuck on
+  // "Running" forever. While a task runs, poll its status every 8s — if the
+  // backend says terminal, synthesize the terminal event. The done/error
+  // handlers dedupe via terminalStateKey, so this never double-fires.
+  const pollTaskStatusSafety = async (listenTask) => {
+    if (_statusPollBusy || !listenTask) return;
+    _statusPollBusy = true;
+    try {
+      const record = await api(`/api/tasks/${listenTask}`);
+      if (task !== listenTask) return;
+      const st = record && record.status;
+      if (st && st !== 'running' && !record.paused) {
+        if (st === 'done' || st === 'complete') processTaskEvent({ type: 'done', complete: true, reason: record.reason || '' }, { taskId: listenTask, suppressToasts: true });
+        else if (st === 'failed' || st === 'error') processTaskEvent({ type: 'done', complete: false, reason: record.reason || '' }, { taskId: listenTask, suppressToasts: true });
+        else if (st === 'cancelled') processTaskEvent({ type: 'cancelled', message: record.reason || 'Task was cancelled.' }, { taskId: listenTask, suppressToasts: true });
+      }
+    } catch (_) {}
+    finally { _statusPollBusy = false; }
+  };
+
   const updateClock = () => {
     if (!startTime) { const e = $('sb-elapsed-val'); if (e) e.textContent = '00:00'; return; }
     const total = Math.floor((Date.now() - startTime) / 1000);
@@ -3466,6 +3487,10 @@
     const secs = String(total % 60).padStart(2, '0');
     const fmt = `${mins}:${secs}`;
     const e = $('sb-elapsed-val'); if (e) e.textContent = fmt;
+    // Every 8s, verify the task is actually still running.
+    if (total > 0 && total % 8 === 0 && task && !isTerminalStatus(currentStatus)) {
+      pollTaskStatusSafety(task);
+    }
   };
 
   const setTaskTitle = (title, ctx = {}) => {
