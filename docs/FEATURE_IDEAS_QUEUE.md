@@ -444,3 +444,12 @@ _(Discovery cron will append below. You can seed items manually.)_
 - **Out of scope:** Fixing any divergence found; performance comparison between modes; isolated window mode (Win32 messaging).
 - **Status:** queued
 
+### [IDEA-2026-05-16-02] Log full traceback for plugin handler errors instead of swallowing it
+
+- **Source:** `app/tools.py:1561` — plugin exception handler catches all errors and returns `ToolResult(ok=False, output=f"Plugin error: {str(e)}")`. Multi-line tracebacks are discarded.
+- **Why it fits Ai_computer:** When a plugin handler crashes, the agent only sees a one-line summary. The developer/user has no way to diagnose root cause without attaching a debugger. Full traceback logged at ERROR level costs 2 LOC and dramatically improves debuggability.
+- **Scope (this PR only):** In `run_action()` plugin fallback `except` block (`app/tools.py:~1561`), add `import traceback; logging.error("Plugin handler error: %s", traceback.format_exc())` before returning the ToolResult. ~3 LOC.
+- **Acceptance criteria:** When a plugin handler raises an exception, the full traceback appears in server logs at ERROR level. The ToolResult still returns `ok=False` with the short message. 1 test verifies logging call is made.
+- **Out of scope:** Structured error reporting to the UI; plugin sandboxing.
+- **Status:** queued
+
