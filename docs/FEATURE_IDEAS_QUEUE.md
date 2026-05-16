@@ -434,3 +434,13 @@ _(Discovery cron will append below. You can seed items manually.)_
 - **Acceptance criteria:** `ALLOWED_MODELS="claude-*"` allows `claude-3-5-sonnet` and `claude-3-7-sonnet` but blocks `gpt-4`. Exact-match behavior unchanged. Test added.
 - **Out of scope:** Regex patterns; per-user lists; case-insensitive matching.
 - **Status:** queued
+
+### [IDEA-2026-05-16-01] Dual-mode action dispatch test coverage for desktop vs background browser
+
+- **Source:** `app/tools.py:1380-1560` — ToolExecutor.run_action() dispatches to either background browser handlers (`_*_bg` async) or native desktop handlers (sync pyautogui). Actions are routed based on `use_bg = self._background_mode and self._bg_browser.is_running` (line 1412), creating two code paths that diverge silently.
+- **Why it fits Ai_computer:** A test that passes in background browser mode may fail in desktop (pyautogui) mode due to timing differences, missing state initialization, or coordinate scaling edge cases. Currently no test validates both paths return identical (or equivalent) ToolResults for the same action. Risk: regressions in one mode go undetected.
+- **Scope (this PR only):** Add `tests/test_tools_dual_mode.py` — create a ToolExecutor instance, mock a BackgroundBrowser, run a sequence of actions (click, type, scroll, key) in both modes (toggle `_background_mode=True/False`). Assert: (a) both modes return `ok=True`, (b) output doesn't contradict (e.g., not "Clicked at X,Y" vs "Clicked at 0,0"). Use `@pytest.mark.parametrize` to avoid duplication. ~40 LOC test, no code changes.
+- **Acceptance criteria:** Test runs both desktop and background modes for each action type (mouse_move, mouse_click, keyboard_type, scroll, key_combo). If one mode fails and the other succeeds, test fails with clear message showing the divergence. Existing app/tools tests still pass.
+- **Out of scope:** Fixing any divergence found; performance comparison between modes; isolated window mode (Win32 messaging).
+- **Status:** queued
+
