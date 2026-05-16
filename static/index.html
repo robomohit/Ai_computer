@@ -1614,12 +1614,37 @@
     transition: transform 0.15s ease;
   }
   .turn-summary.expanded .turn-summary-chevron { transform: rotate(90deg); }
-  .turn-summary-body { padding: 0 0 4px 0; }
+  .turn-summary-body { padding: 2px 0 4px 0; }
   .turn-summary-body.collapsed { display: none; }
-  /* nested tool cards lose their left timeline decoration */
-  .turn-summary-body .feed-card { padding-left: 0; }
+  /* nested tool cards: compact one-line rows, no timeline decoration */
+  .turn-summary-body .feed-card { padding-left: 0; margin: 0; }
   .turn-summary-body .feed-card::before { display: none; }
   .turn-summary-body .feed-card.is-active::after { inset: -2px 0; }
+  /* drop the redundant "TOOL" eyebrow — context already makes it obvious */
+  .turn-summary-body .feed-card .eyebrow { display: none; }
+  /* title + args on ONE row */
+  .turn-summary-body .feed-card .card-meta {
+    display: flex;
+    flex-direction: row;
+    align-items: baseline;
+    gap: 8px;
+    min-width: 0;
+  }
+  .turn-summary-body .feed-card .card-head { padding: 5px 0; gap: 8px; }
+  .turn-summary-body .feed-card .card-title {
+    font-size: 13px;
+    font-weight: 500;
+    flex-shrink: 0;
+  }
+  .turn-summary-body .feed-card .card-subtitle {
+    font-size: 12px;
+    color: var(--muted);
+    font-family: var(--font-mono);
+    white-space: nowrap;
+    overflow: hidden;
+    text-overflow: ellipsis;
+    margin: 0;
+  }
 
   /* reasoning note */
   .reasoning-note { }
@@ -4144,8 +4169,14 @@
 
     if (event.type === 'status') {
       if (event.heartbeat) return;
-      // C1: "Executing <tool>: <args>" duplicates the turn summary — suppress it.
-      if (/^executing\b/i.test(String(event.message || '').trim())) return;
+      // C1: suppress internal/announce noise — the turn summary covers it.
+      //  - "Executing <tool>: <args>" duplicates the turn summary.
+      //  - "Thinking: model responded, parsing step N…" is parser-internal state.
+      {
+        const _m = String(event.message || '').trim();
+        if (/^executing\b/i.test(_m)) return;
+        if (/parsing step \d+/i.test(_m) || /model responded/i.test(_m)) return;
+      }
       if (shouldReuseLiveStatus(event.message || '')) {
         setLiveStatus(statusPhase(event.message || ''), event.message || '', Number.isFinite(event.elapsed_seconds) ? `${event.elapsed_seconds}s` : '');
       } else {
@@ -4169,9 +4200,12 @@
       setActionState(entry, event.ok ? 'OK' : 'Fail', event.ok ? 'ok' : 'fail');
       if (event.args_summary) entry.subtitleEl.textContent = event.args_summary;
       if (event.output && !event.action_type?.match(/run_command|bash/)) {
+        // C1: load the output but keep it collapsed — the turn timeline stays
+        // a clean list of one-line rows; click a row to reveal its output.
+        // Auto-open only on failure, where the error matters immediately.
         entry.output.classList.remove('hidden');
         entry.output.textContent = truncate(event.output, 1400);
-        openEntryBody(entry);
+        if (!event.ok) openEntryBody(entry);
       }
       return;
     }
