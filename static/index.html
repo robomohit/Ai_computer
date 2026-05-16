@@ -3093,6 +3093,11 @@
     return 'step';
   };
 
+  // Phase C1: a "Step N" reasoning note is just an action announcement —
+  // the turn summary already covers it. Skipping it also prevents the
+  // turn from being fragmented into one-tool-per-summary.
+  const _isStepAnnouncement = (e) => /^step\s*\d+$/i.test(String(e && e.stage || '').trim());
+
   const _turnSummaryText = (types, live) => {
     const buckets = {};
     types.forEach(t => { buckets[t] = (buckets[t] || 0) + 1; });
@@ -4104,11 +4109,18 @@
   const processTaskEvent = (event, { replay = false, taskId = task, suppressToasts = false } = {}) => {
     if (event.type === 'task_created') return;
 
-    if (event.type === 'reasoning') { finalizeTurnSummary(); renderReasoning(event); return; }
+    if (event.type === 'reasoning') {
+      // C1: step announcements are noise — the turn summary covers them.
+      // Skipping (without finalizing) lets consecutive tools group into ONE summary.
+      if (_isStepAnnouncement(event)) return;
+      finalizeTurnSummary(); renderReasoning(event); return;
+    }
     if (event.type === 'plan') { finalizeTurnSummary(); renderPlan(event); return; }
 
     if (event.type === 'status') {
       if (event.heartbeat) return;
+      // C1: "Executing <tool>: <args>" duplicates the turn summary — suppress it.
+      if (/^executing\b/i.test(String(event.message || '').trim())) return;
       if (shouldReuseLiveStatus(event.message || '')) {
         setLiveStatus(statusPhase(event.message || ''), event.message || '', Number.isFinite(event.elapsed_seconds) ? `${event.elapsed_seconds}s` : '');
       } else {
