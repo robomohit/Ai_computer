@@ -1199,18 +1199,19 @@ class AgentService:
                     # Operator-style "intent" event — surface the agent's
                     # reasoning before the action so the UI can render
                     # "about to: X — because Y" in real time.
+                    _arg_summary = _summarize_args(act.type.value, args)
                     await self._emit(task_id, "intent", {
                         "action_id": act.id,
                         "action_type": act.type.value,
                         "explanation": act.explanation,
-                        "args_preview": str(args)[:200],
+                        "args_preview": _arg_summary,
                     })
-                    await self._emit(task_id, "status", {"message": f"Executing: {act.type.value} — {str(args)[:60]}"})
+                    await self._emit(task_id, "status", {"message": f"Executing {act.type.value}: {_arg_summary}"})
                     await self._emit(task_id, "action_start", {
                         "action_id": act.id,
                         "action_type": act.type.value,
                         "explanation": act.explanation,
-                        "args_summary": str(args)[:80],
+                        "args_summary": _arg_summary,
                     })
 
                     try:
@@ -1256,7 +1257,7 @@ class AgentService:
                         "ok": res.ok,
                         "output": res.output,
                         "action_type": act.type.value,
-                        "args_summary": str(args)[:80],
+                        "args_summary": _arg_summary,
                     })
                     
                     # ── Populate write cache so subsequent reads are free ──
@@ -1479,10 +1480,18 @@ def _environment_context_text(environment: Dict[str, Any]) -> str:
     return "\n".join(lines)
 
 def _summarize_args(action_type: str, args: dict) -> str:
+    """Human-readable one-line summary of tool args. Never returns a raw dict repr."""
+    if not isinstance(args, dict):
+        return str(args)[:80]
     if action_type in ("run_command", "bash"): return (args.get("command") or "")[:80]
-    if action_type == "text_editor": return f"{args.get('command','')} {args.get('path','')}"
+    if action_type == "text_editor": return f"{args.get('command','')} {args.get('path','')}".strip()
     if action_type in ("read_file", "write_file", "move_file"): return args.get("path") or args.get("src") or ""
-    return ""
+    # Generic clean fallback — surface a meaningful value, never a Python dict repr.
+    for key in ("path", "query", "url", "name", "target", "command", "text", "content"):
+        val = args.get(key)
+        if val:
+            return str(val)[:80]
+    return ", ".join(str(k) for k in args.keys())[:80]
 
 _SKIP_DIRS = frozenset({'__pycache__', 'node_modules', '.gemini', '.claude', '.git', 'venv', '.venv', 'dist', 'build', '.tempmediaStorage', '.idea', '.vscode', '.cache', 'coverage', '.pytest_cache', 'htmlcov', 'egg-info'})
 
