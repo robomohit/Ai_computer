@@ -39,7 +39,7 @@ _(Discovery cron will append below. You can seed items manually.)_
   Keep in sidebar: New session button, Project folder row, Search history input, Sessions list. Add a small `⚙ Settings` button at sidebar bottom that opens the new modal. Pattern after `cmdk-overlay` (line 1898) — do NOT reuse the `tweaks` modal (that's for theme/density). Net change ≤200 LOC.
 - **Acceptance criteria:** Sidebar shows only Sessions + project folder + new-session + ⚙ Settings. Clicking ⚙ opens a modal containing Expertise toggles, MCP list, Model + Mode pickers — all functional (toggle on/off still triggers the same handlers). Pytest stays green. UI smoke verifies modal opens/closes via Esc.
 - **Out of scope:** Visual styling of the modal beyond pattern-match to cmdk-overlay; drag-to-reorder; per-skill settings.
-- **Status:** queued
+- **Status:** done (2026-05-15: manual ship — sidebar restructured to pure nav; brand block removed, Expertise/MCP/Model/Mode moved into new Settings modal opened via gear button in sidebar footer; all element IDs preserved so renderSkills/renderMCPServers/setMode untouched)
 
 ### [IDEA-2026-05-02-10] UI Phase C1 — Terser one-line tool-call summaries in feed cards
 
