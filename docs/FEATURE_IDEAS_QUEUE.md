@@ -453,3 +453,12 @@ _(Discovery cron will append below. You can seed items manually.)_
 - **Out of scope:** Structured error reporting to the UI; plugin sandboxing.
 - **Status:** queued
 
+
+### [IDEA-2026-05-17-01] Render markdown in the Agent answer message
+
+- **Source / context:** The `.message.assistant` block (added 2026-05-17, commit 8d797f3) renders the agent's final reply via `textContent` — plain text. Replies routinely contain markdown (`` `inline code` ``, ```` ``` ```` fenced blocks, **bold**, lists). They currently show as literal characters.
+- **Why it fits Ai_computer:** The Agent answer is now the primary thing the user reads. Claude renders markdown in its replies; AI Computer should too. The mermaid CDN was already vendored, and a small markdown renderer (or a minimal inline parser) would make agent replies readable.
+- **Scope (this PR only):** In `static/index.html`, when appending an `assistant` message, run the text through a minimal markdown→HTML pass: fenced code blocks → `<pre>`, inline code → `<code>`, bold/italic, and bullet lists. Either vendor a tiny lib (e.g. a ~3KB markdown parser into `static/vendor/`) or hand-roll a small safe transformer. MUST escape HTML first to avoid injection. ~40-70 LOC.
+- **Acceptance criteria:** An agent reply containing a fenced code block renders as a real code block; inline backticks render as `<code>`; no raw HTML injection possible (test with a reply containing `<script>`). Plain-text replies unchanged.
+- **Out of scope:** Full CommonMark compliance; tables; syntax highlighting inside code blocks.
+- **Status:** queued
