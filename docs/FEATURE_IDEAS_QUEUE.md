@@ -524,4 +524,40 @@ _(Discovery cron will append below. You can seed items manually.)_
 - **Scope (NEEDS DESIGN — do not implement blind):** This is a feature, not a small PR. Before coding: write a short design note covering (a) a `CodingBackend` interface (detect availability, send a coding brief, return a diff/result), (b) adapters for `claude` CLI and Antigravity, (c) how the agent decides to delegate (task complexity / explicit user request), (d) config + a Settings-modal connector list. Then split into implementation IDEAs. First PR should be just the interface + the `claude` CLI adapter + availability detection.
 - **Acceptance criteria (design phase):** A design note in `docs/` enumerating the interface, adapters, routing rule, and config. Implementation IDEAs filed from it.
 - **Out of scope:** Implementing all adapters at once; billing/quota tracking.
+- **Status:** in_progress (slice 1 shipped 2026-05-17 commit 7a9a1e4: CodingBackend interface + ClaudeCodeBackend adapter + BackendRegistry + GET /api/coding-backends + 9 tests. Remaining slices filed as IDEA-17-08/09/10.)
+
+### [IDEA-2026-05-17-08] Connectors: Settings-modal connector list for coding backends
+
+- **Source / context:** Follow-up to IDEA-17-07 (connector foundation shipped 7a9a1e4). The `GET /api/coding-backends` endpoint exists and returns each backend with live availability; nothing in the UI shows it yet.
+- **Why it fits Ai_computer:** Users need to see which coding backends are connected/available and which is the default — the same way the provider chips show LLM-key status. Mirrors Codex's marketplace list and OpenClaw's connector list.
+- **Scope (this PR only):** In `static/index.html`, add a "Coding backends" section to the Settings modal (the modal added in Phase A). On modal open, fetch `/api/coding-backends` and render one row per backend: name, type, a green/grey availability dot (from the `available` field), version text, and a marker on the default. Pure read-only display + a manual refresh. ~50-70 LOC, no backend changes.
+- **Acceptance criteria:** Opening Settings shows the Claude Code backend with a green dot + version when the CLI is installed, grey when not. No regression to existing Settings content.
+- **Out of scope:** Adding/editing backends from the UI (config-file only for now); credential fields.
+- **Status:** queued
+
+### [IDEA-2026-05-17-09] Connectors: agent delegation — delegate_coding action + routing
+
+- **Source / context:** Follow-up to IDEA-17-07. The backend registry + Claude Code adapter exist but nothing invokes them — the agent can't actually delegate yet.
+- **Why it fits Ai_computer:** This is the payoff: a cheap orchestration model hands a multi-file coding subtask to the connected strong backend and gets back a structured result. Without it the connector is inert.
+- **Scope (this PR only):** Add a `delegate_coding` tool action: args `{task, repo_path?, files?, constraints?}`; it calls `coding_backends.registry.get().submit(CodingBrief(...))` off the event loop and returns the `CodingResult` summary + files_changed into the agent loop as a tool result. Register it in `tool_registry.py` for the coding pack. Stream a feed event so the UI shows "Delegated to claude-code …". Do NOT auto-route yet — the agent calls it explicitly when its own model judges the task too heavy. ~80-110 LOC + tests (mock the registry).
+- **Acceptance criteria:** A task can call `delegate_coding`; with a mocked backend the result flows back into the agent loop and renders in the feed. If no backend is available, the action returns a clear `ok=False` telling the agent to do it itself. Pytest green.
+- **Out of scope:** Automatic routing heuristics (the model decides for now); resume/multi-turn delegation; cost budgeting.
+- **Status:** queued (depends on IDEA-17-07 slice 1 — done)
+
+### [IDEA-2026-05-17-10] Connectors: generic ACP adapter (Antigravity + custom backends)
+
+- **Source / context:** Follow-up to IDEA-17-07. Only the Claude Code adapter exists. OpenClaw's ACPX shows a clean pattern: any backend implementing the Agent Client Protocol (JSON-RPC 2.0) is usable via one generic adapter.
+- **Why it fits Ai_computer:** Lets users connect Google Antigravity's free coding models and any other ACP-speaking agent without a bespoke adapter each time — the free-but-good coding backend the product strategy depends on.
+- **Scope (this PR only):** Add an `AcpBackend(CodingBackend)` adapter in `app/coding_backends.py` that speaks the Agent Client Protocol over a subprocess (spawn the configured command, JSON-RPC `session/new` → `session/prompt`, collect the structured result). Register `"acp"` in `_BACKEND_TYPES`. Verify against at least one real ACP backend if installed; otherwise unit-test the JSON-RPC framing with a fake subprocess. ~120-160 LOC.
+- **Acceptance criteria:** A config entry `{"type":"acp","command":"<acp-server>"}` is loaded and `detect()`/`submit()` work via JSON-RPC. Unit test covers the protocol framing with a mock.
+- **Out of scope:** Bundling Antigravity; a backend marketplace.
+- **Status:** queued (depends on IDEA-17-07 slice 1 — done)
+
+### [IDEA-2026-05-17-11] Skills: adopt the SKILL.md / Agent Skills standard format
+
+- **Source / context:** Connector/skills research 2026-05-17. AI Computer's current skills (the Expertise Library — `app/skills.py`) are ad-hoc. Claude Code and Codex both use the open Agent Skills standard: a directory per skill with a `SKILL.md` (YAML frontmatter + markdown body), `description` as the fuzzy-matched trigger, progressive disclosure (only descriptions in context, body loads on invocation).
+- **Why it fits Ai_computer:** Adopting the standard makes AI Computer skills portable with Claude Code / Codex and makes a future skill marketplace trivial. It's also a cleaner authoring format than whatever skills use today.
+- **Scope (this PR only):** Audit `app/skills.py`. Add a `SKILL.md` loader: scan a `skills/` directory, parse YAML frontmatter (`name`, `description`, `allowed-tools`) + markdown body, expose them through the existing skill_manager interface so the Expertise Library and the agent both see them. Keep existing skills working (shim or migrate). Progressive disclosure: only `description` goes into the agent's context until the skill is invoked. ~100-140 LOC.
+- **Acceptance criteria:** A skill authored as `skills/<name>/SKILL.md` is discovered, shows in the Expertise Library, and its body loads only when invoked. Existing skills unaffected.
+- **Out of scope:** A skill marketplace; `scripts/`/`references/` bundle execution; hooks.
 - **Status:** queued
