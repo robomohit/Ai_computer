@@ -489,6 +489,14 @@ async def healthz():
 async def get_skills():
     return {"skills": skill_manager.get_all_skills()}
 
+@app.get("/api/coding-backends")
+async def get_coding_backends():
+    """Declared coding-delegation backends + live availability detection.
+    Powers the Settings connector list. Detection shells out to each CLI's
+    --version, so run it off the event loop."""
+    from .coding_backends import registry
+    return await asyncio.to_thread(registry.detect_all)
+
 @app.get("/api/mcp")
 async def get_mcp():
     from .mcp_manager import mcp_manager
