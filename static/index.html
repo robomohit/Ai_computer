@@ -1308,6 +1308,33 @@
   }
   .message.system-success { color: var(--ok); }
   .message.system-success::before { background: var(--ok); box-shadow: 0 0 0 3px var(--ok-soft); }
+
+  /* assistant answer — the model talking to the user. Primary, full-contrast,
+     no bubble (Claude pattern). This is the thing the user actually reads. */
+  .message.assistant {
+    padding: 10px 0 10px 24px;
+    color: var(--ink);
+    font-size: var(--fs-lg);
+    line-height: 1.62;
+    letter-spacing: -0.005em;
+    white-space: pre-wrap;
+    word-break: break-word;
+  }
+  .message.assistant::before {
+    content: 'Agent';
+    position: static;
+    display: block;
+    margin: 0 0 6px -24px;
+    font-family: var(--font-mono);
+    font-size: var(--fs-micro);
+    font-weight: 600;
+    color: var(--muted);
+    letter-spacing: var(--track-cap);
+    text-transform: uppercase;
+    background: none;
+    width: auto; height: auto;
+    box-shadow: none;
+  }
   .message.system-error { color: var(--err); }
   .message.system-error::before { background: var(--err); box-shadow: 0 0 0 3px var(--err-soft); }
   .message.system-cancelled { color: var(--warn); }
@@ -4382,7 +4409,12 @@
       clearLiveIndicators();
       if (event.complete) {
         setStatus('complete');
-        appendMessage('Task completed successfully.', 'system-success');
+        // Show the model's actual final reply as a primary assistant message.
+        // Fall back to the generic note only when there's no real answer.
+        const reply = String(event.reason || '').trim();
+        const isRealAnswer = reply.length > 12 && !/^(done|complete|completed|finished|task complete|ok)\.?$/i.test(reply);
+        if (isRealAnswer) appendMessage(reply, 'assistant');
+        else appendMessage('Task completed successfully.', 'system-success');
         if (!replay) { markHistoryFinal('done'); stopEverything(); if (!suppressToasts) toast('Task complete.', 'ok'); }
         else showPostRunControls();
       } else {
