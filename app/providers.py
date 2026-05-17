@@ -242,10 +242,18 @@ def detect_task_mode(goal: str, explicit_mode: Optional[str] = None) -> str:
         return "chat"
 
     # --- Existing mode detection ---
+    # Explicit "browser cowork" phrasing is unambiguous — route straight to
+    # the headless-browser mode, never to desktop/isolated window control.
+    if "cowork" in g:
+        return "computer_use"
+
     computer_use_score = sum(1 for kw in _COMPUTER_USE_KEYWORDS if kw in g)
     coding_score = sum(1 for kw in _CODING_KEYWORDS if kw in g)
     computer_score = sum(1 for kw in _COMPUTER_KEYWORDS if kw in g)
-    if computer_use_score >= 2 and computer_use_score > coding_score:
+    # A web URL / domain is a strong browser signal.
+    if re.search(r"https?://\S+|\bwww\.\S+|\b[a-z0-9][a-z0-9-]*\.(?:com|org|net|io|ai|dev|co|gov|edu|app)\b", g):
+        computer_use_score += 2
+    if computer_use_score >= 2 and computer_use_score >= coding_score:
         return "computer_use"
     if computer_score >= 2 and computer_score > coding_score:
         return "computer_isolated" if infer_isolated_app_name(goal) else "computer"
@@ -274,6 +282,12 @@ def infer_isolated_app_name(goal: str) -> Optional[str]:
     candidate = match.group(1).strip(" .,!?:;\"'")
     candidate_lower = candidate.lower()
     if candidate_lower in {"desktop", "screen", "window", "app", "application", "browser"}:
+        return None
+    # A domain / URL is a website, not a desktop app to isolate.
+    if re.search(r"\.[a-z]{2,}\b", candidate_lower) or candidate_lower.startswith(("http", "www.")):
+        return None
+    # Multi-word phrases starting with "browser" (e.g. "browser cowork mode").
+    if candidate_lower.startswith("browser "):
         return None
     if candidate_lower.startswith(("a ", "an ", "the ")):
         return None

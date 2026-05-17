@@ -3171,7 +3171,8 @@
   const _actionTypeLabel = (type = '') => {
     if (/run_command|bash|terminal/i.test(type)) return 'command';
     if (/read_file|write_file|edit_file|str_replace|create_file|delete_file|undo_edit|view_file/i.test(type)) return 'file';
-    if (/search|web_search|browse/i.test(type)) return 'search';
+    if (/^browser_|browser_/i.test(type)) return 'browser';
+    if (/web_search|^search$/i.test(type)) return 'search';
     if (/computer|click|type|scroll|screenshot|key/i.test(type)) return 'action';
     return 'step';
   };
@@ -3188,6 +3189,7 @@
       if (t === 'command') return live ? `Running ${n > 1 ? n + ' commands' : 'command'}…` : `Ran ${n} command${n > 1 ? 's' : ''}`;
       if (t === 'file') return live ? `Editing ${n > 1 ? n + ' files' : 'file'}…` : `Edited ${n} file${n > 1 ? 's' : ''}`;
       if (t === 'search') return live ? 'Searching…' : `Searched ${n} time${n > 1 ? 's' : ''}`;
+      if (t === 'browser') return live ? 'Browsing…' : `${n} browser action${n > 1 ? 's' : ''}`;
       if (t === 'action') return live ? 'Acting…' : `${n} action${n > 1 ? 's' : ''}`;
       return live ? 'Working…' : `${n} step${n > 1 ? 's' : ''}`;
     });
