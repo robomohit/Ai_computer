@@ -442,17 +442,25 @@ def _capture_hwnd_image(hwnd: int) -> Image.Image:
     width = max(1, right - left)
     height = max(1, bottom - top)
 
-    hwnd_dc = win32gui.GetWindowDC(hwnd)
-    if not hwnd_dc:
-        raise RuntimeError("Could not acquire a window device context.")
-
-    src_dc = win32ui.CreateDCFromHandle(hwnd_dc)
-    mem_dc = src_dc.CreateCompatibleDC()
-    bitmap = win32ui.CreateBitmap()
-    bitmap.CreateCompatibleBitmap(src_dc, width, height)
-    mem_dc.SelectObject(bitmap)
-
+    # Every GDI handle starts None and is cleaned up in `finally` only if it
+    # was actually created. Acquiring these OUTSIDE a try (the old code) meant
+    # any failure mid-acquisition leaked a window DC / compatible DC / bitmap.
+    # Leaked GDI objects exhaust the per-process pool (~10k), after which
+    # later CreateCompatibleDC/DeleteDC calls fail outright ("DeleteDC failed").
+    hwnd_dc = None
+    src_dc = None
+    mem_dc = None
+    bitmap = None
     try:
+        hwnd_dc = win32gui.GetWindowDC(hwnd)
+        if not hwnd_dc:
+            raise RuntimeError("Could not acquire a window device context.")
+        src_dc = win32ui.CreateDCFromHandle(hwnd_dc)
+        mem_dc = src_dc.CreateCompatibleDC()
+        bitmap = win32ui.CreateBitmap()
+        bitmap.CreateCompatibleBitmap(src_dc, width, height)
+        mem_dc.SelectObject(bitmap)
+
         pw_render_fullcontent = 0x00000002
         result = ctypes.windll.user32.PrintWindow(hwnd, mem_dc.GetSafeHdc(), pw_render_fullcontent)
         if result != 1:
@@ -479,10 +487,26 @@ def _capture_hwnd_image(hwnd: int) -> Image.Image:
             image.thumbnail((1280, 800), Image.Resampling.LANCZOS)
         return image
     finally:
-        win32gui.DeleteObject(bitmap.GetHandle())
-        mem_dc.DeleteDC()
-        src_dc.DeleteDC()
-        win32gui.ReleaseDC(hwnd, hwnd_dc)
+        if bitmap is not None:
+            try:
+                win32gui.DeleteObject(bitmap.GetHandle())
+            except Exception:
+                pass
+        if mem_dc is not None:
+            try:
+                mem_dc.DeleteDC()
+            except Exception:
+                pass
+        if src_dc is not None:
+            try:
+                src_dc.DeleteDC()
+            except Exception:
+                pass
+        if hwnd_dc:
+            try:
+                win32gui.ReleaseDC(hwnd, hwnd_dc)
+            except Exception:
+                pass
 
 
 def _sanitize_json_text(text: str) -> str:

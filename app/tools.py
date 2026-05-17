@@ -252,10 +252,19 @@ class ToolExecutor:
             return self._mouse_click_isolated(x, y, button, clicks, sw, sh)
         import pyautogui
         rx, ry = self._scale(x, y, sw, sh)
-        # Move smoothly first, then click
-        pyautogui.moveTo(rx, ry, duration=0.4, tween=pyautogui.easeInOutQuad)
-        time.sleep(0.1)
-        pyautogui.click(button=button, clicks=clicks, interval=0.1)
+        # Clamp to the real screen — an off-screen target can hang or be
+        # silently dropped, and pyautogui's fail-safe corner aborts the run.
+        screen_w, screen_h = pyautogui.size()
+        rx = max(0, min(rx, screen_w - 1))
+        ry = max(0, min(ry, screen_h - 1))
+        try:
+            pyautogui.moveTo(rx, ry, duration=0.4, tween=pyautogui.easeInOutQuad)
+            time.sleep(0.1)
+            pyautogui.click(button=button, clicks=clicks, interval=0.1)
+        except Exception as e:
+            # Screen locked, fail-safe triggered, no display, etc. — report it
+            # so the agent can react instead of believing the click landed.
+            return ToolResult(ok=False, output=f"Click at {rx},{ry} failed: {e}")
         return ToolResult(ok=True, output=f"Clicked {button} {clicks} times at {rx}, {ry}")
 
 
