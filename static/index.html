@@ -1317,8 +1317,39 @@
     font-size: var(--fs-lg);
     line-height: 1.62;
     letter-spacing: -0.005em;
-    white-space: pre-wrap;
     word-break: break-word;
+  }
+  .message.assistant p { margin: 0 0 10px; }
+  .message.assistant p:last-child { margin-bottom: 0; }
+  .message.assistant strong { font-weight: 650; }
+  .message.assistant em { font-style: italic; }
+  .message.assistant .md-ul { margin: 6px 0 10px; padding-left: 22px; }
+  .message.assistant .md-ul li { margin: 2px 0; }
+  .message.assistant code.md-code {
+    font-family: var(--font-mono);
+    font-size: 0.86em;
+    background: var(--bg-3);
+    border: 1px solid var(--line);
+    border-radius: var(--r-xs);
+    padding: 1px 5px;
+    word-break: break-word;
+  }
+  .message.assistant pre.md-pre {
+    margin: 8px 0 10px;
+    background: var(--bg-inset);
+    border: 1px solid var(--line);
+    border-radius: var(--r-sm);
+    padding: 10px 12px;
+    overflow: auto;
+    max-height: 320px;
+    scrollbar-width: thin;
+  }
+  .message.assistant pre.md-pre code {
+    font-family: var(--font-mono);
+    font-size: var(--fs-sm);
+    line-height: 1.6;
+    color: var(--ink-2);
+    white-space: pre;
   }
   .message.assistant::before {
     content: 'Agent';
@@ -3397,11 +3428,47 @@
     requestAnimationFrame(() => { _scrollPending = false; const fs = $('feed-scroll'); if (fs) fs.scrollTop = fs.scrollHeight; });
   };
 
+  // Minimal, injection-safe markdown renderer for agent replies.
+  // HTML is escaped FIRST; only known-safe tags are then inserted.
+  const renderMarkdown = (raw) => {
+    const esc = (s) => String(s).replace(/&/g, '&amp;').replace(/</g, '&lt;').replace(/>/g, '&gt;');
+    let text = String(raw || '');
+    const blocks = [];
+    // 1. fenced code blocks ```lang\n…\n``` — pull out, escape, stash
+    text = text.replace(/```[^\n]*\n?([\s\S]*?)```/g, (_, code) => {
+      blocks.push('<pre class="md-pre"><code>' + esc(code.replace(/\n$/, '')) + '</code></pre>');
+      return ' B' + (blocks.length - 1) + ' ';
+    });
+    // 2. escape everything else
+    text = esc(text);
+    // 3. inline code `…` (content already escaped)
+    text = text.replace(/`([^`\n]+)`/g, (_, c) => '<code class="md-code">' + c + '</code>');
+    // 4. bold then italic
+    text = text.replace(/\*\*([^*\n]+)\*\*/g, '<strong>$1</strong>');
+    text = text.replace(/(^|[^*])\*([^*\n]+)\*/g, '$1<em>$2</em>');
+    // 5. bullet lists — group consecutive "- "/"* " lines
+    text = text.replace(/(?:^|\n)((?:[-*] .+(?:\n|$))+)/g, (_, list) => {
+      const items = list.trim().split(/\n/).map((l) => '<li>' + l.replace(/^[-*] /, '') + '</li>').join('');
+      return '\n U' + (blocks.push('<ul class="md-ul">' + items + '</ul>') - 1) + ' ';
+    });
+    // 6. paragraphs + line breaks
+    text = text.split(/\n{2,}/).map((p) => {
+      const t = p.trim();
+      if (!t) return '';
+      if (/^ [BU]\d+ $/.test(t)) return t;
+      return '<p>' + t.replace(/\n/g, '<br>') + '</p>';
+    }).join('');
+    // 7. restore stashed blocks/lists
+    text = text.replace(/ [BU](\d+) /g, (_, i) => blocks[+i]);
+    return text;
+  };
+
   const appendMessage = (text, kind = 'system-note') => {
     removeWelcome();
     const el = document.createElement('div');
     el.className = `message ${kind}`;
-    el.textContent = text;
+    if (kind === 'assistant') el.innerHTML = renderMarkdown(text);
+    else el.textContent = text;
     $('feed').appendChild(el);
     scrollFeed();
     return el;

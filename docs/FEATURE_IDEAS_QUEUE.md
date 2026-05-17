@@ -461,4 +461,4 @@ _(Discovery cron will append below. You can seed items manually.)_
 - **Scope (this PR only):** In `static/index.html`, when appending an `assistant` message, run the text through a minimal markdown→HTML pass: fenced code blocks → `<pre>`, inline code → `<code>`, bold/italic, and bullet lists. Either vendor a tiny lib (e.g. a ~3KB markdown parser into `static/vendor/`) or hand-roll a small safe transformer. MUST escape HTML first to avoid injection. ~40-70 LOC.
 - **Acceptance criteria:** An agent reply containing a fenced code block renders as a real code block; inline backticks render as `<code>`; no raw HTML injection possible (test with a reply containing `<script>`). Plain-text replies unchanged.
 - **Out of scope:** Full CommonMark compliance; tables; syntax highlighting inside code blocks.
-- **Status:** queued
+- **Status:** done (2026-05-17: manual ship — added renderMarkdown() safe parser; assistant messages render fenced code blocks, inline code, bold/italic, bullet lists; HTML-escaped first so no injection)
