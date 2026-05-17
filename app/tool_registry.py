@@ -102,6 +102,12 @@ def _json_schema_from_description(action_type: ActionType, description: str) -> 
                 elif "list" in kind or "[" in kind:
                     schema_type = "array"
                 properties[key] = {"type": schema_type}
+                # JSON Schema requires an `array` type to declare `items`.
+                # Strict providers (Google Gemini) reject the whole request
+                # otherwise. Element type is unknown from the description,
+                # so default to string.
+                if schema_type == "array":
+                    properties[key]["items"] = {"type": "string"}
                 if "null" not in kind:
                     required.append(key)
         except Exception:

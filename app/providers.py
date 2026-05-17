@@ -1136,7 +1136,10 @@ class PlannerProvider:
                 else:
                     formatted_messages.append({"role": m["role"], "content": [{"type": "text", "text": m["content"]}]})
 
-            payload = {"model": current_model, "messages": formatted_messages, "stream": True}
+            # Explicit max_tokens — without it OpenRouter auto-fills the model's
+            # full context as the completion budget, which overshoots providers
+            # that cap output lower (e.g. Venice caps Llama-3.3-70b at 16384).
+            payload = {"model": current_model, "messages": formatted_messages, "stream": True, "max_tokens": 8192}
 
             # When OpenRouter already has a model fallback chain, fail over quickly
             # instead of spending a full backoff ladder on a rate-limited first choice.
@@ -1150,6 +1153,13 @@ class PlannerProvider:
                         async with client.stream("POST", url, headers={"Authorization": f"Bearer {key}"}, json=payload) as resp:
                             if resp.status_code in (402, 429) and _attempt < len(_retry_delays):
                                 continue  # retry same model
+                            # For non-rate-limit 4xx/5xx, read the body so the real
+                            # reason is surfaced — a bare "400 Bad Request" hides
+                            # whether the model rejected `tools`, the payload, etc.
+                            if resp.status_code >= 400 and resp.status_code not in (402, 429):
+                                _body = await resp.aread()
+                                _detail = _body.decode("utf-8", errors="ignore").strip()[:600]
+                                raise RuntimeError(f"OpenRouter {resp.status_code} ({current_model}): {_detail or 'empty response body'}")
                             resp.raise_for_status()
                             async for chunk in resp.aiter_lines():
                                 if chunk.startswith("data: "):
@@ -1254,6 +1264,9 @@ class PlannerProvider:
                 "messages": formatted_messages,
                 "tools": tools,
                 "stream": True,
+                # Explicit cap — see note in stream_chat(); avoids overshooting
+                # providers that cap completion tokens below the context window.
+                "max_tokens": 8192,
             }
 
             thought_buffer = ""
@@ -1272,6 +1285,13 @@ class PlannerProvider:
                         async with client.stream("POST", url, headers={"Authorization": f"Bearer {key}"}, json=payload) as resp:
                             if resp.status_code in (402, 429) and _attempt < len(_retry_delays):
                                 continue  # retry same model
+                            # For non-rate-limit 4xx/5xx, read the body so the real
+                            # reason is surfaced — a bare "400 Bad Request" hides
+                            # whether the model rejected `tools`, the payload, etc.
+                            if resp.status_code >= 400 and resp.status_code not in (402, 429):
+                                _body = await resp.aread()
+                                _detail = _body.decode("utf-8", errors="ignore").strip()[:600]
+                                raise RuntimeError(f"OpenRouter {resp.status_code} ({current_model}): {_detail or 'empty response body'}")
                             resp.raise_for_status()
                             async for chunk in resp.aiter_lines():
                                 if chunk.startswith("data: "):
