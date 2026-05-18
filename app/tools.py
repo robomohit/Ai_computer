@@ -33,6 +33,50 @@ import logging
 
 _log = logging.getLogger(__name__)
 
+# Pre-click pointer overlay — off by default. Set AI_COMPUTER_POINTER_OVERLAY=1
+# to make desktop clicks "watchable": a ring flashes at the target before the
+# click so the user can see where the agent is acting.
+_POINTER_OVERLAY_ENABLED = os.environ.get("AI_COMPUTER_POINTER_OVERLAY", "").strip() in ("1", "true", "yes")
+
+
+def _flash_pointer(x: int, y: int, hold_ms: int = 400) -> None:
+    """Briefly show a ring marker at (x, y) on screen, then remove it.
+
+    The window is fully destroyed BEFORE this returns, so the click that
+    follows can never be intercepted by the marker. Entirely best-effort:
+    any failure (no display, no Tk, threading quirk) is swallowed — the
+    click path must never break because of a cosmetic overlay.
+    """
+    if not _POINTER_OVERLAY_ENABLED:
+        return
+    try:
+        import tkinter as tk
+    except Exception:
+        return
+    try:
+        size = 64
+        root = tk.Tk()
+        root.overrideredirect(True)            # borderless
+        root.attributes("-topmost", True)
+        try:
+            root.attributes("-transparentcolor", "magenta")  # Windows: magenta -> see-through
+        except Exception:
+            pass
+        root.geometry(f"{size}x{size}+{int(x) - size // 2}+{int(y) - size // 2}")
+        canvas = tk.Canvas(root, width=size, height=size, bg="magenta", highlightthickness=0)
+        canvas.pack()
+        canvas.create_oval(6, 6, size - 6, size - 6, outline="#2563eb", width=4)
+        canvas.create_oval(size // 2 - 4, size // 2 - 4, size // 2 + 4, size // 2 + 4,
+                           fill="#2563eb", outline="")
+        root.after(max(50, int(hold_ms)), root.destroy)
+        root.mainloop()
+        try:
+            root.destroy()
+        except Exception:
+            pass
+    except Exception as exc:
+        _log.debug("pointer overlay skipped: %s", exc)
+
 
 def _is_hung_app_window(hwnd: int) -> bool:
     """Return whether a Win32 window is hung, tolerating pywin32 builds without this helper."""
@@ -257,6 +301,9 @@ class ToolExecutor:
         screen_w, screen_h = pyautogui.size()
         rx = max(0, min(rx, screen_w - 1))
         ry = max(0, min(ry, screen_h - 1))
+        # Optional: flash a marker at the target so the action is watchable.
+        # The marker window is destroyed before the click — no interference.
+        _flash_pointer(rx, ry)
         try:
             pyautogui.moveTo(rx, ry, duration=0.4, tween=pyautogui.easeInOutQuad)
             time.sleep(0.1)

@@ -2189,6 +2189,27 @@
 
   .composer-actions { display: flex; align-items: center; gap: 6px; }
 
+  /* voice controls — mic dictation + read-aloud toggle */
+  .composer-icon-btn {
+    display: inline-flex;
+    align-items: center;
+    justify-content: center;
+    width: 32px;
+    height: 32px;
+    border-radius: var(--r-sm);
+    color: var(--muted);
+    border: 1px solid transparent;
+    transition: background var(--dur-fast) var(--ease-out), color var(--dur-fast) var(--ease-out), border-color var(--dur-fast) var(--ease-out);
+  }
+  .composer-icon-btn:hover { background: var(--bg-3); color: var(--ink); }
+  .composer-icon-btn.active {
+    color: var(--accent);
+    border-color: color-mix(in oklab, var(--accent) 40%, var(--line-2));
+    background: var(--accent-soft);
+  }
+  /* mic pulses while listening */
+  .composer-icon-btn#mic-btn.active svg { animation: dot-pulse 1.4s ease-in-out infinite; }
+
   .send-btn {
     display: inline-flex;
     align-items: center;
@@ -2696,6 +2717,7 @@
             <option value="computer">Desktop control</option>
             <option value="computer_isolated">Isolated App control</option>
             <option value="computer_use">Browser cowork</option>
+            <option value="explain">Explain my screen (read-only)</option>
           </select>
         </div>
         <div class="selector-wrap" id="isolated-app-wrap" style="display:none">
@@ -2790,6 +2812,12 @@
             <div class="char-count" id="char-count"></div>
           </div>
           <div class="composer-actions">
+            <button class="composer-icon-btn" id="read-aloud-toggle" type="button" aria-label="Read replies aloud" title="Read agent replies aloud">
+              <svg width="16" height="16" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.8" stroke-linecap="round" stroke-linejoin="round"><path d="M11 5L6 9H2v6h4l5 4z"/><path d="M15.5 8.5a5 5 0 0 1 0 7"/><path d="M18.5 5.5a9 9 0 0 1 0 13"/></svg>
+            </button>
+            <button class="composer-icon-btn" id="mic-btn" type="button" aria-label="Dictate by voice" title="Dictate (click to start/stop)">
+              <svg width="16" height="16" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.8" stroke-linecap="round" stroke-linejoin="round"><rect x="9" y="2" width="6" height="12" rx="3"/><path d="M5 11a7 7 0 0 0 14 0"/><line x1="12" y1="18" x2="12" y2="22"/></svg>
+            </button>
             <button class="send-btn" id="send" type="button">
               <span>Start task</span>
               <kbd>Ctrl&nbsp;↵</kbd>
@@ -3105,6 +3133,74 @@
         close();
       }
     }, true);
+  })();
+
+  /* ---------------- voice: dictation (STT) + read-aloud (TTS) ----------------
+     Uses the browser's built-in Web Speech API — free, local, no API keys.
+     Both controls feature-detect and hide themselves where unsupported. */
+  let speakAgentReply = () => {};  // reassigned below if TTS is available
+  (function wireVoice() {
+    const SR = window.SpeechRecognition || window.webkitSpeechRecognition;
+    const micBtn = document.getElementById('mic-btn');
+    const readBtn = document.getElementById('read-aloud-toggle');
+    const input = document.getElementById('input');
+
+    // --- speech-to-text: click mic to dictate into the composer ---
+    if (!SR || !micBtn || !input) {
+      if (micBtn) micBtn.style.display = 'none';
+    } else {
+      let recognition = null;
+      let listening = false;
+      micBtn.onclick = () => {
+        if (listening && recognition) { try { recognition.stop(); } catch (_) {} return; }
+        recognition = new SR();
+        recognition.lang = 'en-US';
+        recognition.interimResults = true;
+        recognition.continuous = false;
+        const baseText = input.value.trim();
+        recognition.onstart = () => { listening = true; micBtn.classList.add('active'); };
+        recognition.onresult = (e) => {
+          let transcript = '';
+          for (let i = 0; i < e.results.length; i++) transcript += e.results[i][0].transcript;
+          input.value = baseText ? `${baseText} ${transcript}` : transcript;
+          input.dispatchEvent(new Event('input'));
+        };
+        recognition.onerror = () => {};
+        recognition.onend = () => { listening = false; micBtn.classList.remove('active'); input.focus(); };
+        try { recognition.start(); }
+        catch (_) { listening = false; micBtn.classList.remove('active'); }
+      };
+    }
+
+    // --- text-to-speech: read agent replies aloud when toggled on ---
+    const synth = window.speechSynthesis;
+    if (!synth || !readBtn) {
+      if (readBtn) readBtn.style.display = 'none';
+    } else {
+      let readAloud = localStorage.getItem('ai-computer.read-aloud') === '1';
+      readBtn.classList.toggle('active', readAloud);
+      readBtn.onclick = () => {
+        readAloud = !readAloud;
+        localStorage.setItem('ai-computer.read-aloud', readAloud ? '1' : '0');
+        readBtn.classList.toggle('active', readAloud);
+        if (!readAloud) synth.cancel();
+      };
+      speakAgentReply = (text) => {
+        if (!readAloud || !text) return;
+        // Strip markdown so the voice doesn't read backticks/asterisks/fences.
+        const plain = String(text)
+          .replace(/```[\s\S]*?```/g, ' (code block) ')
+          .replace(/`([^`]+)`/g, '$1')
+          .replace(/[*_#>`]/g, '')
+          .replace(/\s+/g, ' ')
+          .trim();
+        if (!plain) return;
+        synth.cancel();
+        const utterance = new SpeechSynthesisUtterance(plain.slice(0, 4000));
+        utterance.lang = 'en-US';
+        synth.speak(utterance);
+      };
+    }
   })();
 
   function syncTweaks() {
@@ -3472,8 +3568,12 @@
     removeWelcome();
     const el = document.createElement('div');
     el.className = `message ${kind}`;
-    if (kind === 'assistant') el.innerHTML = renderMarkdown(text);
-    else el.textContent = text;
+    if (kind === 'assistant') {
+      el.innerHTML = renderMarkdown(text);
+      speakAgentReply(text);  // read aloud if the user enabled it (no-op otherwise)
+    } else {
+      el.textContent = text;
+    }
     $('feed').appendChild(el);
     scrollFeed();
     return el;

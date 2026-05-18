@@ -223,10 +223,20 @@ _CHAT_PATTERNS = [
 ]
 
 
+_VISION_MODEL_KEYWORDS = ("vision", "vl", "gemini", "claude", "gpt-4o", "gpt-4-turbo", "pixtral", "llava", "gemma")
+
+
+def is_vision_model(model: str) -> bool:
+    """Heuristic: does this model accept image input? Mirrors the inline checks
+    in the chat methods so callers (e.g. explain mode) can pre-flight."""
+    return any(kw in (model or "").lower() for kw in _VISION_MODEL_KEYWORDS)
+
+
 def detect_task_mode(goal: str, explicit_mode: Optional[str] = None) -> str:
     """Return 'chat', 'coding', 'computer_use', 'computer', or 'computer_isolated'. If explicit_mode is set, honour it."""
-    if explicit_mode and explicit_mode in ("coding", "auto", "chat", "computer", "computer_use", "computer_isolated"):
+    if explicit_mode and explicit_mode in ("coding", "auto", "chat", "computer", "computer_use", "computer_isolated", "explain"):
         return explicit_mode  # Always respect the user's explicit mode selection
+    # 'explain' is read-only screen Q&A — only ever an explicit choice, never auto-detected.
 
     g = goal.strip().lower()
 

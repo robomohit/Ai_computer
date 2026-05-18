@@ -385,7 +385,7 @@ class TaskIn(BaseModel):
     task_id: str = Field(..., min_length=1, max_length=128, pattern=TASK_ID_PATTERN)
     goal: str = Field(..., min_length=1, max_length=2000)
     model: Optional[str] = None  # None = auto-pick from available keys
-    mode: Literal["auto", "coding", "computer", "computer_use", "computer_isolated"] = "auto"
+    mode: Literal["auto", "coding", "computer", "computer_use", "computer_isolated", "explain"] = "auto"
     screen_width: int = 1280
     screen_height: int = 800
     isolated_app: Optional[str] = None  # partial window title to target in isolated mode

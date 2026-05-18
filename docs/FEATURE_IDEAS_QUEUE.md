@@ -639,7 +639,7 @@ _(Discovery cron will append below. You can seed items manually.)_
 - **Scope (this PR only):** In `static/index.html`: (1) a mic button on the composer that uses `webkitSpeechRecognition`/`SpeechRecognition` to dictate into the task input (push-to-hold or click-to-toggle); (2) a "read replies aloud" toggle that runs the `assistant` message text through `speechSynthesis.speak()` when a task completes. Feature-detect and hide the controls gracefully where the API is absent (some browsers). Strip markdown before TTS so it doesn't read backticks. ~90-130 LOC, frontend only.
 - **Acceptance criteria:** Mic button dictates into the composer in a supporting browser; with "read aloud" on, a completed agent reply is spoken. Controls hidden cleanly where unsupported. No regression to typed input. UI smoke covers the mic button presence.
 - **Out of scope:** Streaming/real-time transcription; a paid TTS voice; wake-word; voice on the desktop (pywebview) wrapper if its webview lacks the API.
-- **Status:** queued
+- **Status:** done (2026-05-18: mic dictation + read-aloud toggle via browser Web Speech API; feature-detected, hidden where unsupported; markdown stripped before TTS)
 
 ### [IDEA-2026-05-17-21] Visual pointer overlay — show where the agent is acting in desktop mode
 
@@ -648,7 +648,7 @@ _(Discovery cron will append below. You can seed items manually.)_
 - **Scope (this PR only):** Before a desktop mouse action (`mouse_click`, `double_click`, etc.) in computer/isolated mode, briefly render a visible marker (a ring or arrow) at the target coordinates via a transparent always-on-top overlay — reuse the overlay-window machinery in `app/desktop_bridge.py`. Show ~400ms, then act. Make it toggleable (off by default for speed, on for "watch mode"). ~80-120 LOC.
 - **Acceptance criteria:** With the pointer overlay enabled, a desktop click shows a marker at the target before the click fires; disabled, behavior is unchanged. Overlay never steals focus or blocks the click. Pytest green.
 - **Out of scope:** Animated bezier-arc cursor flight; multi-monitor arc routing; the browser path (browser mode has its own page).
-- **Status:** queued
+- **Status:** done (2026-05-18: _flash_pointer Tkinter ring marker, shown ~400ms then destroyed BEFORE the click so it never intercepts; default-off via AI_COMPUTER_POINTER_OVERLAY env var; fully guarded — failure is a silent no-op)
 
 ### [IDEA-2026-05-17-22] "Explain my screen" companion mode — read-only screen help
 
@@ -657,4 +657,4 @@ _(Discovery cron will append below. You can seed items manually.)_
 - **Scope (NEEDS small design):** A new `explain` mode: capture a screenshot, send it + the user's question to the model, return an explanation — NO tool actions, NO mouse/keyboard, purely read-only. Wire it as a mode option; the agent loop short-circuits to a single vision-answer turn. Pairs well with IDEA-17-20 (voice) and IDEA-17-21 (pointer overlay) for a true companion. Write a 1-paragraph design note on how the mode bypasses the action loop, then implement. ~60-100 LOC.
 - **Acceptance criteria:** Selecting `explain` mode and asking about the current screen returns an explanation and performs zero actions (no clicks/types/writes). Pytest asserts the explain path never dispatches a tool action.
 - **Out of scope:** Pointing at elements (that's 17-21); voice (17-20); multi-turn screen conversations.
-- **Status:** queued
+- **Status:** done (2026-05-18: read-only explain mode — single vision turn, agent loop fully bypassed, zero actions; vision-model pre-check returns a helpful message when the model cannot see images)

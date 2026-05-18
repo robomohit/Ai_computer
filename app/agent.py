@@ -27,7 +27,7 @@ from .models import (
     ToolResult,
 )
 from .permissions import PermissionStore, scope_for_action
-from .providers import PlannerProvider, _capture_screenshot_b64, _get_active_window_rect, _get_hwnd_for_title, detect_task_mode, classify_task_complexity, infer_isolated_app_name
+from .providers import PlannerProvider, _capture_screenshot_b64, _get_active_window_rect, _get_hwnd_for_title, detect_task_mode, classify_task_complexity, infer_isolated_app_name, is_vision_model
 from .safety import SafetyManager
 from .text_editor import TextEditorTool
 from .tools import ToolExecutor
@@ -539,6 +539,66 @@ class AgentService:
         await self._emit(task_id, "status", {"message": f"Initializing {mode} mode...", "elapsed_seconds": 0})
 
         try:
+            # ── Explain mode: read-only screen Q&A ──
+            # A single vision turn — screenshot + question -> answer. The whole
+            # agent action loop is bypassed, so nothing on the machine is ever
+            # touched: no clicks, no typing, no file writes, no commands.
+            if mode == "explain":
+                await self._emit(task_id, "status", {"message": "Looking at your screen…", "elapsed_seconds": 0})
+                # Explain mode is inherently a vision task — a text-only model
+                # can't see the screenshot. Fail helpfully instead of letting
+                # the model vaguely answer "I don't see an image".
+                if not is_vision_model(model):
+                    _model_short = model.split("/")[-1]
+                    _vision_msg = (
+                        f"Explain mode needs a vision-capable model, but the current model "
+                        f"({_model_short}) can't see images. Switch to a vision model "
+                        f"(a Gemini, Claude, GPT-4o, Gemma, or Llava model) in Settings, then try again."
+                    )
+                    self._finalize(task_id, "done", _vision_msg)
+                    await self._emit(task_id, "done", {
+                        "complete": True,
+                        "reason": _vision_msg,
+                        "is_reply": True,
+                        "finished_at": datetime.now(timezone.utc).isoformat(),
+                    })
+                    return
+                explain_shot = None
+                try:
+                    explain_shot = _capture_screenshot_b64(screen_width, screen_height)
+                except Exception as cap_err:
+                    _log.warning("explain mode: screenshot capture failed: %s", cap_err)
+                explain_system = (
+                    "You are a helpful assistant explaining what is on the user's screen. "
+                    "Look at the screenshot and answer the user's question clearly and concisely. "
+                    "You are in READ-ONLY mode: describe, explain, and advise — never say you will "
+                    "click, type, open, or change anything. If the screenshot is missing or unclear, say so."
+                )
+                explain_answer_parts: List[str] = []
+                try:
+                    async for _chunk in provider.stream_chat(
+                        explain_system, [{"role": "user", "content": goal}], explain_shot,
+                    ):
+                        explain_answer_parts.append(_chunk)
+                except Exception as explain_err:
+                    self._finalize(task_id, "failed", str(explain_err))
+                    await self._emit(task_id, "done", {
+                        "complete": False,
+                        "reason": f"Could not explain the screen: {explain_err}",
+                        "finished_at": datetime.now(timezone.utc).isoformat(),
+                    })
+                    return
+                explain_answer = "".join(explain_answer_parts).strip() or \
+                    "I couldn't read the screen clearly enough to explain it."
+                self._finalize(task_id, "done", explain_answer)
+                await self._emit(task_id, "done", {
+                    "complete": True,
+                    "reason": explain_answer,
+                    "is_reply": True,
+                    "finished_at": datetime.now(timezone.utc).isoformat(),
+                })
+                return
+
             # Setup Browser
             bg_browser: Optional[BackgroundBrowser] = None
             if is_computer_use:
