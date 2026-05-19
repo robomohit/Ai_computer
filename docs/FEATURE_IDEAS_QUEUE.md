@@ -72,7 +72,7 @@ _(Discovery cron will append below. You can seed items manually.)_
 - **Scope (this PR only):** Move all `<style>` block content (lines 11–2432) to `static/style.css`. Move all inline `<script>` content (lines 2803–4852) to `static/app.js`. Update `static/index.html` to reference both via `<link rel="stylesheet">` and `<script src="…" defer>`. Confirm `app/main.py` static mount serves both new files. Zero visual change. Net LOC moved ~5000, no new logic.
 - **Acceptance criteria:** Page loads identically (visual diff at zero). All JS interactivity works. Pytest green. UI smoke playwright validates: page loads, mode dropdown works, task can be submitted.
 - **Out of scope:** Module-splitting JS into ESM; bundler/build step; CSS module/extraction.
-- **Status:** done (2026-05-18: desktop mode now captures a fresh post-action screenshot after UI interactions, explicit screenshot actions stream their image back into the loop, and unchanged before/after frames surface a `[no-effect hint]` to the next model turn)
+- **Status:** in_progress (2026-05-19: extracting CSS/JS into style.css and app.js)
 
 ### [IDEA-2026-05-02-13] UI Phase C2 — Expandable step timeline inside the tool summary
 
