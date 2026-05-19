@@ -276,6 +276,48 @@
     return parts.join(', ') || (live ? 'Working…' : `${types.length} step${types.length !== 1 ? 's' : ''}`);
   };
 
+  // Phase C2: build a step-timeline inside the turn-summary body on first expand.
+  // Raw tool cards are hidden; one icon-gutter row per step is shown instead.
+  const _STEP_ICONS = { command: '⟩', file: '✎', search: '◎', browser: '⊞', action: '⊙', step: '·' };
+  const _buildTurnTimeline = (body, steps) => {
+    if (!steps.length) return;
+    Array.from(body.children).forEach(c => { if (!c.classList.contains('turn-timeline')) c.style.display = 'none'; });
+    const tl = document.createElement('div');
+    tl.className = 'turn-timeline';
+    steps.forEach(s => {
+      const row = document.createElement('div');
+      row.className = 'turn-step';
+      const icon = document.createElement('span');
+      icon.className = 'turn-step-icon';
+      icon.textContent = _STEP_ICONS[_actionTypeLabel(s.actionType)] || _STEP_ICONS.step;
+      const content = document.createElement('div');
+      content.className = 'turn-step-content';
+      const lbl = document.createElement('span');
+      lbl.className = 'turn-step-label';
+      const finalState = s.stateEl ? s.stateEl.textContent : '';
+      lbl.textContent = (finalState && finalState !== 'Running') ? `${s.label} — ${finalState}` : s.label;
+      content.appendChild(lbl);
+      const sub = s.subtitleEl ? s.subtitleEl.textContent.trim() : s.summary;
+      if (sub) {
+        const subEl = document.createElement('span');
+        subEl.className = 'turn-step-sub';
+        subEl.textContent = sub;
+        content.appendChild(subEl);
+      }
+      const rawOutput = s.outputEl ? s.outputEl.textContent.trim() : '';
+      if (rawOutput) {
+        const out = document.createElement('pre');
+        out.className = 'turn-step-output';
+        out.textContent = rawOutput.length > 2000 ? rawOutput.slice(0, 2000) + '\n…' : rawOutput;
+        content.appendChild(out);
+      }
+      row.appendChild(icon);
+      row.appendChild(content);
+      tl.appendChild(row);
+    });
+    body.appendChild(tl);
+  };
+
   const startTurnSummary = () => {
     if (activeTurnSummary) return activeTurnSummary;
     removeWelcome();
@@ -293,15 +335,17 @@
     headerEl.appendChild(chevronEl);
     const body = document.createElement('div');
     body.className = 'turn-summary-body collapsed';
+    const steps = []; // Phase C2: step data for timeline
     headerEl.addEventListener('click', () => {
       const isCollapsed = body.classList.toggle('collapsed');
       card.classList.toggle('expanded', !isCollapsed);
+      if (!isCollapsed && !body.querySelector('.turn-timeline')) _buildTurnTimeline(body, steps); // Phase C2
     });
     card.appendChild(headerEl);
     card.appendChild(body);
     $('feed').appendChild(card);
     scrollFeed();
-    activeTurnSummary = { card, body, textSpan, types: [] };
+    activeTurnSummary = { card, body, textSpan, types: [], steps }; // Phase C2: steps
     return activeTurnSummary;
   };
 
@@ -1025,6 +1069,9 @@
     const turn = startTurnSummary();
     turn.types.push(_actionTypeLabel(actionType));
     turn.textSpan.textContent = _turnSummaryText(turn.types, true);
+    // Phase C2: record step data for timeline; refs filled after parts are created
+    const stepData = { label: humanize(actionType || 'action'), actionType: actionType || '', summary: summary || '', stateEl: null, subtitleEl: null, outputEl: null };
+    turn.steps.push(stepData);
 
     removeWelcome();
     const card = document.createElement('div');
@@ -1065,6 +1112,11 @@
       const collapsed = body.classList.toggle('collapsed');
       chevron.classList.toggle('open', !collapsed);
     });
+
+    // Phase C2: wire live DOM refs into stepData so timeline reads current values
+    stepData.stateEl = parts.stateEl;
+    stepData.subtitleEl = parts.subtitleEl;
+    stepData.outputEl = output;
 
     const entry = {
       card, output, details,

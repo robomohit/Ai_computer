@@ -139,3 +139,21 @@ def test_phase_f_static_assets_split():
     js = (_STATIC / "app.js").read_text(encoding="utf-8")
     assert "--accent-h" in css, "CSS variables should be in style.css"
     assert "const init" in js, "main init function should be in app.js"
+
+
+def test_phase_c2_step_timeline_present():
+    """Phase C2: expandable step-timeline inside turn summaries."""
+    js = (_STATIC / "app.js").read_text(encoding="utf-8")
+    css = (_STATIC / "style.css").read_text(encoding="utf-8")
+    # JS: timeline builder and step data tracking
+    assert "_buildTurnTimeline" in js
+    assert "turn-timeline" in js
+    assert "turn-step" in js
+    assert "stepData" in js
+    assert "turn.steps.push(stepData)" in js
+    assert "_STEP_ICONS" in js
+    # CSS: timeline layout classes
+    assert ".turn-timeline" in css
+    assert ".turn-step-icon" in css
+    assert ".turn-step-output" in css
+    assert "max-height: 260px" in css

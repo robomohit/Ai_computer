@@ -1705,6 +1705,42 @@
     margin: 0;
   }
 
+  /* Phase C2: step-timeline inside expanded turn summaries */
+  .turn-timeline { display: flex; flex-direction: column; gap: 2px; padding: 6px 0 4px; }
+  .turn-step { display: flex; gap: 10px; align-items: flex-start; padding: 3px 16px; }
+  .turn-step-icon {
+    flex-shrink: 0;
+    width: 18px;
+    text-align: center;
+    font-size: 11px;
+    color: var(--line-3);
+    margin-top: 2px;
+    font-family: var(--font-mono);
+  }
+  .turn-step-content { flex: 1; min-width: 0; display: flex; flex-direction: column; gap: 2px; }
+  .turn-step-label { font-size: 12px; color: var(--text-2); font-weight: 500; }
+  .turn-step-sub {
+    font-size: 11px;
+    color: var(--text-3);
+    font-family: var(--font-mono);
+    white-space: nowrap;
+    overflow: hidden;
+    text-overflow: ellipsis;
+  }
+  .turn-step-output {
+    font-size: 11px;
+    font-family: var(--font-mono);
+    background: var(--bg-2);
+    border-radius: 8px;
+    padding: 6px 8px;
+    max-height: 260px;
+    overflow: auto;
+    color: var(--text-2);
+    margin-top: 4px;
+    white-space: pre-wrap;
+    word-break: break-all;
+  }
+
   /* reasoning note */
   .reasoning-note { }
   .reasoning-note .card-head { padding: 6px 0 4px; }
