@@ -239,24 +239,46 @@
 <!-- Floating voice widget — liquid-glass cowork orb -->
 <div id="vorb-root" aria-live="polite">
   <button class="vorb" id="vorb-toggle" type="button" aria-label="Open voice assistant" title="Voice assistant">
-    <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><path d="M12 2a3 3 0 0 0-3 3v7a3 3 0 0 0 6 0V5a3 3 0 0 0-3-3z"/><path d="M19 10v2a7 7 0 0 1-14 0v-2"/><line x1="12" y1="19" x2="12" y2="23"/></svg>
+    <span class="vorb-halo" aria-hidden="true"></span>
+    <span class="vorb-sheen" aria-hidden="true"></span>
+    <svg class="vorb-icon" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><path d="M12 2a3 3 0 0 0-3 3v7a3 3 0 0 0 6 0V5a3 3 0 0 0-3-3z"/><path d="M19 10v2a7 7 0 0 1-14 0v-2"/><line x1="12" y1="19" x2="12" y2="23"/></svg>
   </button>
   <div class="vpanel" id="vpanel" role="dialog" aria-label="Voice assistant">
     <div class="vpanel-head" id="vpanel-head">
-      <span class="vp-dot"></span>
-      <span class="vp-title">AI Computer</span>
-      <span class="vp-x" id="vpanel-close" role="button" tabindex="0" aria-label="Minimize" title="Minimize">&minus;</span>
-    </div>
-    <div class="vpanel-activity" id="vpanel-activity">Ready when you are.</div>
-    <div class="vpanel-log" id="vpanel-log"></div>
-    <div class="vpanel-mic-wrap">
-      <button class="vmic" id="vmic" type="button" aria-label="Tap to speak" title="Tap to speak">
-        <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><path d="M12 2a3 3 0 0 0-3 3v7a3 3 0 0 0 6 0V5a3 3 0 0 0-3-3z"/><path d="M19 10v2a7 7 0 0 1-14 0v-2"/><line x1="12" y1="19" x2="12" y2="23"/></svg>
+      <span class="vp-brand">
+        <span class="vp-dot" aria-hidden="true"></span>
+        <span class="vp-brand-text">
+          <span class="vp-title">AI Computer</span>
+          <span class="vp-sub" id="vpanel-sub">voice assistant</span>
+        </span>
+      </span>
+      <button class="vp-x" id="vpanel-close" type="button" aria-label="Minimize" title="Minimize">
+        <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2.4" stroke-linecap="round" stroke-linejoin="round"><path d="M6 9l6 6 6-6"/></svg>
       </button>
     </div>
+    <div class="vpanel-activity" id="vpanel-activity">
+      <span class="vp-eq" aria-hidden="true"><i></i><i></i><i></i><i></i></span>
+      <span class="vp-activity-text" id="vpanel-activity-text">Ready when you are.</span>
+    </div>
+    <div class="vpanel-log" id="vpanel-log">
+      <div class="vlog-empty" id="vlog-empty">
+        <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.6" stroke-linecap="round" stroke-linejoin="round"><path d="M12 3l1.7 4.6L18 9.3l-4.3 1.7L12 15.6 10.3 11 6 9.3l4.3-1.7z"/><path d="M19 16l.7 1.9L21.7 19l-2 .7L19 22l-.7-2-2-.7 2-.7z" opacity=".6"/></svg>
+        <span>Tap the mic and tell me what to do — or type below.</span>
+      </div>
+    </div>
+    <div class="vpanel-mic-wrap">
+      <button class="vmic" id="vmic" type="button" aria-label="Tap to speak" title="Tap to speak">
+        <span class="vmic-ring" aria-hidden="true"></span>
+        <span class="vmic-ring vmic-ring-2" aria-hidden="true"></span>
+        <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><path d="M12 2a3 3 0 0 0-3 3v7a3 3 0 0 0 6 0V5a3 3 0 0 0-3-3z"/><path d="M19 10v2a7 7 0 0 1-14 0v-2"/><line x1="12" y1="19" x2="12" y2="23"/></svg>
+      </button>
+      <span class="vmic-hint" id="vmic-hint">Tap to speak</span>
+    </div>
     <div class="vpanel-input">
-      <input type="text" id="vpanel-text" placeholder="Type or tap the mic&hellip;" autocomplete="off">
-      <button id="vpanel-send" type="button" aria-label="Send">&crarr;</button>
+      <input type="text" id="vpanel-text" placeholder="Type a task&hellip;" autocomplete="off">
+      <button class="vpanel-send" id="vpanel-send" type="button" aria-label="Send">
+        <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2.4" stroke-linecap="round" stroke-linejoin="round"><path d="M12 19V5"/><path d="M5 12l7-7 7 7"/></svg>
+      </button>
     </div>
   </div>
 </div>

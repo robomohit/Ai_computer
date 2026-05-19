@@ -2545,11 +2545,14 @@
     const toggle = $('vorb-toggle');
     const closeBtn = $('vpanel-close');
     const head = $('vpanel-head');
-    const activity = $('vpanel-activity');
+    const activity = $('vpanel-activity-text') || $('vpanel-activity');
     const logEl = $('vpanel-log');
+    const emptyState = $('vlog-empty');
     const textIn = $('vpanel-text');
     const sendBtn = $('vpanel-send');
     const micBtn = $('vmic');
+    const micHint = $('vmic-hint');
+    const subEl = $('vpanel-sub');
     const SR = window.SpeechRecognition || window.webkitSpeechRecognition;
 
     const openPanel = () => { root.classList.add('open'); if (textIn) textIn.focus(); };
@@ -2559,6 +2562,7 @@
     closeBtn.addEventListener('keydown', (e) => { if (e.key === 'Enter' || e.key === ' ') { e.preventDefault(); closePanel(); } });
 
     const addLog = (text, who) => {
+      if (emptyState && emptyState.parentNode === logEl) logEl.removeChild(emptyState);
       const d = document.createElement('div');
       d.className = 'vlog-msg ' + (who === 'user' ? 'user' : 'agent');
       d.textContent = text;
@@ -2596,7 +2600,15 @@
         rec = new SR();
         rec.lang = 'en-US'; rec.interimResults = true; rec.continuous = false;
         finalText = '';
-        rec.onstart = () => { listening = true; micBtn.classList.add('listening'); toggle.classList.add('listening'); activity.textContent = 'Listening…'; };
+        rec.onstart = () => {
+          listening = true;
+          micBtn.classList.add('listening');
+          toggle.classList.add('listening');
+          root.classList.add('listening');
+          activity.textContent = 'Listening…';
+          if (micHint) micHint.textContent = 'Listening — tap to stop';
+          if (subEl) subEl.textContent = 'listening';
+        };
         rec.onresult = (e) => {
           let t = '';
           for (let i = 0; i < e.results.length; i++) t += e.results[i][0].transcript;
@@ -2608,6 +2620,9 @@
           listening = false;
           micBtn.classList.remove('listening');
           toggle.classList.remove('listening');
+          root.classList.remove('listening');
+          if (micHint) micHint.textContent = 'Tap to speak';
+          if (subEl) subEl.textContent = 'voice assistant';
           if (finalText.trim()) submitGoal(finalText);
           else activity.textContent = 'Didn’t catch that — try again.';
         };
@@ -2623,6 +2638,7 @@
       const busy = st === 'running';
       toggle.classList.toggle('busy', busy);
       head.classList.toggle('busy', busy);
+      root.classList.toggle('busy', busy);
       if (st !== lastStatus || live !== lastLive) {
         lastStatus = st; lastLive = live;
         const labels = {
@@ -2631,6 +2647,10 @@
           paused: 'Paused.', cancelled: 'Cancelled.'
         };
         activity.textContent = labels[st] || st;
+        if (subEl && !root.classList.contains('listening')) {
+          const subs = { ready: 'voice assistant', running: 'working', complete: 'done', failed: 'failed', error: 'error', paused: 'paused', cancelled: 'cancelled' };
+          subEl.textContent = subs[st] || st;
+        }
       }
     }, 700);
 
