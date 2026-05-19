@@ -2273,11 +2273,11 @@
   }
   .toast.info { border-color: var(--line-3); }
   .toast.ok   { border-color: color-mix(in oklab, var(--ok) 45%, var(--line-2)); }
-  .toast.ok::before    { content: '✓ '; color: var(--ok); font-weight: 700; }
+  .toast.ok::before    { content: url("data:image/svg+xml,%3Csvg xmlns='http://www.w3.org/2000/svg' width='14' height='14' viewBox='0 0 24 24' fill='none' stroke='%233fb950' stroke-width='3' stroke-linecap='round' stroke-linejoin='round'%3E%3Cpolyline points='20 6 9 17 4 12'/%3E%3C/svg%3E"); margin-right: 6px; display: inline-block; vertical-align: -2px; }
   .toast.warn { border-color: color-mix(in oklab, var(--warn) 45%, var(--line-2)); }
-  .toast.warn::before  { content: '⚠ '; color: var(--warn); font-weight: 700; }
+  .toast.warn::before  { content: url("data:image/svg+xml,%3Csvg xmlns='http://www.w3.org/2000/svg' width='14' height='14' viewBox='0 0 24 24' fill='none' stroke='%23d29922' stroke-width='2.5' stroke-linecap='round' stroke-linejoin='round'%3E%3Cpath d='M10.29 3.86L1.82 18a2 2 0 0 0 1.71 3h16.94a2 2 0 0 0 1.71-3L13.71 3.86a2 2 0 0 0-3.42 0z'/%3E%3Cline x1='12' y1='9' x2='12' y2='13'/%3E%3Cline x1='12' y1='17' x2='12.01' y2='17'/%3E%3C/svg%3E"); margin-right: 6px; display: inline-block; vertical-align: -2px; }
   .toast.err  { border-color: color-mix(in oklab, var(--err) 45%, var(--line-2)); }
-  .toast.err::before   { content: '✕ '; color: var(--err); font-weight: 700; }
+  .toast.err::before   { content: url("data:image/svg+xml,%3Csvg xmlns='http://www.w3.org/2000/svg' width='14' height='14' viewBox='0 0 24 24' fill='none' stroke='%23f85149' stroke-width='2.5' stroke-linecap='round' stroke-linejoin='round'%3E%3Ccircle cx='12' cy='12' r='10'/%3E%3Cline x1='15' y1='9' x2='9' y2='15'/%3E%3Cline x1='9' y1='9' x2='15' y2='15'/%3E%3C/svg%3E"); margin-right: 6px; display: inline-block; vertical-align: -2px; }
 
   .overlay {
     position: fixed;
@@ -2702,7 +2702,9 @@
     <div class="modal settings-modal">
       <div class="settings-head">
         <h3>Settings</h3>
-        <button class="t-close" id="settings-close" type="button" aria-label="Close settings">✕</button>
+        <button class="t-close" id="settings-close" type="button" aria-label="Close settings">
+          <svg width="14" height="14" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round" aria-hidden="true"><line x1="18" y1="6" x2="6" y2="18"/><line x1="6" y1="6" x2="18" y2="18"/></svg>
+        </button>
       </div>
       <div class="settings-body">
         <div class="settings-group">
