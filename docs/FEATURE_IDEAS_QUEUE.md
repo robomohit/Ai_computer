@@ -1,8 +1,24 @@
 # Feature ideas queue (autopilot)
 
-**Discovery job** appends new sections. **Main autopilot job** picks **one** `Status: queued` item when tests are green.
+> ⚠️ **DEPRECATED 2026-05-20 — the live queue is now in Linear.**
+>
+> The autonomous routines now read from and write to the **Ai_computer** team
+> in Linear, under the **"AI Computer roadmap"** project. Migration notes:
+>
+> - Live board: <https://linear.app/ai-computer/project/ai-computer-roadmap-5bb617a1b04d>
+> - 20 actionable ideas (queued / in_progress / blocked) were migrated to
+>   Linear on 2026-05-20 as issues `AI-5` through `AI-24`. Each Linear issue
+>   has a `**Legacy ref:** IDEA-…` line pointing back here.
+> - This file is now a historical archive. Nothing here is read by the routines
+>   any more; do not add new IDEAs to this file. File new ideas as Linear issues
+>   (see `docs/ROUTINES.md` for the contract).
+>
+> Status field below is **frozen** at the time of migration — it does NOT
+> reflect what's happening on the Linear board.
 
-Convention:
+---
+
+## Original convention (historical)
 
 - Use a unique `IDEA-...` id per row block.
 - Keep each idea **one small PR**; if it is huge, split into multiple IDEA ids.
