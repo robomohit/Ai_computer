@@ -2539,11 +2539,28 @@
      Voice-first cowork orb: collapsed glass orb, expands to a chat panel.
      100% additive — funnels into the existing composer pipeline, mirrors
      agent state via a light poll, hooks speakAgentReply for replies. */
+  // Widget-only mode (?widget=1): the page is being loaded inside the native
+  // pywebview shell as a frameless always-on-top window. Strip the dashboard
+  // chrome and auto-open the panel so the window IS the floating widget.
+  const _isWidgetMode = (() => {
+    try { return new URLSearchParams(location.search).get('widget') === '1'; }
+    catch (_) { return false; }
+  })();
+  if (_isWidgetMode) document.documentElement.classList.add('widget-mode');
+
   (function vorbWidget() {
     const root = $('vorb-root');
     if (!root) return;
+    if (_isWidgetMode) root.classList.add('open');  // panel always expanded
     const toggle = $('vorb-toggle');
     const closeBtn = $('vpanel-close');
+    const closeShell = $('vpanel-close-shell');
+    if (closeShell) closeShell.onclick = () => {
+      // Ask the pywebview shell to close the window (no-op in plain browser)
+      try { if (window.pywebview && window.pywebview.api && window.pywebview.api.close_window) window.pywebview.api.close_window(); }
+      catch (_) {}
+      try { window.close(); } catch (_) {}
+    };
     const head = $('vpanel-head');
     const activity = $('vpanel-activity-text') || $('vpanel-activity');
     const logEl = $('vpanel-log');

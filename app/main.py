@@ -87,6 +87,24 @@ from fastapi.staticfiles import StaticFiles
 if os.path.isdir("static"):
     app.mount("/static", StaticFiles(directory="static"), name="static")
 
+
+# Defeat aggressive browser caching for our static bundle so a fresh `static/style.css`
+# or `static/app.js` actually reaches the user (and the pywebview shell) without a hard
+# reload. `no-cache` still allows ETag revalidation, so this is cheap.
+from starlette.middleware.base import BaseHTTPMiddleware
+
+
+class _StaticNoCacheMiddleware(BaseHTTPMiddleware):
+    async def dispatch(self, request, call_next):
+        response = await call_next(request)
+        if request.url.path.startswith("/static/"):
+            response.headers["Cache-Control"] = "no-cache, must-revalidate"
+            response.headers["Pragma"] = "no-cache"
+        return response
+
+
+app.add_middleware(_StaticNoCacheMiddleware)
+
 bearer = HTTPBearer(auto_error=False)
 _tasks: Dict[str, TaskRecord] = {}
 _telegram_task: Optional[asyncio.Task] = None
