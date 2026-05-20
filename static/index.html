@@ -79,11 +79,11 @@
       </div>
       <div class="settings-body">
         <div class="settings-group">
-          <div class="selector-label">Model</div>
+          <label class="selector-label" for="model-id">Model</label>
           <select id="model-id"></select>
         </div>
         <div class="settings-group">
-          <div class="selector-label">Mode</div>
+          <label class="selector-label" for="mode-id">Mode</label>
           <select id="mode-id">
             <option value="auto">Auto detect</option>
             <option value="coding">Coding</option>
@@ -94,7 +94,7 @@
           </select>
         </div>
         <div class="selector-wrap" id="isolated-app-wrap" style="display:none">
-          <div class="selector-label">Target App (Locked)</div>
+          <label class="selector-label" for="isolated-app-id">Target App (Locked)</label>
           <input id="isolated-app-id" type="text" placeholder="e.g. Chrome, Notepad…">
           <p style="font-size:var(--fs-label);color:var(--muted-2);margin-top:6px;line-height:1.4">The agent will only see and control this app.</p>
         </div>
