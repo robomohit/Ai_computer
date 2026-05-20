@@ -794,3 +794,24 @@ _(Discovery cron will append below. You can seed items manually.)_
 - **Acceptance criteria:** Hovering a `.turn-step-output` block reveals a copy button; clicking it copies the full text and shows a toast. Pytest: static test checks `copy-step-output` in app.js.
 - **Out of scope:** Copying the whole timeline; syntax highlighting.
 - **Status:** queued
+
+
+### [IDEA-2026-05-20-01] Fix retry task naming collision on repeated retries
+
+- **Source / context:** Codebase patterns scan 2026-05-20 — `app/main.py:912-913` appends `-retry-{int(time.time())}` to task_id, then truncates to 128 char limit. After 4+ retries of a long task name, suffix grows unbounded; truncation can cause collisions. Example: `my-very-long-task-name-retry-1716201600-retry-1716201601-retry-1716201602` exceeds 128 chars, truncates, creates duplicate.
+- **Why it fits Ai_computer:** Retry naming is simple UX for users; collisions cause "task already exists" errors on 5th+ retry. Low-probability bug (users rarely retry > 3 times), but data-corruption risk. High confidence fix.
+- **Scope (this PR only):** Replace timestamp suffix with counter: change line 912 from `-retry-{int(time.time())}` to `-retry-{N}` where N is incremented for each retry of the same task. Or use UUID suffix: `-retry-{secrets.token_hex(4)}` for guaranteed uniqueness without length growth. Add test `test_retry_task_naming_no_collision` that calls `retry_task()` 10x and verifies no collisions. ~5 LOC + 8 LOC test.
+- **Acceptance criteria:** Retry task IDs are unique across unlimited retries. No truncation-caused collisions. Test verifies 10 consecutive retries have 10 distinct task IDs. Suite green.
+- **Out of scope:** Retry history chain (storing "retried from" metadata; that's already in log emitter).
+- **Priority:** LOW (low-probability, easy fix).
+- **Status:** queued
+
+### [IDEA-2026-05-20-02] Backend JSON error handling: log malformed output + expose cli_status
+
+- **Source / context:** Codebase patterns scan 2026-05-20 — `app/coding_backends.py:145-151` parses CLI JSON output, but on `JSONDecodeError`, silently falls back to plain-text summary. Pattern masks CLI failures (crash mid-response, truncated output) from the agent. No signal to distinguish "CLI succeeded but returned malformed JSON" from "CLI timed out and returned garbage".
+- **Why it fits Ai_computer:** Coding delegation is a critical path for complex refactors. Silent fallback reduces debuggability. Agent should know "backend CLI crashed" vs "backend succeeded but output was malformed". Pairs with IDEA-2026-05-02-01 (monitor stderr for CLI errors).
+- **Scope (this PR only):** (1) Add `cli_status` field to `CodingResult` enum: "success", "malformed_output", "timeout", "subprocess_error", "non_zero_exit". (2) In `ClaudeCodeBackend._run()` (lines 121-164), set `cli_status` for each error path. (3) When `JSONDecodeError` occurs (line 147), log a WARN-level message with proc.stdout[:500], set `cli_status = "malformed_output"`, and return result with `ok=False` (not lenient fallback). (4) Add test `test_coding_backend_malformed_json_sets_status` that mocks CLI to return invalid JSON and verifies result.cli_status == "malformed_output". ~20 LOC + 10 LOC test.
+- **Acceptance criteria:** `CodingResult.cli_status` is set for all error paths. Malformed JSON logs WARN (not silent fallback). Agent can distinguish success from failure via `cli_status`. Suite green.
+- **Out of scope:** Retry logic for transient CLI failures (separate IDEA).
+- **Priority:** MEDIUM (improves debuggability, pairs with monitoring).
+- **Status:** queued
