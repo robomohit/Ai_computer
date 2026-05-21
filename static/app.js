@@ -2678,4 +2678,59 @@
     };
   })();
 
+  /* ---- Sidekick v2: widget-shell detection, drag-to-reposition, keyboard shortcut ---- */
+  (function sidekickInit() {
+    const params = new URLSearchParams(location.search);
+    const widgetShell = params.get('widget') === '1' || params.get('sidekick') === '1';
+
+    if (widgetShell) {
+      document.documentElement.classList.add('widget-shell');
+      document.body.classList.add('widget-shell');
+      const r = document.getElementById('vorb-root');
+      if (r) { r.classList.add('widget-shell'); r.classList.add('open'); }
+    }
+
+    // Persist drag position under a versioned key so old stale coords are ignored
+    const POS_KEY = 'ai-computer.vorb-position.v2';
+    const root = document.getElementById('vorb-root');
+    if (root && !widgetShell) {
+      try {
+        const saved = JSON.parse(localStorage.getItem(POS_KEY) || 'null');
+        if (saved && typeof saved.right === 'number') {
+          root.style.right = saved.right + 'px';
+          root.style.bottom = saved.bottom + 'px';
+        }
+      } catch (_) {}
+      let dragging = false, ox = 0, oy = 0;
+      const onMove = (e) => {
+        if (!dragging) return;
+        const cr = Math.max(0, Math.min(window.innerWidth - 60, parseFloat(root.style.right || '26') - (e.clientX - ox)));
+        const cb = Math.max(0, Math.min(window.innerHeight - 60, parseFloat(root.style.bottom || '118') - (e.clientY - oy)));
+        ox = e.clientX; oy = e.clientY;
+        root.style.right = cr + 'px'; root.style.bottom = cb + 'px';
+      };
+      const onUp = () => {
+        dragging = false;
+        document.removeEventListener('pointermove', onMove);
+        document.removeEventListener('pointerup', onUp);
+        try { localStorage.setItem(POS_KEY, JSON.stringify({right: parseFloat(root.style.right), bottom: parseFloat(root.style.bottom)})); } catch (_) {}
+      };
+      const startDrag = (e) => { dragging = true; ox = e.clientX; oy = e.clientY; document.addEventListener('pointermove', onMove); document.addEventListener('pointerup', onUp); };
+      const toggle = document.getElementById('vorb-toggle');
+      const head = document.getElementById('vpanel-head');
+      if (toggle) toggle.addEventListener('pointerdown', startDrag);
+      if (head) head.addEventListener('pointerdown', startDrag);
+    }
+
+    // Global keyboard shortcut Ctrl+Shift+Space — toggle the Sidekick panel
+    document.addEventListener('keydown', (e) => {
+      if (e.ctrlKey && e.shiftKey && e.code === 'Space') {
+        if (widgetShell) return; // window handles show/hide in shell mode
+        e.preventDefault();
+        const r = document.getElementById('vorb-root');
+        if (r) r.classList.toggle('open');
+      }
+    });
+  })();
+
   init();
