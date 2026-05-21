@@ -157,3 +157,31 @@ def test_phase_c2_step_timeline_present():
     assert ".turn-step-icon" in css
     assert ".turn-step-output" in css
     assert "max-height: 260px" in css
+
+
+def test_liquid_glass_sidekick_widget_mode_present():
+    html = STATIC_HTML.read_text(encoding="utf-8")
+    css = (_STATIC / "style.css").read_text(encoding="utf-8")
+    js = (_STATIC / "app.js").read_text(encoding="utf-8")
+
+    assert "vorb-shine" in html
+    assert "vorb-meter" in html
+    assert 'id="vpanel-steps"' in html
+    assert "vpanel-compose" in html
+    assert "widgetShell" in js
+    assert "params.get('widget') === '1'" in js
+    assert "ai-computer.vorb-position.v2" in js
+    assert "e.ctrlKey && e.shiftKey && e.code === 'Space'" in js
+    assert ".vpanel-aurora" in css
+    assert "body.widget-shell #vorb-root" in css
+
+
+def test_desktop_launcher_has_frameless_widget_mode():
+    launcher = (STATIC_HTML.parents[0].parent / "run_desktop.py").read_text(encoding="utf-8")
+
+    assert '"--widget"' in launcher
+    assert "AI Computer Sidekick" in launcher
+    assert "http://127.0.0.1:{PORT}/?widget=1" in launcher
+    assert "frameless=True" in launcher
+    assert "transparent=True" in launcher
+    assert "on_top=True" in launcher
