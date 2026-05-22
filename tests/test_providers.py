@@ -213,6 +213,17 @@ def test_allowed_models_supports_glob_patterns(monkeypatch):
     assert "nvidia/nemotron-3-super-120b-a12b:free" not in result
 
 
+def test_ollama_model_requires_no_api_key(monkeypatch):
+    monkeypatch.delenv("OPENROUTER_API_KEY", raising=False)
+    monkeypatch.delenv("OPENAI_API_KEY", raising=False)
+    monkeypatch.delenv("GROQ_API_KEY", raising=False)
+    from app.providers import PlannerProvider
+
+    p = PlannerProvider(model="ollama/llama3.2")
+    assert p._is_ollama()
+    assert p.model == "ollama/llama3.2"
+
+
 # ── Chain-retry (AI-16) ─────────────────────────────────────────────────────
 
 @pytest.mark.asyncio

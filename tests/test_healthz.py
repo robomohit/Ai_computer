@@ -17,12 +17,15 @@ def test_healthz_missing_keys(monkeypatch):
         monkeypatch.delenv(key, raising=False)
     _m._healthz_cache["ts"] = 0.0
     _m._healthz_cache["result"] = None
+    monkeypatch.setattr(_m, "detect_ollama", lambda: {"available": False, "models": []})
     client = _client(monkeypatch)
     resp = client.get("/healthz")
     assert resp.status_code == 200
     data = resp.json()
     assert data["server"] == "ok"
-    assert all(v == "missing_key" for v in data["providers"].values())
+    non_local = {k: v for k, v in data["providers"].items() if k != "ollama"}
+    assert all(v == "missing_key" for v in non_local.values())
+    assert data["providers"]["ollama"] == "unavailable"
 
 
 def test_healthz_with_key(monkeypatch):
@@ -31,12 +34,14 @@ def test_healthz_with_key(monkeypatch):
         monkeypatch.delenv(key, raising=False)
     _m._healthz_cache["ts"] = 0.0
     _m._healthz_cache["result"] = None
+    monkeypatch.setattr(_m, "detect_ollama", lambda: {"available": True, "models": ["llama3"]})
     client = _client(monkeypatch)
     resp = client.get("/healthz")
     assert resp.status_code == 200
     data = resp.json()
     assert data["providers"]["openrouter"] == "ok"
     assert data["providers"]["anthropic"] == "missing_key"
+    assert data["providers"]["ollama"] == "ok"
 
 
 def test_healthz_cache(monkeypatch):
@@ -200,3 +205,57 @@ def test_active_tasks_returns_non_terminal_only(monkeypatch):
     ids = [t["task_id"] for t in data["tasks"]]
     assert "t1" in ids
     assert "t2" not in ids
+
+
+def test_create_task_queues_when_active_limit_reached(monkeypatch):
+    from app.models import AgentContext, TaskRecord
+
+    monkeypatch.setattr(_m, "_tasks", {})
+    monkeypatch.setattr(_m, "_queued_task_specs", [])
+    monkeypatch.setattr(_m, "_MAX_ACTIVE_TASKS", 0)
+    monkeypatch.setattr(_m, "detect_ollama", lambda: {"available": False, "models": []})
+    client = _client(monkeypatch)
+
+    resp = client.post(
+        "/api/tasks",
+        headers={"Authorization": "Bearer testtoken"},
+        json={
+            "task_id": "queued-task",
+            "goal": "do later",
+            "model": "claude-3-5-sonnet-20241022",
+            "plan_first": True,
+            "notify_on_completion": True,
+            "auto_commit": True,
+            "autonomy_level": "careful",
+        },
+    )
+
+    assert resp.status_code == 200
+    assert resp.json()["status"] == "queued"
+    assert _m._tasks["queued-task"].status == "queued"
+    assert _m._tasks["queued-task"].plan_first is True
+    assert _m._queued_task_specs[0]["autonomy_level"] == "careful"
+
+    cancel = client.delete("/api/tasks/queued-task", headers={"Authorization": "Bearer testtoken"})
+    assert cancel.status_code == 200
+    assert _m._tasks["queued-task"].status == "cancelled"
+
+
+def test_task_feedback_endpoint_persists_feedback(monkeypatch, tmp_path):
+    from app.models import AgentContext, TaskRecord
+
+    rec = TaskRecord(id="fb-task", status="done", context=AgentContext(goal="finished"), goal="finished")
+    monkeypatch.setattr(_m, "_tasks", {"fb-task": rec})
+    monkeypatch.setattr(_m, "workspace_dir", tmp_path)
+    monkeypatch.setattr(_m, "task_store_dir", tmp_path / "tasks")
+    (tmp_path / "tasks").mkdir()
+    client = _client(monkeypatch)
+
+    resp = client.post(
+        "/api/tasks/fb-task/feedback",
+        headers={"Authorization": "Bearer testtoken"},
+        json={"rating": "up", "note": "useful"},
+    )
+
+    assert resp.status_code == 200
+    assert rec.metadata["feedback"][0]["rating"] == "up"

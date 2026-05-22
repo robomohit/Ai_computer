@@ -32,6 +32,12 @@ from .models import (
     ToolResult,
 )
 from .permissions import PermissionStore, scope_for_action
+from .premium_features import (
+    build_preflight_plan,
+    discover_project_rules,
+    expand_workflow_goal,
+    ocr_text_from_b64,
+)
 from .providers import PlannerProvider, _capture_screenshot_b64, _captured_dimensions, _get_active_window_rect, _get_hwnd_for_title, detect_task_mode, classify_task_complexity, infer_isolated_app_name, is_vision_model
 from .safety import SafetyManager
 from .text_editor import TextEditorTool
@@ -79,6 +85,16 @@ _DESKTOP_POST_ACTION_TYPES = {
 }
 
 _POINT_TAG_RE = re.compile(r"\[POINT:(?P<body>[^\]]+)\]", re.IGNORECASE)
+_ORIGINAL_PLANNER_PROVIDER = PlannerProvider
+
+
+def _new_planner_provider(model: str) -> PlannerProvider:
+    if PlannerProvider is not _ORIGINAL_PLANNER_PROVIDER:
+        return PlannerProvider(model=model)
+    # Resolve through the module each time so tests or dev reloads of app.providers
+    # do not leave AgentService pinned to a stale class object.
+    from . import providers as providers_module
+    return providers_module.PlannerProvider(model=model)
 
 
 def _visual_hash_from_b64(image_b64: Optional[str]) -> Optional[tuple[int, ...]]:
@@ -167,6 +183,7 @@ class SubTaskWorker:
         screen_dims: tuple[int, int],
         complexity: str = "complex",
         system_prompt_extension: Optional[str] = None,
+        auto_approve: bool = False,
     ):
         self.worker_id = worker_id
         self.task_id = task_id
@@ -179,6 +196,7 @@ class SubTaskWorker:
         self.action_count = 0
         self.max_actions = 20 # sub-task limit
         self.system_prompt_extension = system_prompt_extension
+        self.auto_approve = bool(auto_approve)
 
     async def _emit(self, event: str, data: Dict[str, Any]):
         data["worker_id"] = self.worker_id
@@ -205,7 +223,7 @@ class SubTaskWorker:
 
         results: List[str] = []
         actions_taken: List[Dict[str, Any]] = []
-        is_coding = self.mode == "coding"
+        is_coding = self.mode in ("coding", "chat", "auto")
         is_computer_use = self.mode == "computer_use"
         tools = self.agent_service._get_task_tools(self.task_id)
         is_isolated = self.mode == "computer_isolated" or bool(tools.resolve_isolated_hwnd())
@@ -231,7 +249,7 @@ class SubTaskWorker:
 
                 self.action_count += 1
                 action = Action(**action_data.model_dump())
-                decision = self.agent_service.safety.evaluate(action, safe_mode=not is_coding)
+                decision = self.agent_service.safety.evaluate(action, safe_mode=not (is_coding or self.auto_approve))
 
                 await self._emit("intent", {
                     "action_id": action.id,
@@ -249,7 +267,7 @@ class SubTaskWorker:
                 # Permission & Approval logic (reusing AgentService helpers)
                 needed_scope = scope_for_action(action.type.value, action.args)
                 if needed_scope and not self.agent_service.permissions.is_granted(self.task_id, needed_scope.value):
-                    if self.mode == "coding":
+                    if is_coding or self.auto_approve:
                         granted = True
                     else:
                         await self._emit("permission_required", {
@@ -437,6 +455,7 @@ class AgentService:
         self._active_tasks: dict[str, asyncio.Task] = {}
         self._paused_tasks: set[str] = set()
         self._approvals: Dict[str, asyncio.Future] = {}
+        self._approval_overrides: Dict[str, str] = {}
         self._permission_waits: Dict[str, asyncio.Future] = {}
         self._pause_events: Dict[str, asyncio.Event] = {}
         self._on_task_complete: Optional[Callable[[str, str, str], None]] = None
@@ -541,14 +560,23 @@ class AgentService:
         active_skills: Optional[List[str]] = None,
         project_folder: Optional[str] = None,
         environment: Optional[Dict[str, Any]] = None,
+        plan_first: bool = False,
+        notify_on_completion: bool = False,
+        auto_commit: bool = False,
+        autonomy_level: str = "balanced",
     ) -> TaskRecord:
         active_skills = list(active_skills or [])
+        task_workspace = Path(project_folder).expanduser().resolve() if project_folder else self.home_dir
+        goal = expand_workflow_goal(goal, task_workspace)
         detected_mode = detect_task_mode(goal, mode if mode != "auto" else None)
         if detected_mode == "computer_isolated" and not isolated_app:
             isolated_app = infer_isolated_app_name(goal)
-        task_workspace = Path(project_folder).expanduser().resolve() if project_folder else self.home_dir
         self._assign_task_tools(task_id, task_workspace)
         environment_payload = dict(environment or {})
+        environment_payload["autonomy_level"] = autonomy_level
+        environment_payload["plan_first"] = bool(plan_first)
+        environment_payload["notify_on_completion"] = bool(notify_on_completion)
+        environment_payload["auto_commit"] = bool(auto_commit)
         self._task_environments[task_id] = environment_payload
         context = AgentContext(
             goal=goal,
@@ -559,7 +587,18 @@ class AgentService:
             project_folder=str(task_workspace) if project_folder else None,
             environment=environment_payload,
         )
-        record = TaskRecord(id=task_id, status="running", context=context, goal=goal, model=model, mode=detected_mode)
+        record = TaskRecord(
+            id=task_id,
+            status="running",
+            context=context,
+            goal=goal,
+            model=model,
+            mode=detected_mode,
+            plan_first=bool(plan_first),
+            notify_on_completion=bool(notify_on_completion),
+            auto_commit=bool(auto_commit),
+            autonomy_level=autonomy_level or "balanced",
+        )
         self._active_tasks[task_id] = asyncio.create_task(
             self.run_task(
                 task_id,
@@ -573,6 +612,10 @@ class AgentService:
                 active_skills=active_skills,
                 project_folder=str(task_workspace) if project_folder else None,
                 environment=environment_payload,
+                plan_first=bool(plan_first),
+                notify_on_completion=bool(notify_on_completion),
+                auto_commit=bool(auto_commit),
+                autonomy_level=autonomy_level or "balanced",
             )
         )
         return record
@@ -603,9 +646,17 @@ class AgentService:
         active_skills: Optional[List[str]] = None,
         project_folder: Optional[str] = None,
         environment: Optional[Dict[str, Any]] = None,
+        plan_first: bool = False,
+        notify_on_completion: bool = False,
+        auto_commit: bool = False,
+        autonomy_level: str = "balanced",
     ):
+        provider_override = None
+        if not isinstance(screen_width, int) and hasattr(screen_width, "stream_chat"):
+            provider_override = screen_width
+            screen_width = 1280
         active_skills = list(active_skills or [])
-        provider = PlannerProvider(model=model)
+        provider = provider_override or _new_planner_provider(model)
         tools = self._get_task_tools(task_id)
         if project_folder and task_id not in self._task_tools:
             tools = self._assign_task_tools(task_id, Path(project_folder).expanduser().resolve())
@@ -625,6 +676,16 @@ class AgentService:
         # Auto-approve actions in any non-safe mode (coding, computer, computer_isolated)
         # safe_mode=True means EVERY bash/write triggers a popup — bad for automation
         is_auto_approve = mode in ("coding", "chat", "auto", "computer", "computer_isolated", "computer_use")
+        if autonomy_level == "careful":
+            is_auto_approve = False
+
+        provider_model = getattr(provider, "model", model)
+        await self._emit(task_id, "provider_info", {
+            "model": provider_model,
+            "requested_model": model,
+            "tier": getattr(provider, "model_tier", None),
+            "local": str(provider_model).startswith("ollama/"),
+        })
 
         # Build Skill Instructions
         skill_instructions = ""
@@ -634,10 +695,37 @@ class AgentService:
                 skill = skill_manager.get_skill(skill_id)
                 if skill:
                     skill_instructions += f"\n{skill.manual}\n"
+        project_rules = await asyncio.to_thread(discover_project_rules, tools.workspace)
+        if project_rules:
+            skill_instructions += f"\n\n### PROJECT RULES\n{project_rules}\n"
 
         await self._emit(task_id, "status", {"message": f"Initializing {mode} mode...", "elapsed_seconds": 0})
 
         try:
+            if plan_first:
+                plan_payload = build_preflight_plan(goal, mode=mode, autonomy_level=autonomy_level)
+                await self._emit(task_id, "plan", plan_payload)
+                plan_text = "\n".join(
+                    f"{i + 1}. {item.get('description', '')}"
+                    for i, item in enumerate(plan_payload.get("sub_tasks", []))
+                )
+                await self._emit(task_id, "approval_required", {
+                    "action_id": "__plan__",
+                    "action": {"type": "plan_review", "args": {"plan_text": plan_text}},
+                    "danger": "low",
+                    "reason": "Review or edit the plan before the agent starts acting.",
+                })
+                approved = await self._wait_for_approval(task_id, "__plan__")
+                plan_override = self._approval_overrides.pop(f"{task_id}:__plan__", "")
+                if not approved:
+                    self._finalize(task_id, "cancelled", "Plan rejected by user.")
+                    await self._emit(task_id, "cancelled", {
+                        "message": "Plan rejected by user.",
+                        "finished_at": datetime.now(timezone.utc).isoformat(),
+                    })
+                    return
+                if plan_override.strip():
+                    goal = f"{goal}\n\nApproved execution plan:\n{plan_override.strip()}"
             # ── Explain mode: read-only screen Q&A ──
             # A single vision turn — screenshot + question -> answer. The whole
             # agent action loop is bypassed, so nothing on the machine is ever
@@ -669,6 +757,7 @@ class AgentService:
                     explain_shot = _capture_screenshot_b64(screen_width, screen_height)
                 except Exception as cap_err:
                     _log.warning("explain mode: screenshot capture failed: %s", cap_err)
+                ocr_text = await asyncio.to_thread(ocr_text_from_b64, explain_shot)
                 explain_system = (
                     "You are a helpful assistant explaining what is on the user's screen. "
                     "Look at the screenshot and answer the user's question clearly and concisely. "
@@ -677,10 +766,13 @@ class AgentService:
                     "If pointing would help, append exactly one tag at the end of your answer in the form "
                     "[POINT:x,y:label] using screenshot coordinates, or [POINT:none] if pointing would not help."
                 )
+                explain_goal = goal
+                if ocr_text:
+                    explain_goal = f"{goal}\n\nOCR text detected on screen:\n{ocr_text}"
                 explain_answer_parts: List[str] = []
                 try:
                     async for _chunk in provider.stream_chat(
-                        explain_system, [{"role": "user", "content": goal}], explain_shot,
+                        explain_system, [{"role": "user", "content": explain_goal}], explain_shot,
                     ):
                         explain_answer_parts.append(_chunk)
                 except Exception as explain_err:
@@ -836,6 +928,7 @@ class AgentService:
                             screen_dims=(screen_width, screen_height),
                             complexity=complexity,
                             system_prompt_extension=skill_instructions or None,
+                            auto_approve=is_auto_approve,
                         )
                         return await worker.run(provider, history)
 
@@ -1636,6 +1729,8 @@ class AgentService:
         if self._on_task_complete: self._on_task_complete(task_id, status, reason)
         self._paused_tasks.discard(task_id)
         self._approvals.pop(task_id, None)
+        for key in [k for k in self._approval_overrides if k.startswith(f"{task_id}:")]:
+            self._approval_overrides.pop(key, None)
         self._permission_waits.pop(task_id, None)
         self._pause_events.pop(task_id, None)
 
@@ -1649,7 +1744,9 @@ class AgentService:
         finally:
             self._approvals.pop(f"{task_id}:{action_id}", None)
 
-    def submit_approval(self, task_id: str, action_id: str, approved: bool):
+    def submit_approval(self, task_id: str, action_id: str, approved: bool, plan_override: str = ""):
+        if plan_override:
+            self._approval_overrides[f"{task_id}:{action_id}"] = plan_override
         fut = self._approvals.get(f"{task_id}:{action_id}")
         if fut and not fut.done():
             fut.set_result(approved)

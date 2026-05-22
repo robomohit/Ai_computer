@@ -20,6 +20,7 @@ import httpx
 from PIL import Image
 
 from .models import HierarchicalPlan
+from .premium_features import detect_ollama
 from .tool_registry import get_tool_guidance, get_mode_packs
 
 SYSTEM_PROMPT = """You are a computer control planner. Use the provided actions to achieve the user's goal."""
@@ -848,6 +849,15 @@ def resolve_model_tier(model: str) -> Optional[str]:
     return key if key in MODEL_TIERS else None
 
 
+def _ollama_name(model: str) -> str:
+    raw = (model or "").strip()
+    if raw.startswith("ollama/"):
+        return raw.split("/", 1)[1]
+    if raw.startswith("ollama:"):
+        return raw.split(":", 1)[1]
+    return raw
+
+
 class PlannerProvider:
     def __init__(self, model: str = DEFAULT_OPENROUTER_MODEL):
         # A speed-tier selection ("tier:quick"/"tier:balanced") resolves to its
@@ -862,6 +872,7 @@ class PlannerProvider:
         self._google_key: Optional[str] = os.environ.get("GOOGLE_API_KEY")
         self._openrouter_key: Optional[str] = os.environ.get("OPENROUTER_API_KEY")
         self._groq_key: Optional[str] = os.environ.get("GROQ_API_KEY")
+        self._ollama_base_url: str = os.environ.get("OLLAMA_BASE_URL", "http://127.0.0.1:11434").rstrip("/")
         self._total_input_tokens: int = 0
         self._total_output_tokens: int = 0
         # Persistent HTTP client — reuses TCP connections and avoids SSL handshake per call
@@ -872,6 +883,7 @@ class PlannerProvider:
         self._is_openai_model = ("openai" in m or "gpt" in m) and "openrouter" not in m
         self._is_openrouter_model = "openrouter" in m or ("/" in m and not self._is_anthropic_model and not self._is_openai_model)
         self._is_groq_model = "groq" in m
+        self._is_ollama_model = m.startswith("ollama/")
 
     @property
     def total_tokens(self) -> int:
@@ -908,6 +920,25 @@ class PlannerProvider:
         if "/" in m:
             return False
         return "llama" in m or "mixtral" in m or "gemma" in m
+
+    def _is_ollama(self) -> bool:
+        return self.model.startswith("ollama/")
+
+    def _chat_ollama(self, system: str, prompt: str, screenshot_b64: Optional[str] = None) -> str:
+        if screenshot_b64:
+            prompt = f"{prompt}\n\n[Note: local Ollama text mode cannot inspect screenshots in this build.]"
+        payload = {
+            "model": _ollama_name(self.model),
+            "stream": False,
+            "messages": [
+                {"role": "system", "content": system},
+                {"role": "user", "content": prompt},
+            ],
+        }
+        resp = self._http_client.post(f"{self._ollama_base_url}/api/chat", json=payload)
+        resp.raise_for_status()
+        data = resp.json()
+        return str((data.get("message") or {}).get("content") or data.get("response") or "")
 
     def _chat_anthropic(self, system: str, prompt: str, screenshot_b64: Optional[str] = None) -> str:
         if not self._anthropic_key:
@@ -1221,7 +1252,9 @@ class PlannerProvider:
     def _call_llm(self, system: str, prompt: str, screenshot_b64: Optional[str] = None) -> str:
         # 1. Try the primary provider
         primary_fn = None
-        if self._is_groq():
+        if self._is_ollama():
+            primary_fn = self._chat_ollama
+        elif self._is_groq():
             primary_fn = self._chat_groq
         elif self._is_google():
             primary_fn = self._chat_google
@@ -1270,6 +1303,27 @@ class PlannerProvider:
         import httpx
 
         # If no key, fallback to standard error
+        if self._is_ollama():
+            payload_messages = [{"role": "system", "content": system}, *messages]
+            async with httpx.AsyncClient(timeout=120.0) as client:
+                async with client.stream(
+                    "POST",
+                    f"{self._ollama_base_url}/api/chat",
+                    json={"model": _ollama_name(self.model), "messages": payload_messages, "stream": True},
+                ) as resp:
+                    resp.raise_for_status()
+                    async for line in resp.aiter_lines():
+                        if not line:
+                            continue
+                        try:
+                            data = json.loads(line)
+                        except json.JSONDecodeError:
+                            continue
+                        chunk = (data.get("message") or {}).get("content") or data.get("response") or ""
+                        if chunk:
+                            yield str(chunk)
+            return
+
         if not self._openrouter_key and not self._openai_key and not self._groq_key:
              raise RuntimeError("No API key available for streaming (OPENROUTER/OPENAI/GROQ).")
 
@@ -1452,6 +1506,15 @@ class PlannerProvider:
             {"type": "done"} — stream finished
         """
         import httpx
+
+        if self._is_ollama():
+            text = ""
+            async for chunk in self.stream_chat(system, messages, screenshot_b64):
+                text += chunk
+                yield {"type": "thought", "content": chunk}
+            if text:
+                yield {"type": "text_only", "content": text}
+            return
 
         if not self._openrouter_key and not self._openai_key and not self._groq_key:
             raise RuntimeError("No API key available for streaming (OPENROUTER/OPENAI/GROQ).")
@@ -1748,6 +1811,7 @@ __all__ = [
     "_capture_hwnd_screenshot_b64",
     "infer_isolated_app_name",
     "_extract_json",
+    "detect_ollama",
     "CODING_SYSTEM_PROMPT",
     "HIERARCHICAL_SYSTEM_PROMPT",
     "COMPUTER_USE_SYSTEM_PROMPT"

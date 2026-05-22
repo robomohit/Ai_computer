@@ -1515,7 +1515,8 @@
   .tool-output,
   .artifact-preview,
   .detail-preview,
-  .modal-code {
+  .modal-code,
+  .approval-plan-edit {
     margin: 0;
     white-space: pre;
     overflow: auto;
@@ -1531,6 +1532,12 @@
     max-height: 280px;
     scrollbar-width: thin;
     letter-spacing: 0;
+  }
+  .approval-plan-edit {
+    width: 100%;
+    min-height: 160px;
+    resize: vertical;
+    margin-top: 10px;
   }
   .tool-output::-webkit-scrollbar,
   .artifact-preview::-webkit-scrollbar,
@@ -2220,6 +2227,36 @@
   }
 
   .composer-meta { display: flex; align-items: center; gap: 6px; flex-wrap: wrap; }
+
+  .composer-options {
+    display: flex;
+    align-items: center;
+    gap: 6px;
+    flex-wrap: wrap;
+    min-width: 180px;
+  }
+  .composer-toggle,
+  .composer-select-label {
+    display: inline-flex;
+    align-items: center;
+    gap: 5px;
+    height: 28px;
+    padding: 0 8px;
+    border: 1px solid var(--line);
+    border-radius: var(--r-xs);
+    background: var(--bg-2);
+    color: var(--muted);
+    font-size: var(--fs-label);
+    white-space: nowrap;
+  }
+  .composer-toggle input { accent-color: var(--accent); }
+  .composer-select-label select {
+    border: 0;
+    background: transparent;
+    color: var(--ink-2);
+    font: inherit;
+    outline: none;
+  }
 
   .mini-chip {
     display: inline-flex;

@@ -146,6 +146,12 @@ class TaskRecord(BaseModel):
     mode: Optional[str] = None
     execution_mode: str = "serial"
     max_parallel_workers: int = 1
+    plan_first: bool = False
+    notify_on_completion: bool = False
+    auto_commit: bool = False
+    autonomy_level: str = "balanced"
+    checkpoint_commit: Optional[str] = None
+    metadata: Dict[str, Any] = Field(default_factory=dict)
 
 
 class SubTask(BaseModel):

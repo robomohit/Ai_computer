@@ -1523,6 +1523,15 @@
       return;
     }
 
+    if (event.type === 'provider_info') {
+      const label = event.local ? `Local: ${event.model}` : (event.tier ? `${event.tier} tier: ${event.model}` : event.model);
+      if (label) {
+        setLiveStatus('Model', label);
+        const sbm = $('sb-model-val'); if (sbm) sbm.textContent = event.tier || event.model || sbm.textContent;
+      }
+      return;
+    }
+
     if (event.type === 'approval_required') {
       finalizeTurnSummary();
       finalizeLiveStatus();
@@ -1542,7 +1551,10 @@
       btnDeny.style.cssText = 'padding:6px 12px;font-size:12px;flex:1';
       btnDeny.textContent = 'Deny';
       const doApp = (approve) => {
-        api('/api/approvals', 'POST', { task_id: taskId, action_id: event.action_id, approve }).catch(() => {});
+        const edit = $('app-plan-edit');
+        const payload = { task_id: taskId, action_id: event.action_id, approve };
+        if (edit && !edit.classList.contains('hidden')) payload.plan_override = edit.value;
+        api('/api/approvals', 'POST', payload).catch(() => {});
         setActionState(entry, approve ? 'Approved' : 'Denied', approve ? 'ok' : 'fail');
         wrap.remove();
         $('approval').classList.remove('show');
@@ -1557,6 +1569,12 @@
         $('app-title').textContent = `${humanize(event.action?.type || 'Action')} needs approval`;
         $('app-reason').textContent = reason;
         $('app-code').textContent = JSON.stringify(event.action?.args || {}, null, 2);
+        const planEdit = $('app-plan-edit');
+        const isPlanReview = event.action?.type === 'plan_review' || event.action?.args?.plan_text;
+        if (planEdit) {
+          planEdit.classList.toggle('hidden', !isPlanReview);
+          planEdit.value = isPlanReview ? (event.action?.args?.plan_text || '') : '';
+        }
         $('approval').classList.add('show');
         window.pendingTaskId = taskId;
         window.pendingApprovalId = event.action_id;
@@ -1749,7 +1767,11 @@
       await api('/api/tasks', 'POST', { 
         task_id: task, goal, model, mode, isolated_app,
         active_skills: Array.from(activeSkillIds),
-        project_folder: projectFolderState.selectedPath || null
+        project_folder: projectFolderState.selectedPath || null,
+        plan_first: !!$('plan-first-toggle')?.checked,
+        notify_on_completion: !!$('notify-toggle')?.checked,
+        auto_commit: !!$('checkpoint-toggle')?.checked,
+        autonomy_level: $('autonomy-level')?.value || 'balanced'
       });
       if (window.innerWidth <= 1080) document.body.classList.remove('nav-open');
     } catch (err) {
@@ -1918,7 +1940,10 @@
   };
 
   const sendApproval = (approve) => {
-    api('/api/approvals', 'POST', { task_id: window.pendingTaskId, action_id: window.pendingApprovalId, approve }).catch(() => {});
+    const edit = $('app-plan-edit');
+    const payload = { task_id: window.pendingTaskId, action_id: window.pendingApprovalId, approve };
+    if (edit && !edit.classList.contains('hidden')) payload.plan_override = edit.value;
+    api('/api/approvals', 'POST', payload).catch(() => {});
     $('approval').classList.remove('show');
   };
   const sendPermission = (grant) => {

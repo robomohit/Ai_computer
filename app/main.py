@@ -16,6 +16,14 @@ from fastapi.security import HTTPAuthorizationCredentials, HTTPBearer
 from .agent import AgentService
 from .log_emitter import log_emitter
 from .models import AgentContext, TaskRecord
+from .premium_features import (
+    append_feedback,
+    create_git_checkpoint,
+    detect_ollama,
+    revert_git_checkpoint,
+    run_task_hooks,
+    send_completion_notification,
+)
 from .skills import skill_manager
 
 def _load_or_create_api_key() -> str:
@@ -366,6 +374,8 @@ def _serialize_task_record(record: TaskRecord) -> dict:
 _tasks = _load_persisted_tasks()
 
 _MAX_IN_MEMORY_TASKS = 200  # keep at most this many completed tasks in _tasks dict
+_MAX_ACTIVE_TASKS = int(os.environ.get("AI_COMPUTER_MAX_ACTIVE_TASKS", "5"))
+_queued_task_specs: List[Dict[str, Any]] = []
 
 
 def _evict_old_tasks() -> None:
@@ -390,17 +400,103 @@ def _evict_old_tasks() -> None:
         _tasks.pop(tid, None)
 
 
+def _task_workspace_for_record(rec: TaskRecord) -> Path:
+    raw = rec.context.project_folder or rec.context.environment.get("workspace") or str(HOME_DIR)
+    try:
+        return Path(raw).expanduser().resolve()
+    except Exception:
+        return HOME_DIR
+
+
+def _start_task_from_spec(spec: Dict[str, Any]) -> TaskRecord:
+    record = service.init_task(
+        task_id=spec["task_id"],
+        goal=spec["goal"],
+        screen_width=spec["screen_width"],
+        screen_height=spec["screen_height"],
+        model=spec["model"],
+        mode=spec["mode"],
+        isolated_app=spec.get("isolated_app"),
+        active_skills=spec.get("active_skills") or [],
+        project_folder=spec.get("project_folder"),
+        environment=spec.get("environment") or {},
+        plan_first=bool(spec.get("plan_first")),
+        notify_on_completion=bool(spec.get("notify_on_completion")),
+        auto_commit=bool(spec.get("auto_commit")),
+        autonomy_level=spec.get("autonomy_level") or "balanced",
+    )
+    _tasks[record.id] = record
+    _save_task_record(record)
+    log_emitter.emit(record.id, "task_started", {
+        "task_id": record.id,
+        "status": "running",
+        "queued": bool(spec.get("queued")),
+        "model": record.model,
+        "mode": record.mode,
+    })
+    return record
+
+
+def _start_next_queued_task() -> None:
+    active_count = lambda: sum(1 for task in service._active_tasks.values() if not task.done())
+    while _queued_task_specs and active_count() < _MAX_ACTIVE_TASKS:
+        spec = _queued_task_specs.pop(0)
+        rec = _tasks.get(spec["task_id"])
+        if rec and rec.status != "queued":
+            continue
+        spec["queued"] = True
+        try:
+            _start_task_from_spec(spec)
+        except Exception as exc:
+            if rec:
+                rec.status = "failed"
+                rec.reason = f"Queued task failed to start: {exc}"
+                rec.finished_at = datetime.now(timezone.utc).isoformat()
+                _save_task_record(rec)
+            log_emitter.emit(spec["task_id"], "error", {"message": f"Queued task failed to start: {exc}"})
+
+
+def _run_completion_side_effects(rec: TaskRecord, status: str, reason: str) -> None:
+    workspace = _task_workspace_for_record(rec)
+    hook_event = "task_done" if status == "done" else "task_failed" if status == "failed" else "task_cancelled"
+    for result in run_task_hooks(workspace, hook_event, {
+        "task_id": rec.id,
+        "status": status,
+        "reason": reason,
+        "goal": rec.goal or rec.context.goal,
+    }):
+        log_emitter.emit(rec.id, "hook_result", result)
+
+    if rec.auto_commit:
+        checkpoint = create_git_checkpoint(workspace, rec.id, reason or rec.goal or rec.id)
+        rec.metadata["checkpoint"] = checkpoint
+        if checkpoint.get("commit"):
+            rec.checkpoint_commit = checkpoint["commit"]
+        log_emitter.emit(rec.id, "checkpoint", checkpoint)
+
+    if rec.notify_on_completion:
+        notification = send_completion_notification(rec.goal or rec.context.goal, status, reason)
+        rec.metadata["notification"] = notification
+        log_emitter.emit(rec.id, "notification", notification)
+
+
 def _on_complete(task_id: str, status: str, reason: str):
     rec = _tasks.get(task_id)
     if rec:
         rec.status = status
         rec.finished_at = datetime.now(timezone.utc).isoformat()
         rec.reason = reason
+        try:
+            _run_completion_side_effects(rec, status, reason)
+        except Exception as exc:
+            log_emitter.emit(task_id, "hook_result", {"name": "completion-side-effects", "ok": False, "output": str(exc)})
         _save_task_record(rec)
     # Release per-task in-memory state in the log emitter (seq counter, disk flag)
     log_emitter.cleanup_task(task_id)
     # Evict oldest completed tasks to cap the in-memory dict size
     _evict_old_tasks()
+    service._active_tasks.pop(task_id, None)
+    _start_next_queued_task()
 
 service._on_task_complete = _on_complete
 
@@ -416,6 +512,10 @@ class TaskIn(BaseModel):
     isolated_app: Optional[str] = None  # partial window title to target in isolated mode
     active_skills: List[str] = []
     project_folder: Optional[str] = None
+    plan_first: bool = False
+    notify_on_completion: bool = False
+    auto_commit: bool = False
+    autonomy_level: Literal["careful", "balanced", "fast"] = "balanced"
 
 @app.middleware("http")
 async def limit_request_size(request: Request, call_next):
@@ -437,6 +537,7 @@ class ApprovalIn(BaseModel):
     task_id: str
     action_id: str
     approve: bool
+    plan_override: str = ""
 
 
 class PermissionIn(BaseModel):
@@ -505,7 +606,9 @@ async def healthz():
         name: ("ok" if os.environ.get(env_var) else "missing_key")
         for name, env_var in _HEALTHZ_PROVIDERS.items()
     }
-    result = {"server": "ok", "providers": providers}
+    ollama = detect_ollama()
+    providers["ollama"] = "ok" if ollama.get("available") else "unavailable"
+    result = {"server": "ok", "providers": providers, "ollama": ollama}
     _healthz_cache["ts"] = time.time()
     _healthz_cache["result"] = result
     return result
@@ -647,6 +750,7 @@ _ALL_MODELS = [
 
 # Map model prefix → required env var for validation
 _MODEL_KEY_MAP = {
+    "ollama/": None,
     "openrouter/": "OPENROUTER_API_KEY",
     "claude": "ANTHROPIC_API_KEY",
     "gpt": "OPENAI_API_KEY",
@@ -694,10 +798,15 @@ async def get_models():
     if os.environ.get("GROQ_API_KEY"):
         configured_providers.append("Groq")
         keyed.extend(["groq/llama-3.3-70b-versatile", "groq/llama-3.2-90b-vision-preview"])
+    ollama = detect_ollama()
+    if ollama.get("available"):
+        configured_providers.append("Ollama")
+        keyed.extend([f"ollama/{name}" for name in ollama.get("models", [])[:8]])
     return {
         "models": keyed,
         "configured_providers": configured_providers,
         "has_keys": len(keyed) > 0,
+        "ollama": ollama,
     }
 
 @app.get("/api/tasks", dependencies=[Depends(verify_token)])
@@ -740,13 +849,11 @@ async def create_task(body: TaskIn):
     _validate_task_id(body.task_id)
     print(f"[API] create_task: {body.task_id} (model={body.model}, mode={body.mode})", flush=True)
     existing = _tasks.get(body.task_id)
-    if existing and existing.status in {"running", "paused", "pending"}:
+    if existing and existing.status in {"running", "paused", "pending", "queued"}:
         raise HTTPException(status_code=409, detail=f"Task '{body.task_id}' already exists and is still active")
     if existing and existing.status in {"done", "failed", "cancelled", "complete"}:
         raise HTTPException(status_code=409, detail=f"Task '{body.task_id}' already exists")
     active = len(service._active_tasks)
-    if active >= 5:
-        raise HTTPException(status_code=429, detail="max concurrent tasks reached")
 
     # Auto-pick a model from whatever keys are available when none is specified
     if not body.model:
@@ -764,7 +871,15 @@ async def create_task(body: TaskIn):
             selected_model = "gemini-2.0-flash"
         elif os.environ.get("GROQ_API_KEY"):
             selected_model = "groq/llama-3.3-70b-versatile"
+        elif os.environ.get("OLLAMA_DEFAULT_MODEL"):
+            selected_model = f"ollama/{os.environ['OLLAMA_DEFAULT_MODEL']}"
         else:
+            ollama = detect_ollama()
+            if ollama.get("available") and ollama.get("models"):
+                selected_model = f"ollama/{ollama['models'][0]}"
+            else:
+                selected_model = ""
+        if not selected_model:
             raise HTTPException(
                 status_code=400,
                 detail="No API keys configured. Add at least one key (OPENROUTER_API_KEY, ANTHROPIC_API_KEY, etc.) to your .env file."
@@ -787,21 +902,64 @@ async def create_task(body: TaskIn):
     )
 
     try:
+        spec = {
+            "task_id": body.task_id,
+            "goal": body.goal,
+            "screen_width": body.screen_width,
+            "screen_height": body.screen_height,
+            "model": selected_model,
+            "mode": body.mode or "auto",
+            "isolated_app": body.isolated_app,
+            "active_skills": body.active_skills,
+            "project_folder": str(selected_project_folder) if selected_project_folder else None,
+            "environment": environment,
+            "plan_first": body.plan_first,
+            "notify_on_completion": body.notify_on_completion,
+            "auto_commit": body.auto_commit,
+            "autonomy_level": body.autonomy_level,
+        }
+        if active >= _MAX_ACTIVE_TASKS:
+            context = AgentContext(
+                goal=body.goal,
+                screen_width=body.screen_width,
+                screen_height=body.screen_height,
+                isolated_app=body.isolated_app,
+                active_skills=body.active_skills,
+                project_folder=str(selected_project_folder) if selected_project_folder else None,
+                environment=environment,
+            )
+            record = TaskRecord(
+                id=body.task_id,
+                status="queued",
+                context=context,
+                goal=body.goal,
+                model=selected_model,
+                mode=body.mode or "auto",
+                plan_first=body.plan_first,
+                notify_on_completion=body.notify_on_completion,
+                auto_commit=body.auto_commit,
+                autonomy_level=body.autonomy_level,
+            )
+            _tasks[body.task_id] = record
+            _queued_task_specs.append(spec)
+            _save_task_record(record)
+            log_emitter.emit(body.task_id, "task_created", {
+                "task_id": body.task_id,
+                "goal": body.goal,
+                "model": selected_model,
+                "mode": record.mode,
+                "created_at": record.created_at,
+                "project_folder": record.context.project_folder,
+            })
+            log_emitter.emit(body.task_id, "queued", {
+                "task_id": body.task_id,
+                "position": len(_queued_task_specs),
+                "max_active_tasks": _MAX_ACTIVE_TASKS,
+            })
+            return {"task_id": body.task_id, "status": "queued", "position": len(_queued_task_specs)}
+
         print(f"[API] Initializing task {body.task_id}...", flush=True)
-        record = service.init_task(
-            task_id=body.task_id,
-            goal=body.goal,
-            screen_width=body.screen_width,
-            screen_height=body.screen_height,
-            model=selected_model,
-            mode=body.mode or "auto",
-            isolated_app=body.isolated_app,
-            active_skills=body.active_skills,
-            project_folder=str(selected_project_folder) if selected_project_folder else None,
-            environment=environment,
-        )
-        _tasks[body.task_id] = record
-        _save_task_record(record)
+        record = _start_task_from_spec(spec)
         log_emitter.emit(body.task_id, "task_created", {
             "task_id": body.task_id,
             "goal": body.goal,
@@ -809,6 +967,10 @@ async def create_task(body: TaskIn):
             "mode": record.mode,
             "created_at": record.created_at,
             "project_folder": record.context.project_folder,
+            "plan_first": body.plan_first,
+            "notify_on_completion": body.notify_on_completion,
+            "auto_commit": body.auto_commit,
+            "autonomy_level": body.autonomy_level,
         })
         print(f"[API] Task {body.task_id} initialized successfully", flush=True)
         return {"task_id": body.task_id, "status": "running"}
@@ -834,6 +996,14 @@ async def get_task(task_id: str, request: Request, credentials: HTTPAuthorizatio
 @app.delete("/api/tasks/{task_id}", dependencies=[Depends(verify_token)])
 async def cancel_task(task_id: str):
     _validate_task_id(task_id)
+    if task_id in _tasks and _tasks[task_id].status == "queued":
+        _queued_task_specs[:] = [spec for spec in _queued_task_specs if spec.get("task_id") != task_id]
+        _tasks[task_id].status = "cancelled"
+        _tasks[task_id].finished_at = datetime.now(timezone.utc).isoformat()
+        _tasks[task_id].reason = "Queued task cancelled by user"
+        _save_task_record(_tasks[task_id])
+        log_emitter.emit(task_id, "cancelled", {"message": "Queued task cancelled by user", "finished_at": datetime.now(timezone.utc).isoformat()})
+        return {"task_id": task_id, "status": "cancelled"}
     cancelled = service.cancel_task(task_id)
     if not cancelled:
         raise HTTPException(status_code=404, detail="Task not found or already complete")
@@ -903,14 +1073,63 @@ async def download_task_log(task_id: str):
     return FileResponse(log_path, media_type="application/json", filename=f"{task_id}.jsonl")
 
 
+class FeedbackIn(BaseModel):
+    rating: Literal["up", "down"]
+    note: str = ""
+
+
+@app.post("/api/tasks/{task_id}/feedback", dependencies=[Depends(verify_token)])
+async def task_feedback(task_id: str, body: FeedbackIn):
+    _validate_task_id(task_id)
+    record = _get_task_record(task_id)
+    if not record:
+        raise HTTPException(status_code=404, detail="Task not found")
+    path = append_feedback(workspace_dir, task_id, body.rating, body.note[:1000])
+    record.metadata.setdefault("feedback", []).append({"rating": body.rating, "note": body.note[:1000], "path": str(path)})
+    _save_task_record(record)
+    return {"ok": True, "path": str(path)}
+
+
+@app.post("/api/tasks/{task_id}/checkpoint/revert", dependencies=[Depends(verify_token)])
+async def revert_task_checkpoint(task_id: str):
+    _validate_task_id(task_id)
+    record = _get_task_record(task_id)
+    if not record:
+        raise HTTPException(status_code=404, detail="Task not found")
+    commit = record.checkpoint_commit or (record.metadata.get("checkpoint") or {}).get("commit", "")
+    if not commit:
+        raise HTTPException(status_code=400, detail="Task has no checkpoint commit to revert")
+    result = revert_git_checkpoint(_task_workspace_for_record(record), commit)
+    log_emitter.emit(task_id, "checkpoint_revert", result)
+    if not result.get("ok"):
+        raise HTTPException(status_code=409, detail=result.get("error", "Checkpoint revert failed"))
+    return result
+
+
+@app.get("/api/model-health", dependencies=[Depends(verify_token)])
+async def model_health():
+    return {
+        "max_active_tasks": _MAX_ACTIVE_TASKS,
+        "active_tasks": len(service._active_tasks),
+        "queued_tasks": len(_queued_task_specs),
+        "ollama": detect_ollama(),
+    }
+
+
 @app.post("/api/tasks/{task_id}/retry", dependencies=[Depends(verify_token)])
 async def retry_task(task_id: str):
     _validate_task_id(task_id)
     record = _get_task_record(task_id)
     if not record:
         raise HTTPException(status_code=404, detail="Task not found")
-    _retry_suffix = f"-retry-{int(time.time())}"
-    new_task_id = f"{task_id[:128 - len(_retry_suffix)]}{_retry_suffix}"
+    for retry_num in range(1, 1000):
+        _retry_suffix = f"-retry-{retry_num}"
+        candidate = f"{task_id[:128 - len(_retry_suffix)]}{_retry_suffix}"
+        if candidate not in _tasks and not _task_store_path(candidate).exists():
+            new_task_id = candidate
+            break
+    else:
+        new_task_id = f"{task_id[:119]}-retry-{secrets.token_hex(4)}"
     model = record.model
     mode = record.mode or "auto"
     goal = record.goal or record.context.goal
@@ -927,6 +1146,10 @@ async def retry_task(task_id: str):
         active_skills=record.context.active_skills,
         project_folder=record.context.project_folder,
         environment=record.context.environment,
+        plan_first=record.plan_first,
+        notify_on_completion=record.notify_on_completion,
+        auto_commit=record.auto_commit,
+        autonomy_level=record.autonomy_level,
     )
     _tasks[new_task_id] = new_record
     _save_task_record(new_record)
@@ -993,7 +1216,7 @@ async def stream_task(task_id: str, request: Request, since: int = 0, keepalive_
 
 @app.post("/api/approvals", dependencies=[Depends(verify_token)])
 async def approvals(body: ApprovalIn):
-    service.submit_approval(body.task_id, body.action_id, body.approve)
+    service.submit_approval(body.task_id, body.action_id, body.approve, body.plan_override)
     return {"ok": True}
 
 

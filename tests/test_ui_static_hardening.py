@@ -192,6 +192,25 @@ def test_turn_step_output_copy_button_present():
     assert "copyBtn.textContent = 'Copied!'" in js
 
 
+def test_free_model_premium_controls_present():
+    html = STATIC_HTML.read_text(encoding="utf-8")
+    js = (_STATIC / "app.js").read_text(encoding="utf-8", errors="replace")
+    css = (_STATIC / "style.css").read_text(encoding="utf-8")
+
+    assert 'id="plan-first-toggle"' in html
+    assert 'id="notify-toggle"' in html
+    assert 'id="checkpoint-toggle"' in html
+    assert 'id="autonomy-level"' in html
+    assert 'id="app-plan-edit"' in html
+    assert "plan_first" in js
+    assert "notify_on_completion" in js
+    assert "auto_commit" in js
+    assert "plan_override" in js
+    assert "provider_info" in js
+    assert ".composer-options" in css
+    assert ".approval-plan-edit" in css
+
+
 def test_desktop_launcher_has_frameless_widget_mode():
     launcher = (STATIC_HTML.parents[0].parent / "run_desktop.py").read_text(encoding="utf-8")
 

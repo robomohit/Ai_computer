@@ -190,6 +190,12 @@
             <div class="mini-chip"><kbd>⇧↵</kbd> newline</div>
             <div class="char-count" id="char-count"></div>
           </div>
+          <div class="composer-options" aria-label="Task options">
+            <label class="composer-toggle"><input type="checkbox" id="plan-first-toggle"><span>Plan first</span></label>
+            <label class="composer-toggle"><input type="checkbox" id="notify-toggle"><span>Notify</span></label>
+            <label class="composer-toggle"><input type="checkbox" id="checkpoint-toggle"><span>Checkpoint</span></label>
+            <label class="composer-select-label"><span>Autonomy</span><select id="autonomy-level"><option value="balanced">Balanced</option><option value="careful">Careful</option><option value="fast">Fast</option></select></label>
+          </div>
           <div class="composer-actions">
             <button class="composer-icon-btn" id="read-aloud-toggle" type="button" aria-label="Read replies aloud" title="Read agent replies aloud">
               <svg width="16" height="16" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.8" stroke-linecap="round" stroke-linejoin="round"><path d="M11 5L6 9H2v6h4l5 4z"/><path d="M15.5 8.5a5 5 0 0 1 0 7"/><path d="M18.5 5.5a9 9 0 0 1 0 13"/></svg>
@@ -327,6 +333,7 @@
     <h3 id="app-title">Action requires approval</h3>
     <p id="app-reason">The agent wants to run something risky.</p>
     <pre class="modal-code" id="app-code"></pre>
+    <textarea class="approval-plan-edit hidden" id="app-plan-edit" aria-label="Edit plan before approval"></textarea>
     <div class="modal-actions">
       <button class="modal-btn" id="app-deny" type="button">Deny</button>
       <button class="modal-btn primary" id="app-approve" type="button">Approve</button>
