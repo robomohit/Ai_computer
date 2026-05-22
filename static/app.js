@@ -2591,6 +2591,12 @@
       root.classList.add('widget-shell');
       // dark frosted glass reads best floating over an arbitrary desktop
       document.documentElement.setAttribute('data-theme', 'dark');
+      // Qt shell: the OS window provides the rounded edge + Acrylic blur,
+      // so the capsule drops its own border/blur to avoid a double outline.
+      if (params.get('shell') === 'qt') {
+        document.documentElement.classList.add('qt-shell');
+        document.body.classList.add('qt-shell');
+      }
     }
 
     const textIn = $('vpanel-text');

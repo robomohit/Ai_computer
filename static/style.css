@@ -2889,3 +2889,24 @@
     position: fixed; left: 10px; right: 10px; top: 10px; bottom: auto; width: auto;
   }
   /* easy_drag handles window dragging on non-interactive areas */
+
+  /* ============================================================
+     Qt shell — the native window already provides the rounded edge
+     and the Windows Acrylic blur. The capsule drops its own border,
+     blur and shadow so there is no double outline, and uses a very
+     light fill so the acrylic-blurred wallpaper shows through.
+     ============================================================ */
+  body.qt-shell #vorb-root { left: 0; right: 0; top: 0; }
+  body.qt-shell .vcap {
+    border: none !important;
+    box-shadow: none !important;
+    backdrop-filter: none !important;
+    -webkit-backdrop-filter: none !important;
+    border-radius: 30px;
+    /* barely-there tint — the OS Acrylic does the frosting */
+    background: linear-gradient(152deg, rgba(28,33,42,.16), rgba(12,15,21,.26)) !important;
+  }
+  body.qt-shell .vcap-sheen { opacity: .06; }
+  body.qt-shell .vcap-reply {
+    background: rgba(255,255,255,.07);
+  }

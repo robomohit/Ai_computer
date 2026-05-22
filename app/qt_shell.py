@@ -11,12 +11,22 @@ Launched by `run_desktop.py --widget`.
 from __future__ import annotations
 
 import ctypes
+import os
 import sys
 from ctypes import wintypes
 
+# QtWebEngine will not composite a transparent page over GPU-accelerated
+# layers on many Windows setups — forcing software compositing makes the
+# transparent background actually punch through. The capsule is tiny so the
+# software path costs nothing.
+os.environ.setdefault(
+    "QTWEBENGINE_CHROMIUM_FLAGS",
+    "--disable-gpu --disable-gpu-compositing --enable-transparent-visuals",
+)
+
 # ── Windows Acrylic + rounded-window helpers (degrade gracefully off-Windows) ──
 
-def _apply_acrylic(hwnd: int, tint_abgr: int = 0x8C140F0B) -> None:
+def _apply_acrylic(hwnd: int, tint_abgr: int = 0x2E1A1712) -> None:
     """Give the window a real Acrylic blur-behind (Win10 1803+ / Win11).
 
     tint_abgr packs the glass tint as 0xAABBGGRR — alpha controls how much
@@ -105,6 +115,7 @@ def main(port: int = 8000) -> int:
 
             self.view = QWebEngineView(self)
             self.view.setAttribute(Qt.WA_TranslucentBackground, True)
+            self.view.setStyleSheet("background: transparent;")
             self.view.page().setBackgroundColor(QColor(Qt.transparent))
             s = self.view.settings()
             s.setAttribute(QWebEngineSettings.ShowScrollBars, False)
@@ -120,7 +131,7 @@ def main(port: int = 8000) -> int:
             # the served page can reach `window.__qtShell` with no server help
             self._inject_channel_script()
 
-            self.view.setUrl(QUrl(f"http://127.0.0.1:{port}/?widget=1"))
+            self.view.setUrl(QUrl(f"http://127.0.0.1:{port}/?widget=1&shell=qt"))
 
             # poll the capsule's rendered height and hug it with the window
             self._timer = QTimer(self)
