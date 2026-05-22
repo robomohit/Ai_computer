@@ -20,10 +20,49 @@ from ctypes import wintypes
 
 # ── Windows Acrylic + rounded-window helpers ─────────────────────────────────
 
-def _apply_acrylic(hwnd: int, tint_abgr: int = 0x40121016) -> None:
-    """Real blur-behind so the capsule frosts the desktop wallpaper.
+def _extend_frame(hwnd: int) -> bool:
+    """Extend the DWM frame into the entire client area so the system
+    backdrop reaches every pixel of the window (required on Win11)."""
+    try:
+        class MARGINS(ctypes.Structure):
+            _fields_ = [("cxLeftWidth", ctypes.c_int), ("cxRightWidth", ctypes.c_int),
+                        ("cyTopHeight", ctypes.c_int), ("cyBottomHeight", ctypes.c_int)]
+        m = MARGINS(-1, -1, -1, -1)
+        ctypes.windll.dwmapi.DwmExtendFrameIntoClientArea(
+            wintypes.HWND(hwnd), ctypes.byref(m))
+        return True
+    except Exception:
+        return False
 
-    tint_abgr = 0xAABBGGRR — low alpha keeps it mostly blur, little tint.
+
+def _apply_win11_backdrop(hwnd: int) -> bool:
+    """Modern Win11 22H2+ system backdrop (Acrylic).
+
+    Uses the documented `DwmSetWindowAttribute(DWMWA_SYSTEMBACKDROP_TYPE)`
+    API — the legacy `SetWindowCompositionAttribute` is undocumented and
+    broken on newer Windows 11 builds.
+    """
+    try:
+        DWMWA_SYSTEMBACKDROP_TYPE = 38
+        DWMSBT_TRANSIENTWINDOW = 3            # Acrylic
+        DWMWA_USE_IMMERSIVE_DARK_MODE = 20
+        dwmapi = ctypes.windll.dwmapi
+        dark = ctypes.c_int(1)
+        dwmapi.DwmSetWindowAttribute(
+            wintypes.HWND(hwnd), DWMWA_USE_IMMERSIVE_DARK_MODE,
+            ctypes.byref(dark), ctypes.sizeof(dark))
+        backdrop = ctypes.c_int(DWMSBT_TRANSIENTWINDOW)
+        hr = dwmapi.DwmSetWindowAttribute(
+            wintypes.HWND(hwnd), DWMWA_SYSTEMBACKDROP_TYPE,
+            ctypes.byref(backdrop), ctypes.sizeof(backdrop))
+        return hr == 0
+    except Exception:
+        return False
+
+
+def _apply_acrylic_legacy(hwnd: int, tint_abgr: int = 0x20121016) -> None:
+    """Legacy Win10 path — undocumented, but the only thing that works on
+    older Win10 builds. Used as a fallback when DwmSetWindowAttribute fails.
     """
     try:
         class ACCENTPOLICY(ctypes.Structure):
@@ -41,6 +80,13 @@ def _apply_acrylic(hwnd: int, tint_abgr: int = 0x40121016) -> None:
             wintypes.HWND(hwnd), ctypes.pointer(data))
     except Exception:
         pass
+
+
+def _apply_acrylic(hwnd: int) -> None:
+    """Apply the right backdrop API for the OS version."""
+    _extend_frame(hwnd)
+    if not _apply_win11_backdrop(hwnd):
+        _apply_acrylic_legacy(hwnd)
 
 
 def _round_window(hwnd: int, w: int, h: int, radius: int = 28) -> None:
@@ -84,8 +130,10 @@ def _icon(name: str, size: int = 18, color: str = "#E8EAED", width: float = 1.9)
 
 
 def main(port: int = 8000) -> int:
-    from PySide6.QtCore import (Qt, QTimer, QObject, Signal, QPoint, QSize)
-    from PySide6.QtGui import (QColor, QPainter, QPainterPath, QPen, QFont)
+    from PySide6.QtCore import (Qt, QTimer, QObject, Signal, QPoint, QSize,
+                                QPropertyAnimation, QEasingCurve, QRect)
+    from PySide6.QtGui import (QColor, QPainter, QPainterPath, QPen, QFont,
+                               QFontDatabase)
     from PySide6.QtWidgets import (QApplication, QWidget, QLineEdit, QPushButton,
                                    QLabel, QVBoxLayout, QHBoxLayout)
 
@@ -96,6 +144,9 @@ def main(port: int = 8000) -> int:
 
     app = QApplication.instance() or QApplication(sys.argv)
     app.setQuitOnLastWindowClosed(True)
+    # Use the Win11 system font (Segoe UI Variable). Falls back to Segoe UI
+    # then any sans-serif. Tight tracking is set per-widget below.
+    app.setFont(QFont("Segoe UI Variable Text", 10))
 
     # ── HTTP worker — submit a task + poll its log off the GUI thread ──
     class TaskRunner(QObject):
@@ -231,7 +282,9 @@ def main(port: int = 8000) -> int:
 
             self.input = QLineEdit()
             self.input.setPlaceholderText("Start a task…")
-            self.input.setFont(QFont("Segoe UI", 13))
+            input_font = QFont("Segoe UI Variable Display", 13)
+            input_font.setLetterSpacing(QFont.PercentageSpacing, 98)  # tight tracking
+            self.input.setFont(input_font)
             self.input.returnPressed.connect(self._submit)
             self.input.setStyleSheet(
                 "QLineEdit{background:transparent;border:none;color:#F2F3F5;"
@@ -339,8 +392,9 @@ def main(port: int = 8000) -> int:
             path = QPainterPath()
             rect = self.rect().adjusted(1, 1, -1, -1)
             path.addRoundedRect(rect, RADIUS, RADIUS)
-            # glass tint over the OS acrylic blur
-            p.fillPath(path, QColor(18, 21, 28, 96))
+            # glass tint over the OS acrylic blur (low alpha so the
+            # wallpaper actually shows through the Acrylic backdrop)
+            p.fillPath(path, QColor(18, 21, 28, 36))
             # crisp rim
             pen = QPen(QColor(255, 255, 255, 38))
             pen.setWidth(1)
@@ -370,6 +424,17 @@ def main(port: int = 8000) -> int:
             hwnd = int(self.winId())
             _apply_acrylic(hwnd)
             _round_window(hwnd, self.width(), self.height(), RADIUS)
+            # spring entry — fade in with the OutBack curve so the capsule
+            # feels physical instead of popping into existence
+            if not getattr(self, "_intro_done", False):
+                self._intro_done = True
+                self.setWindowOpacity(0.0)
+                self._intro = QPropertyAnimation(self, b"windowOpacity")
+                self._intro.setDuration(380)
+                self._intro.setStartValue(0.0)
+                self._intro.setEndValue(1.0)
+                self._intro.setEasingCurve(QEasingCurve.OutCubic)
+                self._intro.start()
 
         def resizeEvent(self, e) -> None:  # noqa: N802
             super().resizeEvent(e)
