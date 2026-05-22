@@ -1333,6 +1333,18 @@ class AgentService:
                                         if _now - _last_reason_emit >= _REASON_MIN_INTERVAL:
                                             _last_reason_emit = _now
                                             await self._emit(task_id, "reasoning", {"stage": f"Step {step+1}", "summary": "Thinking...", "detail": thought_text, "live": True, "elapsed_seconds": _step_elapsed()})
+                                    elif event["type"] == "tool_partial":
+                                        _now = asyncio.get_running_loop().time()
+                                        if _now - _last_reason_emit >= _REASON_MIN_INTERVAL:
+                                            _last_reason_emit = _now
+                                            _partial_name = event.get("name") or "tool"
+                                            await self._emit(task_id, "reasoning", {
+                                                "stage": f"Step {step+1} — composing",
+                                                "summary": f"Composing {_partial_name}…",
+                                                "detail": event.get("args_partial", "")[:200],
+                                                "live": True,
+                                                "elapsed_seconds": _step_elapsed(),
+                                            })
                                     elif event["type"] == "tool_call":
                                         action_type = event["name"]
                                         args = event.get("args", {})

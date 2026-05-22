@@ -338,3 +338,48 @@ async def test_chain_retry_skips_non_rate_limit_errors(monkeypatch):
 
     # Only one attempt — no chain retry for non-rate-limit errors
     assert call_count == 1
+
+
+@pytest.mark.asyncio
+async def test_tool_partial_events_emitted_during_arg_streaming(provider, monkeypatch):
+    """tool_partial events are yielded while tool-call args accumulate (AI-17)."""
+    # Two chunks: first carries the tool name + partial args, second finishes them.
+    sse = _sse_lines(
+        {"choices": [{"delta": {"tool_calls": [{"index": 0, "id": "c1", "function": {"name": "read_file", "arguments": '{"path":'}}]}, "finish_reason": None}]},
+        {"choices": [{"delta": {"tool_calls": [{"index": 0, "function": {"arguments": '"foo.txt"}'}}]}, "finish_reason": "tool_calls"}]},
+    )
+
+    async def fake_aiter_lines():
+        for line in sse:
+            yield line
+
+    mock_resp = AsyncMock()
+    mock_resp.status_code = 200
+    mock_resp.raise_for_status = MagicMock()
+    mock_resp.aiter_lines = fake_aiter_lines
+
+    mock_stream_cm = AsyncMock()
+    mock_stream_cm.__aenter__ = AsyncMock(return_value=mock_resp)
+    mock_stream_cm.__aexit__ = AsyncMock(return_value=False)
+
+    mock_client = AsyncMock()
+    mock_client.stream = MagicMock(return_value=mock_stream_cm)
+
+    mock_client_cm = AsyncMock()
+    mock_client_cm.__aenter__ = AsyncMock(return_value=mock_client)
+    mock_client_cm.__aexit__ = AsyncMock(return_value=False)
+
+    with patch("app.providers.httpx.AsyncClient", return_value=mock_client_cm):
+        events = [e async for e in provider.stream_chat_with_tools("sys", [{"role": "user", "content": "go"}], [])]
+
+    partial_events = [e for e in events if e["type"] == "tool_partial"]
+    tool_call_events = [e for e in events if e["type"] == "tool_call"]
+
+    # At least one tool_partial emitted during arg streaming
+    assert len(partial_events) >= 1
+    assert partial_events[0]["name"] == "read_file"
+    assert isinstance(partial_events[0]["args_partial"], str)
+
+    # Final tool_call still emitted with complete args
+    assert len(tool_call_events) == 1
+    assert tool_call_events[0]["args"] == {"path": "foo.txt"}

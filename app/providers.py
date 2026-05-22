@@ -1592,6 +1592,7 @@ class PlannerProvider:
             thought_buffer = ""
             # Keyed by tool_call index; each entry: {id, name, args_buffer}
             tool_calls_accum: dict[int, dict] = {}
+            _last_partial_t = 0.0  # throttle tool_partial emits to ≤5/s
 
             # When OpenRouter already has a model fallback chain, fail over quickly
             # instead of spending a full backoff ladder on a rate-limited first choice.
@@ -1648,6 +1649,12 @@ class PlannerProvider:
                                                     entry["name"] = fn["name"]
                                                 if "arguments" in fn:
                                                     entry["args_buffer"] += fn["arguments"]
+                                                    # Throttled partial event so the agent can show
+                                                    # a live "composing…" state during arg streaming.
+                                                    _now_t = asyncio.get_event_loop().time()
+                                                    if _now_t - _last_partial_t >= 0.2:
+                                                        _last_partial_t = _now_t
+                                                        yield {"type": "tool_partial", "name": entry["name"], "args_partial": entry["args_buffer"]}
 
                                         # Finish — emit all accumulated tool calls in index order
                                         if finish_reason in ("tool_calls", "stop") and tool_calls_accum:

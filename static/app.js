@@ -1409,8 +1409,9 @@
     if (event.type === 'task_created') return;
 
     if (event.type === 'reasoning') {
-      // C1: step announcements are noise — the turn summary covers them.
-      // Skipping (without finalizing) lets consecutive tools group into ONE summary.
+      // Live reasoning (thought tokens, composing) shows immediately via setLiveStatus.
+      if (event.live) { renderReasoning(event); return; }
+      // C1: non-live step announcements are noise — the turn summary covers them.
       if (_isStepAnnouncement(event)) return;
       finalizeTurnSummary(); renderReasoning(event); return;
     }

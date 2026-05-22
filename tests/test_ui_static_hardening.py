@@ -224,3 +224,14 @@ def test_desktop_launcher_has_frameless_widget_mode():
     assert "frameless=True" in launcher
     assert "transparent=True" in launcher
     assert "on_top=True" in launcher
+
+
+def test_live_reasoning_not_filtered_by_step_announcement(monkeypatch):
+    """Live reasoning events (thought tokens, composing…) bypass the step-announcement
+    filter so they display immediately via setLiveStatus (AI-17)."""
+    js = (_STATIC / "app.js").read_text(encoding="utf-8", errors="replace")
+    # The live-pass-through guard must appear BEFORE the isStepAnnouncement filter
+    live_guard = "if (event.live) { renderReasoning(event); return; }"
+    step_filter = "if (_isStepAnnouncement(event)) return;"
+    assert live_guard in js, "live guard missing from processTaskEvent reasoning block"
+    assert js.index(live_guard) < js.index(step_filter), "live guard must precede step filter"
