@@ -1330,7 +1330,7 @@ class ToolExecutor:
         user's desktop.
         """
         from .clutter_scanner import scan_folder, organize_files
-        import httpx
+        from .capsule_bridge import build_list_widget, build_status_widget, push_widget
 
         # Resolve path — support ~, relative, and absolute
         if not path or path.strip() in ("", "~", "."):
@@ -1345,43 +1345,84 @@ class ToolExecutor:
         if not os.path.isdir(resolved):
             return ToolResult(ok=False, output=f"Folder not found: {resolved}")
 
+        folder_name = os.path.basename(resolved) or resolved
+
         if action == "organize":
             result = organize_files(resolved)
-            try:
-                httpx.post("http://127.0.0.1:8000/api/capsule/widget", json={
-                    "type": "widget",
-                    "widget_type": "status_card",
-                    "data": {
-                        "title": f"Organized {os.path.basename(resolved)}",
-                        "text": f"Moved {result['count']} files into category folders.\n"
-                                + (f"Errors: {len(result['errors'])}" if result['errors'] else "No errors."),
-                        "icon": "folder-open",
-                    }
-                }, timeout=5)
-            except Exception:
-                pass
+            spec = build_status_widget(
+                title=f"Organized {folder_name}",
+                text=f"Moved {result['count']} files into category folders.\n"
+                     + (f"Errors: {len(result['errors'])}" if result['errors'] else "No errors."),
+                icon="folder-open",
+            )
+            push_widget(spec)
             return ToolResult(ok=True, output=f"Organized {result['count']} files in {resolved}")
 
         # Default: scan
         scan_data = scan_folder(resolved)
-
-        try:
-            httpx.post("http://127.0.0.1:8000/api/capsule/widget", json={
-                "type": "widget",
-                "widget_type": "clutter_sweeper",
-                "data": scan_data,
-            }, timeout=5)
-        except Exception:
-            pass
+        spec = build_list_widget(
+            title=f"Clutter in {folder_name}",
+            items=scan_data.get("files", []),
+            folder_path=scan_data.get("folder_path", resolved),
+            icon="broom",
+        )
+        push_widget(spec)
 
         file_count = len(scan_data.get("files", []))
         total = scan_data.get("total_size", "0 B")
-        folder_name = scan_data.get("folder", "folder")
         return ToolResult(
             ok=True,
             output=f"Scanned {folder_name}: {file_count} files, {total} total. "
                    f"Widget spawned in capsule showing the files sorted by size.",
         )
+
+    def show_widget(self, spec: dict):
+        """Push ANY JSON widget spec to the Qt capsule.
+
+        This is the universal Generative UI tool. The LLM designs
+        the widget by outputting a JSON spec, and the capsule renders it.
+        """
+        from .capsule_bridge import push_widget
+
+        if not spec or not isinstance(spec, dict):
+            return ToolResult(ok=False, output="show_widget: spec must be a JSON object with at least 'title'")
+        if "title" not in spec:
+            return ToolResult(ok=False, output="show_widget: 'title' field is required")
+
+        ok = push_widget(spec)
+        title = spec.get("title", "widget")
+        item_count = len(spec.get("items", []))
+        btn_count = len(spec.get("buttons", []))
+
+        parts = [f"Widget '{title}' pushed to capsule"]
+        if item_count:
+            parts.append(f"{item_count} items")
+        if btn_count:
+            parts.append(f"{btn_count} buttons")
+        if not ok:
+            parts.append("(capsule may not be connected)")
+
+        return ToolResult(ok=True, output=". ".join(parts) + ".")
+
+    def screen_context(self):
+        """Capture the user's screen and return base64 image + OCR text.
+
+        Gives the LLM visual awareness of what the user is looking at.
+        """
+        from .capsule_bridge import capture_screen_b64, capture_screen_text
+
+        b64 = capture_screen_b64()
+        if not b64:
+            return ToolResult(ok=False, output="screen_context: failed to capture screen")
+
+        ocr_text = capture_screen_text()
+        output = "Screen captured."
+        if ocr_text:
+            output += f"\n\nExtracted text from screen:\n{ocr_text}"
+        else:
+            output += "\n\nOCR unavailable — use the screenshot image for visual analysis."
+
+        return ToolResult(ok=True, output=output, base64_image=b64)
 
     def todo_write(self, items):
         """Persist an explicit task plan for this task.
@@ -2130,6 +2171,8 @@ class ToolExecutor:
             ActionType.run_and_watch: lambda a: self.run_and_watch(a.args["command"], a.args.get("watch_seconds", 10.0)),
             ActionType.ui_critique: lambda a: self.ui_critique(a.args.get("focus", "")),
             ActionType.analyze_folder: lambda a: self.analyze_folder(a.args.get("path", ""), a.args.get("action", "scan")),
+            ActionType.show_widget: lambda a: self.show_widget(a.args),
+            ActionType.screen_context: lambda a: self.screen_context(),
         }
         if action.type in handlers:
             try:

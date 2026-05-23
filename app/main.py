@@ -153,16 +153,6 @@ async def push_capsule_widget(request: Request):
     return {"ok": True, "listeners": len(_capsule_queues)}
 
 
-@app.post("/api/capsule/test-widget")
-async def test_capsule_widget():
-    """Scan the REAL Downloads folder and push results to capsules."""
-    from .clutter_scanner import scan_folder
-    real_data = await asyncio.to_thread(scan_folder)
-    event = {"type": "widget", "widget_type": "clutter_sweeper", "data": real_data}
-    for q in _capsule_queues:
-        await q.put(event)
-    return {"ok": True, "listeners": len(_capsule_queues), "files_found": len(real_data.get("files", []))}
-
 
 @app.post("/api/capsule/organize")
 async def organize_capsule_files(request: Request):

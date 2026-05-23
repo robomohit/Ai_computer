@@ -94,6 +94,8 @@ class ActionType(str, Enum):
     run_and_watch = "run_and_watch"
     ui_critique = "ui_critique"
     analyze_folder = "analyze_folder"
+    show_widget = "show_widget"
+    screen_context = "screen_context"
 
 
 class Action(BaseModel):

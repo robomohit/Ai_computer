@@ -61,7 +61,7 @@ def _apply_win11_backdrop(hwnd: int) -> bool:
         return False
 
 
-def _apply_acrylic_legacy(hwnd: int, tint_abgr: int = 0x20121016) -> None:
+def _apply_acrylic_legacy(hwnd: int, tint_abgr: int = 0xB0141018) -> None:
     """Legacy Win10 path — undocumented, but the only thing that works on
     older Win10 builds. Used as a fallback when DwmSetWindowAttribute fails.
     """
@@ -140,7 +140,6 @@ def main(port: int = 8000) -> int:
                                    QSizePolicy)
 
     from .capsule_widgets import CapabilityBar, create_widget, set_api_base
-    from .clutter_scanner import scan_folder
 
     BASE = f"http://127.0.0.1:{port}"
     set_api_base(BASE)
@@ -433,41 +432,28 @@ def main(port: int = 8000) -> int:
             goal = self.input.text().strip()
             if not goal or self._busy:
                 return
-            # Check for test commands
-            if goal.lower() in ("/test-widget", "/test"):
-                self.input.clear()
-                self._test_widget()
-                return
             self.reply.hide()
             self._clear_widgets()
             self.input.clear()
             self.runner.submit(goal)
             self._adjust()
 
-        def _test_widget(self):
-            """Scan REAL Downloads folder and show results."""
-            real_data = scan_folder()  # scans ~/Downloads
-            self._spawn_widget({
-                "type": "widget",
-                "widget_type": "clutter_sweeper",
-                "data": real_data,
-            })
-
         def _spawn_widget(self, event: dict):
-            """Create a native Qt widget and animate it into the capsule."""
-            widget_type = event.get("widget_type", "")
-            data = event.get("data", {})
-            widget = create_widget(widget_type, data, parent=self.widget_container)
+            """Create a DynamicWidget from ANY JSON spec the LLM provides."""
+            # The event may have the spec directly, or nested under 'data'
+            spec = event.get("data", event) if "data" in event else event
+            # Strip internal SSE keys that aren't widget spec fields
+            spec = {k: v for k, v in spec.items()
+                    if k not in ("type", "widget_type", "event")}
+            widget = create_widget(spec, parent=self.widget_container)
             if widget is None:
                 return
             widget.dismissed.connect(lambda w=widget: self._remove_widget(w))
-            # Insert before the stretch at the end
             count = self.widget_layout.count()
             self.widget_layout.insertWidget(count - 1, widget)
             self.widget_scroll.show()
-            self.cap_bar.hide()  # hide capability icons when widgets are active
+            self.cap_bar.hide()
             self._adjust()
-            # Animate after a frame so geometry is settled
             QTimer.singleShot(50, widget.animate_in)
 
         def _remove_widget(self, widget):
@@ -519,23 +505,23 @@ def main(port: int = 8000) -> int:
             hwnd = int(self.winId())
             _round_window(hwnd, self.width(), self.height(), RADIUS)
 
-        # --- glass painting ---
+        # --- glass painting (Pillar 4) ---
+        # DO NOT fill with a solid/dark color. The DWM acrylic tint
+        # (set in _apply_acrylic_legacy via tint_abgr) handles the
+        # dark translucent background. We only draw the rim + highlight.
         def paintEvent(self, _e) -> None:
             p = QPainter(self)
             p.setRenderHint(QPainter.Antialiasing)
             path = QPainterPath()
-            rect = self.rect().adjusted(0, 0, 0, 0)
-            path.addRoundedRect(rect, RADIUS, RADIUS)
-            # translucent dark glass — low alpha to let acrylic blur show
-            p.fillPath(path, QColor(14, 15, 20, 120))
-            # very soft rim — barely visible, no harsh outline
-            pen = QPen(QColor(255, 255, 255, 22))
+            path.addRoundedRect(self.rect(), RADIUS, RADIUS)
+            # Soft rim — barely visible, no harsh outline
+            pen = QPen(QColor(255, 255, 255, 18))
             pen.setWidthF(0.5)
             p.setPen(pen)
             p.drawPath(path)
-            # subtle top-edge highlight for depth
-            grad = QLinearGradient(0, 0, 0, 60)
-            grad.setColorAt(0, QColor(255, 255, 255, 14))
+            # Subtle top-edge highlight for depth
+            grad = QLinearGradient(0, 0, 0, 50)
+            grad.setColorAt(0, QColor(255, 255, 255, 10))
             grad.setColorAt(1, QColor(255, 255, 255, 0))
             p.fillPath(path, grad)
             p.end()
