@@ -113,6 +113,68 @@ class _StaticNoCacheMiddleware(BaseHTTPMiddleware):
 
 app.add_middleware(_StaticNoCacheMiddleware)
 
+# ── Capsule widget SSE infrastructure ────────────────────────────────────────
+# The Qt floating capsule subscribes to /api/capsule/events (Server-Sent Events)
+# to receive real-time widget spawn commands from the agent or test endpoints.
+_capsule_queues: list[asyncio.Queue] = []
+
+
+@app.get("/api/capsule/events")
+async def capsule_events():
+    """SSE stream for the floating capsule to receive widget spawn events."""
+    q: asyncio.Queue = asyncio.Queue()
+    _capsule_queues.append(q)
+
+    async def stream():
+        try:
+            while True:
+                event = await q.get()
+                yield f"data: {json.dumps(event)}\n\n"
+        except asyncio.CancelledError:
+            pass
+        finally:
+            if q in _capsule_queues:
+                _capsule_queues.remove(q)
+
+    return StreamingResponse(
+        stream(),
+        media_type="text/event-stream",
+        headers={"Cache-Control": "no-cache", "Connection": "keep-alive"},
+    )
+
+
+@app.post("/api/capsule/widget")
+async def push_capsule_widget(request: Request):
+    """Push a widget event to all connected capsules."""
+    payload = await request.json()
+    payload.setdefault("type", "widget")
+    for q in _capsule_queues:
+        await q.put(payload)
+    return {"ok": True, "listeners": len(_capsule_queues)}
+
+
+@app.post("/api/capsule/test-widget")
+async def test_capsule_widget():
+    """Spawn a test Clutter Sweeper widget in all connected capsules."""
+    event = {
+        "type": "widget",
+        "widget_type": "clutter_sweeper",
+        "data": {
+            "folder": "Downloads",
+            "files": [
+                {"name": "report_final_v3.pdf", "size": "4.2 MB", "icon": "📄"},
+                {"name": "screenshot_2024.png", "size": "1.8 MB", "icon": "🖼️"},
+                {"name": "node_modules.zip", "size": "142 MB", "icon": "📦"},
+                {"name": "setup_installer.exe", "size": "28 MB", "icon": "⚙️"},
+                {"name": "meeting_notes.txt", "size": "12 KB", "icon": "📝"},
+            ],
+            "total_size": "176 MB",
+        }
+    }
+    for q in _capsule_queues:
+        await q.put(event)
+    return {"ok": True, "listeners": len(_capsule_queues)}
+
 bearer = HTTPBearer(auto_error=False)
 _tasks: Dict[str, TaskRecord] = {}
 _telegram_task: Optional[asyncio.Task] = None

@@ -6,11 +6,12 @@ is built from *native* Qt widgets, which DO support per-pixel window
 transparency + Windows Acrylic. It funnels tasks to the local AI Computer
 server over HTTP.
 
-Launched by `run_desktop.py --widget`.
+Launched by `run_desktop.py` (default mode).
 """
 from __future__ import annotations
 
 import ctypes
+import json
 import os
 import secrets
 import sys
@@ -133,12 +134,15 @@ def main(port: int = 8000) -> int:
     from PySide6.QtCore import (Qt, QTimer, QObject, Signal, QPoint, QSize,
                                 QPropertyAnimation, QEasingCurve, QRect)
     from PySide6.QtGui import (QColor, QPainter, QPainterPath, QPen, QFont,
-                               QFontDatabase)
+                               QLinearGradient, QFontDatabase)
     from PySide6.QtWidgets import (QApplication, QWidget, QLineEdit, QPushButton,
-                                   QLabel, QVBoxLayout, QHBoxLayout)
+                                   QLabel, QVBoxLayout, QHBoxLayout, QScrollArea,
+                                   QSizePolicy)
+
+    from .capsule_widgets import CapabilityBar, create_widget
 
     BASE = f"http://127.0.0.1:{port}"
-    WIDTH = 600
+    WIDTH = 620
     RADIUS = 26
     ACCENT = "#5BE0D0"
 
@@ -153,6 +157,7 @@ def main(port: int = 8000) -> int:
         statusChanged = Signal(str)
         finished = Signal(str)
         runningChanged = Signal(bool)
+        widgetRequested = Signal(dict)
 
         def submit(self, goal: str) -> None:
             threading.Thread(target=self._run, args=(goal,), daemon=True).start()
@@ -190,6 +195,8 @@ def main(port: int = 8000) -> int:
                                 msg = ev.get("message", "")
                                 if msg:
                                     self.statusChanged.emit(msg)
+                            elif t == "widget":
+                                self.widgetRequested.emit(ev)
                             elif t in ("done", "complete"):
                                 self.finished.emit(ev.get("reason") or "Done.")
                                 self.runningChanged.emit(False)
@@ -205,6 +212,44 @@ def main(port: int = 8000) -> int:
             except Exception as exc:
                 self.finished.emit(f"Error: {exc}")
                 self.runningChanged.emit(False)
+
+    # ── SSE listener — subscribes to /api/capsule/events for widget events ──
+    class SSEListener(QObject):
+        widgetRequested = Signal(dict)
+
+        def __init__(self, base_url: str):
+            super().__init__()
+            self._base = base_url
+            self._running = True
+
+        def start(self):
+            threading.Thread(target=self._listen, daemon=True).start()
+
+        def _listen(self):
+            try:
+                import httpx
+            except ImportError:
+                return
+            while self._running:
+                try:
+                    with httpx.stream("GET", f"{self._base}/api/capsule/events",
+                                      timeout=None) as r:
+                        for line in r.iter_lines():
+                            if not self._running:
+                                break
+                            if line.startswith("data: "):
+                                try:
+                                    data = json.loads(line[6:])
+                                    if data.get("type") == "widget":
+                                        self.widgetRequested.emit(data)
+                                except (json.JSONDecodeError, ValueError):
+                                    pass
+                except Exception:
+                    if self._running:
+                        time.sleep(3)  # reconnect after delay
+
+        def stop(self):
+            self._running = False
 
     # ── animated dot-matrix waveform ──
     class Waveform(QWidget):
@@ -263,12 +308,13 @@ def main(port: int = 8000) -> int:
                                 | Qt.WindowStaysOnTopHint | Qt.Tool)
             self.setAttribute(Qt.WA_TranslucentBackground, True)
             self.setFixedWidth(WIDTH)
+            self.setMinimumHeight(60)
             self._drag = None
             self._busy = False
 
             outer = QVBoxLayout(self)
             outer.setContentsMargins(16, 13, 12, 14)
-            outer.setSpacing(11)
+            outer.setSpacing(8)
 
             # ---- command row ----
             row = QHBoxLayout()
@@ -284,7 +330,7 @@ def main(port: int = 8000) -> int:
             self.input.setPlaceholderText("Ask AI Computer...")
             input_font = QFont("Segoe UI Variable Display", 14)
             input_font.setWeight(QFont.Medium)
-            input_font.setLetterSpacing(QFont.PercentageSpacing, 98)  # tight tracking
+            input_font.setLetterSpacing(QFont.PercentageSpacing, 98)
             self.input.setFont(input_font)
             self.input.returnPressed.connect(self._submit)
             self.input.setStyleSheet(
@@ -325,16 +371,43 @@ def main(port: int = 8000) -> int:
             row.addWidget(self.close_btn)
             outer.addLayout(row)
 
-            # ---- reply ----
+            # ---- capability bar ----
+            self.cap_bar = CapabilityBar()
+            outer.addWidget(self.cap_bar)
+
+            # ---- widget container (scrollable) ----
+            self.widget_scroll = QScrollArea()
+            self.widget_scroll.setWidgetResizable(True)
+            self.widget_scroll.setHorizontalScrollBarPolicy(Qt.ScrollBarAlwaysOff)
+            self.widget_scroll.setVerticalScrollBarPolicy(Qt.ScrollBarAsNeeded)
+            self.widget_scroll.setMaximumHeight(500)
+            self.widget_scroll.setStyleSheet(
+                "QScrollArea{background:transparent;border:none;}"
+                "QScrollBar:vertical{background:transparent;width:6px;}"
+                "QScrollBar::handle:vertical{background:rgba(255,255,255,0.15);"
+                "border-radius:3px;min-height:20px;}"
+                "QScrollBar::add-line:vertical,QScrollBar::sub-line:vertical{"
+                "height:0;}"
+            )
+            self.widget_container = QWidget()
+            self.widget_container.setStyleSheet("background:transparent;")
+            self.widget_layout = QVBoxLayout(self.widget_container)
+            self.widget_layout.setContentsMargins(0, 0, 0, 0)
+            self.widget_layout.setSpacing(8)
+            self.widget_layout.addStretch()
+            self.widget_scroll.setWidget(self.widget_container)
+            self.widget_scroll.hide()
+            outer.addWidget(self.widget_scroll)
+
+            # ---- reply (legacy text fallback) ----
             self.reply = QLabel("")
             self.reply.setWordWrap(True)
             self.reply.setFont(QFont("Segoe UI", 11))
             self.reply.setStyleSheet(
                 "QLabel{color:#FFFFFF; background:transparent; "
                 "border-top: 1px solid rgba(255, 255, 255, 0.15); "
-                "padding: 18px 5px 5px 5px; margin-top: 5px; line-height: 1.4;}")
+                "padding: 18px 5px 5px 5px; margin-top: 5px;}")
             self.reply.setMaximumHeight(350)
-            self.reply.setTextFormat(Qt.MarkdownText) # Support basic markdown
             self.reply.hide()
             outer.addWidget(self.reply)
 
@@ -343,6 +416,12 @@ def main(port: int = 8000) -> int:
             self.runner.statusChanged.connect(self._on_status)
             self.runner.finished.connect(self._on_finished)
             self.runner.runningChanged.connect(self._on_running)
+            self.runner.widgetRequested.connect(self._spawn_widget)
+
+            # ---- SSE listener for server-pushed widgets ----
+            self.sse = SSEListener(BASE)
+            self.sse.widgetRequested.connect(self._spawn_widget)
+            self.sse.start()
 
             self.adjustSize()
 
@@ -351,10 +430,68 @@ def main(port: int = 8000) -> int:
             goal = self.input.text().strip()
             if not goal or self._busy:
                 return
+            # Check for test commands
+            if goal.lower() in ("/test-widget", "/test"):
+                self.input.clear()
+                self._test_widget()
+                return
             self.reply.hide()
+            self._clear_widgets()
             self.input.clear()
             self.runner.submit(goal)
             self._adjust()
+
+        def _test_widget(self):
+            """Spawn a test Clutter Sweeper widget locally (no server needed)."""
+            self._spawn_widget({
+                "type": "widget",
+                "widget_type": "clutter_sweeper",
+                "data": {
+                    "folder": "Downloads",
+                    "files": [
+                        {"name": "report_final_v3.pdf", "size": "4.2 MB", "icon": "📄"},
+                        {"name": "screenshot_2024.png", "size": "1.8 MB", "icon": "🖼️"},
+                        {"name": "node_modules.zip", "size": "142 MB", "icon": "📦"},
+                        {"name": "setup_installer.exe", "size": "28 MB", "icon": "⚙️"},
+                        {"name": "meeting_notes.txt", "size": "12 KB", "icon": "📝"},
+                    ],
+                    "total_size": "176 MB",
+                }
+            })
+
+        def _spawn_widget(self, event: dict):
+            """Create a native Qt widget and animate it into the capsule."""
+            widget_type = event.get("widget_type", "")
+            data = event.get("data", {})
+            widget = create_widget(widget_type, data, parent=self.widget_container)
+            if widget is None:
+                return
+            widget.dismissed.connect(lambda w=widget: self._remove_widget(w))
+            # Insert before the stretch at the end
+            count = self.widget_layout.count()
+            self.widget_layout.insertWidget(count - 1, widget)
+            self.widget_scroll.show()
+            self.cap_bar.hide()  # hide capability icons when widgets are active
+            self._adjust()
+            # Animate after a frame so geometry is settled
+            QTimer.singleShot(50, widget.animate_in)
+
+        def _remove_widget(self, widget):
+            self.widget_layout.removeWidget(widget)
+            widget.deleteLater()
+            # Hide scroll area if no widgets left (only stretch remains)
+            if self.widget_layout.count() <= 1:
+                self.widget_scroll.hide()
+                self.cap_bar.show()  # restore capability icons
+            self._adjust()
+
+        def _clear_widgets(self):
+            """Remove all widgets from the container."""
+            while self.widget_layout.count() > 1:
+                item = self.widget_layout.takeAt(0)
+                if item and item.widget():
+                    item.widget().deleteLater()
+            self.widget_scroll.hide()
 
         def _on_running(self, running: bool) -> None:
             self._busy = running
@@ -393,19 +530,18 @@ def main(port: int = 8000) -> int:
             p = QPainter(self)
             p.setRenderHint(QPainter.Antialiasing)
             path = QPainterPath()
-            rect = self.rect().adjusted(1, 1, -1, -1)
+            rect = self.rect().adjusted(0, 0, 0, 0)
             path.addRoundedRect(rect, RADIUS, RADIUS)
-            # deeper glass tint for higher contrast text
-            p.fillPath(path, QColor(10, 12, 16, 180))
-            # crisp rim
-            pen = QPen(QColor(255, 255, 255, 45))
-            pen.setWidth(1)
+            # translucent dark glass — lets acrylic blur show through
+            p.fillPath(path, QColor(14, 15, 20, 210))
+            # very soft rim — barely visible, no harsh outline
+            pen = QPen(QColor(255, 255, 255, 22))
+            pen.setWidthF(0.5)
             p.setPen(pen)
             p.drawPath(path)
-            # subtle gradient highlight at the top
-            from PySide6.QtGui import QLinearGradient
-            grad = QLinearGradient(0, 0, 0, 40)
-            grad.setColorAt(0, QColor(255, 255, 255, 25))
+            # subtle top-edge highlight for depth
+            grad = QLinearGradient(0, 0, 0, 60)
+            grad.setColorAt(0, QColor(255, 255, 255, 14))
             grad.setColorAt(1, QColor(255, 255, 255, 0))
             p.fillPath(path, grad)
             p.end()
@@ -427,8 +563,7 @@ def main(port: int = 8000) -> int:
             hwnd = int(self.winId())
             _apply_acrylic(hwnd)
             _round_window(hwnd, self.width(), self.height(), RADIUS)
-            # spring entry — fade in with the OutBack curve so the capsule
-            # feels physical instead of popping into existence
+            # spring entry — fade + slide
             self.setWindowOpacity(0.0)
             self._intro = QPropertyAnimation(self, b"windowOpacity")
             self._intro.setDuration(380)
@@ -436,7 +571,7 @@ def main(port: int = 8000) -> int:
             self._intro.setEndValue(1.0)
             self._intro.setEasingCurve(QEasingCurve.OutCubic)
             self._intro.start()
-            
+
             geo = app.primaryScreen().availableGeometry()
             start_pos = QPoint(geo.center().x() - self.width() // 2, geo.top() + 50)
             end_pos = QPoint(geo.center().x() - self.width() // 2, geo.top() + 70)
@@ -453,6 +588,9 @@ def main(port: int = 8000) -> int:
                 if self.reply.isVisible():
                     self.reply.hide()
                     self._adjust()
+                elif self.widget_scroll.isVisible():
+                    self._clear_widgets()
+                    self._adjust()
                 else:
                     self.input.clear()
                     self.hide()
@@ -467,7 +605,7 @@ def main(port: int = 8000) -> int:
         toggle = Signal()
 
     win = Capsule()
-    
+
     signaler = HotkeySignaler()
     def on_toggle():
         if win.isVisible():
@@ -477,12 +615,12 @@ def main(port: int = 8000) -> int:
             win.activateWindow()
             win.raise_()
             win.input.setFocus()
-            
+
     signaler.toggle.connect(on_toggle)
-    
+
     def hotkey_callback():
         signaler.toggle.emit()
-        
+
     try:
         import keyboard
         # Register the global hotkey
