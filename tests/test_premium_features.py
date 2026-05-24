@@ -63,3 +63,42 @@ def test_detect_ollama_success(monkeypatch):
     data = pf.detect_ollama("http://ollama.test")
     assert data["available"] is True
     assert data["models"] == ["llama3.2", "qwen2.5"]
+
+
+def test_send_completion_notification_discord(monkeypatch):
+    from app import premium_features as pf
+
+    class _Resp:
+        def raise_for_status(self):
+            pass
+
+    calls = []
+    monkeypatch.setattr(pf.httpx, "post", lambda url, json=None, timeout=None: (calls.append((url, json)), _Resp())[1])
+    monkeypatch.setenv("DISCORD_WEBHOOK_URL", "https://discord.test/webhook")
+    monkeypatch.delenv("TELEGRAM_BOT_TOKEN", raising=False)
+    monkeypatch.delenv("TELEGRAM_CHAT_ID", raising=False)
+
+    result = pf.send_completion_notification("Write a sort function", "done", "Completed successfully")
+
+    assert result["ok"] is True
+    assert result["sent"] == ["discord"]
+    assert len(calls) == 1
+    assert "Write a sort function" in calls[0][1]["content"]
+    assert "done" in calls[0][1]["content"]
+
+
+def test_send_completion_notification_no_connector(monkeypatch):
+    from app import premium_features as pf
+
+    monkeypatch.delenv("DISCORD_WEBHOOK_URL", raising=False)
+    monkeypatch.delenv("TELEGRAM_BOT_TOKEN", raising=False)
+    monkeypatch.delenv("TELEGRAM_CHAT_ID", raising=False)
+
+    called = []
+    monkeypatch.setattr(pf.httpx, "post", lambda *a, **kw: called.append(1))
+
+    result = pf.send_completion_notification("some goal", "failed", "error occurred")
+
+    assert result["ok"] is False
+    assert result["sent"] == []
+    assert called == []
