@@ -787,7 +787,9 @@
       <span class="history-copy">
         <span class="history-goal"></span>
         <span class="history-meta">${relTime(taskRecord.created_at || taskRecord.timestamp || taskRecord.finished_at) || humanize(status || 'saved')}</span>
-        <button type="button" class="history-retask" tabindex="-1">↻ Copy task</button>
+        <button type="button" class="history-retask" tabindex="-1">
+          <svg width="12" height="12" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round" aria-hidden="true" style="margin-right:4px; vertical-align:-1px; display:inline-block"><polyline points="1 4 1 10 7 10"></polyline><path d="M3.51 15a9 9 0 1 0 2.13-9.36L1 10"></path></svg> Copy task
+        </button>
       </span>
     `;
     item.querySelector('.history-goal').textContent = taskRecord.goal || '(untitled)';
@@ -1067,8 +1069,11 @@
     row.className = `subtask-item ${state}`.trim();
     const icon = row.querySelector('.subtask-icon');
     if (!icon) return;
-    const fallback = icon.textContent;
-    icon.textContent = state === 'done' ? '✓' : state === 'running' ? '●' : state === 'failed' ? '✕' : fallback;
+    const fallback = icon.innerHTML;
+    const doneIcon = '<svg width="12" height="12" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2.5" stroke-linecap="round" stroke-linejoin="round" aria-hidden="true"><polyline points="20 6 9 17 4 12"></polyline></svg>';
+    const runningIcon = '<svg width="12" height="12" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2.5" stroke-linecap="round" stroke-linejoin="round" aria-hidden="true"><circle cx="12" cy="12" r="10"></circle><path d="M12 2v4"></path><path d="M12 18v4"></path><path d="M4.93 4.93l2.83 2.83"></path><path d="M16.24 16.24l2.83 2.83"></path><path d="M2 12h4"></path><path d="M18 12h4"></path><path d="M4.93 19.07l2.83-2.83"></path><path d="M16.24 7.76l2.83-2.83"></path></svg>';
+    const failedIcon = '<svg width="12" height="12" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2.5" stroke-linecap="round" stroke-linejoin="round" aria-hidden="true"><line x1="18" y1="6" x2="6" y2="18"></line><line x1="6" y1="6" x2="18" y2="18"></line></svg>';
+    icon.innerHTML = state === 'done' ? doneIcon : state === 'running' ? runningIcon : state === 'failed' ? failedIcon : fallback;
   };
 
   const ensureActionCard = (actionId, actionType = 'action', summary = '') => {
