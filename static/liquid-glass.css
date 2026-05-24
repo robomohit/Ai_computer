@@ -1,0 +1,74 @@
+/* ============================================================
+   Liquid Glass — FLOATING WIDGET ONLY (#vorb-root / .vcap)
+   Dashboard surfaces are intentionally left untouched.
+   Toggle off with: <body data-glass="off">
+   ============================================================ */
+
+:root {
+  --lg-blur: 22px;
+  --lg-saturate: 180%;
+  --lg-tint-dark:  rgba(18, 20, 26, 0.42);
+  --lg-tint-light: rgba(255, 255, 255, 0.38);
+  --lg-border-dark:  rgba(255, 255, 255, 0.14);
+  --lg-border-light: rgba(255, 255, 255, 0.55);
+  --lg-shadow-dark:  0 18px 60px rgba(0,0,0,0.55), 0 2px 8px rgba(0,0,0,0.35);
+  --lg-shadow-light: 0 18px 60px rgba(40,55,80,0.22), 0 2px 8px rgba(40,55,80,0.12);
+}
+
+/* ---------- the capsule itself ---------- */
+body[data-glass="on"] #vorb-root .vcap {
+  position: relative;
+  isolation: isolate;
+  border-radius: 999px;
+  border: 1px solid var(--lg-border-dark);
+  background: var(--lg-tint-dark) !important;
+  backdrop-filter: url(#lg-refract) blur(var(--lg-blur)) saturate(var(--lg-saturate));
+  -webkit-backdrop-filter: blur(var(--lg-blur)) saturate(var(--lg-saturate));
+  box-shadow: var(--lg-shadow-dark);
+}
+[data-theme="light"] body[data-glass="on"] #vorb-root .vcap {
+  border-color: var(--lg-border-light);
+  background: var(--lg-tint-light) !important;
+  box-shadow: var(--lg-shadow-light);
+}
+
+/* the wet top highlight — the bit that sells "liquid" */
+body[data-glass="on"] #vorb-root .vcap::after {
+  content: "";
+  position: absolute;
+  inset: 0;
+  border-radius: inherit;
+  pointer-events: none;
+  z-index: 0;
+  background: linear-gradient(180deg,
+      rgba(255,255,255,0.28) 0%,
+      rgba(255,255,255,0.06) 22%,
+      rgba(255,255,255,0)    52%,
+      rgba(255,255,255,0.10) 100%);
+  mix-blend-mode: overlay;
+}
+body[data-glass="on"] #vorb-root .vcap > * { position: relative; z-index: 1; }
+
+/* subtle chromatic edge — like glass refracting accent light */
+body[data-glass="on"] #vorb-root .vcap::before {
+  content: "";
+  position: absolute;
+  inset: -1px;
+  border-radius: inherit;
+  pointer-events: none;
+  z-index: -1;
+  background: linear-gradient(135deg,
+      hsla(var(--accent-h, 200), 90%, 65%, 0.35),
+      transparent 40%,
+      hsla(280, 90%, 65%, 0.25) 100%);
+  filter: blur(8px);
+  opacity: 0.7;
+}
+
+/* Safari / Firefox fallback (no SVG-displacement backdrop) */
+@supports not (backdrop-filter: url(#lg-refract)) {
+  body[data-glass="on"] #vorb-root .vcap {
+    backdrop-filter: blur(26px) saturate(190%);
+    -webkit-backdrop-filter: blur(26px) saturate(190%);
+  }
+}

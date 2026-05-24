@@ -42,7 +42,7 @@ if __name__ == "__main__":
         # always-on-top window with real per-pixel transparency + Windows
         # Acrylic, so the glass capsule genuinely blurs the desktop behind
         # it. (WebView2/pywebview cannot do reliable window transparency.)
-        from app.qt_shell import main as qt_widget_main
+        from app.widget.qt_shell import main as qt_widget_main
         print("[Desktop] AI Computer Sidekick (Qt shell) is launching...")
         sys.exit(qt_widget_main(PORT))
 

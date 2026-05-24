@@ -170,18 +170,15 @@ class CapsuleCard(QWidget):
         self.setSizePolicy(QSizePolicy.Expanding, QSizePolicy.Preferred)
 
     def animate_in(self):
-        self.setMaximumHeight(0)
-        target = self.sizeHint().height() + 30
+        # Fade only — no max-height tween. The expand animation read sizeHint()
+        # before Qt's async layout had reflowed the card, so body text got
+        # clipped. Pure fade-in still reads as "alive" and never clips.
+        self.setMaximumHeight(16777215)
         fade = QPropertyAnimation(self._opacity_fx, b"opacity")
-        fade.setDuration(400); fade.setStartValue(0.0); fade.setEndValue(1.0)
+        fade.setDuration(260); fade.setStartValue(0.0); fade.setEndValue(1.0)
         fade.setEasingCurve(QEasingCurve.OutCubic)
-        expand = QPropertyAnimation(self, b"maximumHeight")
-        expand.setDuration(480); expand.setStartValue(0); expand.setEndValue(target)
-        expand.setEasingCurve(QEasingCurve.OutCubic)
-        self._anim_group = QParallelAnimationGroup(self)
-        self._anim_group.addAnimation(fade)
-        self._anim_group.addAnimation(expand)
-        self._anim_group.start()
+        self._fade_in = fade
+        fade.start()
 
     def animate_out(self):
         fade = QPropertyAnimation(self._opacity_fx, b"opacity")
@@ -196,22 +193,27 @@ class CapsuleCard(QWidget):
 
 # ── Capability bar ───────────────────────────────────────────────────────────
 class CapabilityBar(QWidget):
+    actionTriggered = Signal(str)
+
     def __init__(self, parent=None):
         super().__init__(parent)
         self.setStyleSheet(_NO_BG); self.setFixedHeight(38)
         layout = QHBoxLayout(self)
-        layout.setContentsMargins(0, 0, 0, 0); layout.setSpacing(0)
+        layout.setContentsMargins(0, 0, 0, 0); layout.setSpacing(4)
         layout.addStretch()
         for icon_name, tip in [("sparkles", "Auto"), ("folder", "Files"),
                                 ("monitor", "Screen"), ("clipboard", "Clipboard"),
                                 ("link", "Links"), ("zap", "Actions")]:
             btn = QPushButton()
-            btn.setIcon(QIcon(_render_icon(icon_name, 16, "#8A8F98")))
+            btn.setIcon(QIcon(_render_icon(icon_name, 16, "#A0A6B1")))
             btn.setIconSize(QSize(16, 16)); btn.setToolTip(tip)
             btn.setFixedSize(36, 32); btn.setCursor(Qt.PointingHandCursor)
             btn.setStyleSheet(
                 "QPushButton{background:transparent;border:none;border-radius:8px;}"
-                "QPushButton:hover{background:rgba(255,255,255,0.07);}")
+                "QPushButton:hover{background-color: rgba(255, 255, 255, 15); border-radius: 8px;}"
+                "QPushButton:pressed{background-color: rgba(255, 255, 255, 8);}"
+            )
+            btn.clicked.connect(lambda checked=False, name=icon_name: self.actionTriggered.emit(name))
             layout.addWidget(btn)
         layout.addStretch()
 
