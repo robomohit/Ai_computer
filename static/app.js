@@ -3209,8 +3209,10 @@
       draw();  // initial idle render
     }
 
-    // --- mirror agent state every 700ms ---
+    // --- mirror agent state every 700ms + live activity strip ---
     let lastStatus = '', lastLive = '';
+    const stripEl = document.getElementById('vcap-strip');
+    const stripLines = [];
     setInterval(() => {
       const st = (typeof currentStatus !== 'undefined' && currentStatus) || 'ready';
       const live = (typeof liveStatusMessage !== 'undefined' && liveStatusMessage) || '';
@@ -3221,6 +3223,23 @@
         const labels = { ready: '', running: live || 'Working on it…', complete: 'Done.',
           failed: 'That task failed.', error: 'Something went wrong.', paused: 'Paused.', cancelled: 'Cancelled.' };
         setStatus(labels[st] !== undefined ? labels[st] : st);
+        // update activity strip: show last 3 live status lines while running
+        if (stripEl) {
+          if (st === 'running' && live) {
+            stripLines.push(live);
+            if (stripLines.length > 3) stripLines.shift();
+            stripEl.innerHTML = stripLines.map(l => {
+              const span = document.createElement('span');
+              span.className = 'vcap-step';
+              span.textContent = l;
+              return span.outerHTML;
+            }).join('');
+            stripEl.hidden = false;
+          } else if (st !== 'running') {
+            stripEl.hidden = true;
+            stripLines.length = 0;
+          }
+        }
       }
     }, 700);
 
@@ -3275,11 +3294,12 @@
       }
     }
 
-    // --- global shortcut: Ctrl+Shift+Space focuses the capsule input ---
+    // --- global shortcut: Ctrl+Shift+Space toggles the capsule (summon/dismiss) ---
     document.addEventListener('keydown', (e) => {
       if (e.ctrlKey && e.shiftKey && e.code === 'Space') {
         e.preventDefault();
-        if (textIn) textIn.focus();
+        root.hidden = !root.hidden;
+        if (!root.hidden && !isTextEntryTarget(e.target) && textIn) textIn.focus();
       }
     });
   })();

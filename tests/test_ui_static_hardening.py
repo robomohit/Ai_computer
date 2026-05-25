@@ -272,3 +272,25 @@ def test_live_reasoning_not_filtered_by_step_announcement(monkeypatch):
     step_filter = "if (_isStepAnnouncement(event)) return;"
     assert live_guard in js, "live guard missing from processTaskEvent reasoning block"
     assert js.index(live_guard) < js.index(step_filter), "live guard must precede step filter"
+
+
+def test_ai15_voice_widget_v2_drag_strip_hotkey():
+    """AI-15: drag persists, live activity strip, Ctrl+Shift+Space toggles pill."""
+    html = STATIC_HTML.read_text(encoding="utf-8")
+    js = (_STATIC / "app.js").read_text(encoding="utf-8", errors="replace")
+    css = (_STATIC / "style.css").read_text(encoding="utf-8")
+
+    # drag-to-reposition: position key and localStorage save
+    assert "ai-computer.vorb-position.v2" in js, "POS_KEY missing"
+    assert "localStorage.setItem(POS_KEY" in js, "drag position not saved"
+
+    # live activity strip: element in HTML, styles in CSS, logic in JS
+    assert 'id="vcap-strip"' in html, "vcap-strip element missing from index.html"
+    assert "vcap-strip" in css, "vcap-strip styles missing from style.css"
+    assert "vcap-step" in css, "vcap-step styles missing from style.css"
+    assert "stripLines" in js, "strip line buffer missing from app.js"
+    assert "stripEl.hidden = false" in js, "strip show logic missing"
+
+    # hotkey toggles visibility (summon/dismiss), not just focus
+    assert "root.hidden = !root.hidden" in js, "hotkey must toggle root.hidden"
+    assert "e.ctrlKey && e.shiftKey && e.code === 'Space'" in js, "hotkey combo missing"

@@ -3430,6 +3430,10 @@
   .vcap-reply-text { flex: 1; word-wrap: break-word; }
   .vcap-reply::-webkit-scrollbar { width: 6px; }
   .vcap-reply::-webkit-scrollbar-thumb { background: var(--cap-soft-2); border-radius: 3px; }
+  /* live activity strip shown below the capsule during a running task (AI-15) */
+  .vcap-strip { display: flex; flex-direction: column; gap: 2px; padding: 2px 14px 8px; }
+  .vcap-strip[hidden] { display: none; }
+  .vcap-step { font-size: 11px; line-height: 1.4; opacity: 0.6; white-space: nowrap; overflow: hidden; text-overflow: ellipsis; color: var(--cap-ink); }
 
   @media (prefers-reduced-motion: reduce) {
     .vcap, .vcap-reply { animation: none !important; }
