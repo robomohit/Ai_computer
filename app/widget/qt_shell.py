@@ -639,6 +639,7 @@ def main(port: int = 8000) -> int:
         widgetRequested = Signal(dict)
         agentDelta = Signal(str)      # incremental agent text (typewriter)
         toolUsed = Signal(str, str)   # (tool_name, args_summary)
+        toolResult = Signal(str, str) # (tool_name, output_text) — has real coords
 
         # Exposed so the UI can target /cancel for the current run
         current_task_id: str = ""
@@ -751,6 +752,11 @@ def main(port: int = 8000) -> int:
                     source_urls: list[str] = []
                     URL_RE = re.compile(r"https?://[^\s<>\"'`)]+")
                     last_agent_text = ""
+                    # action_id → action_type so we can pair action_result
+                    # events back to the tool they belong to (the result
+                    # event carries the REAL coordinates that the cursor
+                    # overlay needs, not the args_summary template).
+                    action_type_by_id: dict[str, str] = {}
                     while time.time() < deadline:
                         time.sleep(0.6)  # tighter poll for smoother streaming
                         try:
@@ -781,10 +787,19 @@ def main(port: int = 8000) -> int:
                                 # action_type + args_summary.
                                 name = ev.get("action_type", "?")
                                 args = str(ev.get("args_summary", ""))[:120]
+                                aid = ev.get("action_id")
+                                if aid:
+                                    action_type_by_id[aid] = name
                                 self.toolUsed.emit(name, args)
                                 for u in URL_RE.findall(args):
                                     if u not in source_urls:
                                         source_urls.append(u)
+                            elif t == "action_result":
+                                aid = ev.get("action_id")
+                                name = action_type_by_id.get(aid or "", "")
+                                out = str(ev.get("output", ""))[:160]
+                                if name and out:
+                                    self.toolResult.emit(name, out)
                             elif t == "tool":
                                 # Some flows may still emit the older `tool` event
                                 name = ev.get("name", "?")
@@ -1331,6 +1346,7 @@ def main(port: int = 8000) -> int:
             self.runner = TaskRunner()
             self.runner.agentDelta.connect(self._on_agent_delta)
             self.runner.toolUsed.connect(self._on_tool_used)
+            self.runner.toolResult.connect(self._on_tool_result)
             self.runner.statusChanged.connect(self._on_status)
             self.runner.finished.connect(self._on_finished)
             self.runner.runningChanged.connect(self._on_running)
@@ -1957,6 +1973,37 @@ def main(port: int = 8000) -> int:
                     self._answer_card = self.widget_layout.itemAt(idx).widget()
             else:
                 self._update_card_text(self._answer_card, self._answer_text_buf)
+
+        def _on_tool_result(self, name: str, output: str) -> None:
+            """Fire the cursor overlay from the RESULT event — args_summary
+            on action_start is often template names ("x, y, button"); the
+            output text carries real coordinates like
+            'Clicked left 1 times at 656, 525'."""
+            lname = (name or "").lower()
+            if lname not in ("mouse_click", "double_click",
+                              "left_click_drag", "keyboard_type",
+                              "type_with_delay"):
+                return
+            try:
+                if lname in ("mouse_click", "double_click", "left_click_drag"):
+                    xy = parse_click_xy(output)
+                    print(f"[cursor] {lname} -> xy={xy} from {output[:60]!r}",
+                          flush=True)
+                    if xy is not None:
+                        verb = ("Double-clicked" if lname == "double_click"
+                                else "Dragged" if lname == "left_click_drag"
+                                else "Clicked")
+                        self._vcursor.show_click(*xy, label=verb)
+                elif lname in ("keyboard_type", "type_with_delay"):
+                    # Output often says: "Typed 'hello world'" — surface it
+                    import re as _re
+                    m = _re.search(r"[Tt]yped\s+['\"]?([^'\"]+)", output)
+                    text = m.group(1)[:24] if m else output[:24]
+                    cx = self._vcursor._cursor_x if self._vcursor._cursor_x > 0 else 600
+                    cy = self._vcursor._cursor_y if self._vcursor._cursor_y > 0 else 400
+                    self._vcursor.show_type(cx, cy, text=text)
+            except Exception as exc:
+                print(f"[capsule] _on_tool_result error: {exc}", flush=True)
 
         def _on_tool_used(self, name: str, args: str) -> None:
             if name and name not in self._answer_tools_used:

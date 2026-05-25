@@ -68,7 +68,7 @@ class VirtualCursorOverlay(QWidget):
     """Full-screen click-through overlay that paints animated agent activity."""
 
     TICK_MS = 16
-    CURSOR_DECAY_MS = 1400
+    CURSOR_DECAY_MS = 2800  # how long the cursor stays after activity
     # Smooth motion tunables — slower + curvier than a linear lerp
     TRAVEL_BASE_MS = 360      # baseline travel time for short hops
     TRAVEL_PER_PX = 0.7       # extra ms per pixel of distance (cap below)
@@ -488,21 +488,33 @@ class VirtualCursorOverlay(QWidget):
 # ─────────────────────────────────────────────────────────────────────────────
 
 _NUM_PAIR_RE = re.compile(r"(-?\d+)\s*[, ]\s*(-?\d+)")
+_AT_XY_RE = re.compile(r"\bat\s+(-?\d+)\s*[, ]\s*(-?\d+)", re.IGNORECASE)
 
 
 def parse_click_xy(args_summary: str) -> tuple[int, int] | None:
-    """Extract (x, y) from a mouse_click action's args_summary.
-    The dashboard formats it as `x=123, y=456` or similar — be lenient."""
+    """Extract (x, y) from a mouse_click action's args_summary OR from the
+    action_result's output text.
+
+    The dashboard's `args_summary` for mouse_click is often just parameter
+    NAMES ("x, y, button") rather than values — so we also look at result
+    text patterns like "Clicked left 1 times at 656, 525".
+    """
     if not args_summary:
         return None
     s = str(args_summary)
-    # Try x=… y=…
+    # "Clicked left 1 times at 656, 525" or "moved to 100, 200"
+    m = _AT_XY_RE.search(s)
+    if m:
+        return int(m.group(1)), int(m.group(2))
+    # x=…, y=…
     mx = re.search(r"x[=:]\s*(-?\d+)", s)
     my = re.search(r"y[=:]\s*(-?\d+)", s)
     if mx and my:
         return int(mx.group(1)), int(my.group(1))
-    # Try "(123, 456)" / "123, 456"
-    m = _NUM_PAIR_RE.search(s)
-    if m:
-        return int(m.group(1)), int(m.group(2))
+    # bare "123, 456" but ONLY if there are no letters (avoid parsing
+    # field-name strings like "x, y, button" as coordinates)
+    if not re.search(r"[A-Za-z]", s):
+        m2 = _NUM_PAIR_RE.search(s)
+        if m2:
+            return int(m2.group(1)), int(m2.group(2))
     return None
