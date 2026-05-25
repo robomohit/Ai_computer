@@ -617,6 +617,7 @@ def main(port: int = 8000) -> int:
 
     from .capsule_widgets import create_widget, set_api_base
     from PySide6.QtWidgets import QFrame
+    from .virtual_cursor import VirtualCursorOverlay, parse_click_xy
 
     BASE = f"http://127.0.0.1:{port}"
     set_api_base(BASE)
@@ -657,6 +658,25 @@ def main(port: int = 8000) -> int:
         ]
         VISION_MODEL = VISION_MODELS[0]
 
+        # Prompt prefix that meaningfully improves how free OpenRouter
+        # models drive the desktop. Forces a screenshot-first / verify-after
+        # rhythm and discourages the common failure modes (hallucinated
+        # clicks at random pixels, no validation, runaway loops).
+        DESKTOP_HARDENING = (
+            "You are driving the user's Windows desktop. Free-tier models "
+            "MUST follow this rhythm to avoid mis-clicks:\n"
+            "1. Call `screenshot` FIRST — never guess coordinates.\n"
+            "2. To click a control, prefer `find_on_screen` or read the "
+            "screenshot to compute exact (x, y).\n"
+            "3. After each click/type, call `screenshot` again to verify "
+            "the expected state.\n"
+            "4. Stop after at most 8 steps. If blocked, surface a clear "
+            "question instead of looping.\n"
+            "5. Never click Send / Submit / Pay / Delete without explicit "
+            "user confirmation.\n\n"
+            "TASK: "
+        )
+
         def _build_payload(self, tid: str, goal: str, attach: dict) -> dict:
             payload: dict = {"task_id": tid, "goal": goal}
 
@@ -691,6 +711,13 @@ def main(port: int = 8000) -> int:
                     payload["mode"] = "computer"
                 else:
                     payload["mode"] = "auto"
+
+            # Apply desktop-control hardening for computer / computer_use
+            # modes — these instructions dramatically improve free-tier
+            # model behavior (less hallucinated clicks, more verification).
+            if payload.get("mode") in ("computer", "computer_use",
+                                       "computer_isolated"):
+                payload["goal"] = self.DESKTOP_HARDENING + payload["goal"]
 
             return payload
 
@@ -894,6 +921,12 @@ def main(port: int = 8000) -> int:
             self._clipboard_text = None       # captured via Clipboard button
             self._attached_file = None        # {"path":..., "text":..., "is_image":bool}
 
+            # Virtual cursor overlay — frameless click-through window that
+            # paints a smooth animated cursor + ripple wherever the agent
+            # clicks or types. Gives the user a visible "what just happened"
+            # cue during agent desktop control.
+            self._vcursor = VirtualCursorOverlay()
+
             # DWM glass is applied in _apply_pill_glass() — scoped to the
             # pill region so no rectangular halo leaks out. Do NOT call
             # pywinstyles here; it would re-apply blur to the full hwnd rect
@@ -1008,7 +1041,7 @@ def main(port: int = 8000) -> int:
 
             # Close lives outside the pill — tiny floating circle.
             self.close_btn = QPushButton()
-            self.close_btn.setIcon(_icon("close", 12, "#3A3F4C", 2.2))
+            self.close_btn.setIcon(_icon("close", 12, "#F0F2F8", 2.2))
             self.close_btn.setIconSize(QSize(12, 12))
             self.close_btn.setFixedSize(28, 28)
             self.close_btn.setCursor(Qt.PointingHandCursor)
@@ -1020,8 +1053,8 @@ def main(port: int = 8000) -> int:
                 "  border-radius: 14px;"
                 "}"
                 "QPushButton:hover{"
-                "  background: rgba(20,24,32,40);"
-                "  border-color: rgba(20,24,32,60);"
+                "  background: rgba(255,255,255,32);"
+                "  border-color: rgba(255,255,255,60);"
                 "}"
             )
             top_row.addWidget(self.close_btn)
@@ -1042,12 +1075,12 @@ def main(port: int = 8000) -> int:
                 "  padding: 6px;"
                 "}"
                 "QPushButton:hover{"
-                "  background: rgba(20,24,32,30);"
-                "  border-color: rgba(20,24,32,50);"
+                "  background: rgba(255,255,255,32);"
+                "  border-color: rgba(255,255,255,60);"
                 "}"
                 "QPushButton:checked{"
-                "  background: rgba(91,224,208,80);"
-                "  border-color: rgba(91,224,208,200);"
+                "  background: rgba(255,255,255,48);"
+                "  border-color: rgba(255,255,255,90);"
                 "}"
             )
             self.cap_buttons = {}
@@ -1057,10 +1090,12 @@ def main(port: int = 8000) -> int:
                 ("image", "Image"),
                 ("clipboard", "Clipboard"),
                 ("paperclip", "Attach"),
-                ("link", "Connectors"),
+                # Connectors moved to the Dashboard ("Connectors" section
+                # in the sidebar). The widget consumes whatever's already
+                # linked via the backend.
             ]:
                 b = QPushButton()
-                b.setIcon(_icon(icon_name, 18, "#1A1D24", 1.7))
+                b.setIcon(_icon(icon_name, 18, "#F0F2F8", 1.7))
                 b.setIconSize(QSize(18, 18))
                 b.setFixedSize(36, 32)
                 b.setCheckable(True)
@@ -1082,8 +1117,6 @@ def main(port: int = 8000) -> int:
                 lambda _c=False: self._toggle_clipboard())
             self.cap_buttons["paperclip"].clicked.connect(
                 lambda _c=False: self._pick_attachment())
-            self.cap_buttons["link"].clicked.connect(
-                lambda _c=False: self._toggle_connectors())
 
             # =========================================================
             # ROW 2b — RECIPE CHIPS (the "I can do real actions" surface)
@@ -1111,13 +1144,14 @@ def main(port: int = 8000) -> int:
             self.recipe_buttons = []
             for r in RECIPES:
                 btn = QPushButton(r["label"])
-                btn.setIcon(_icon(r["icon"], 13, "#1A1D24", 1.7))
+                btn.setIcon(_icon(r["icon"], 13, "#F0F2F8", 1.7))
                 btn.setIconSize(QSize(13, 13))
                 btn.setCursor(Qt.PointingHandCursor)
                 btn.setToolTip(r["tip"])
                 btn.setStyleSheet(recipe_qss)
                 btn.clicked.connect(
                     lambda _c=False, rid=r["id"]: self._apply_recipe(rid))
+                btn.hide()  # hidden by default — Perplexity reference omits them
                 self.recipe_buttons.append(btn)
                 self.recipes_row.addWidget(btn)
             self.recipes_row.addStretch()
@@ -1198,79 +1232,58 @@ def main(port: int = 8000) -> int:
             self.apps_scroll.hide()
             outer.addWidget(self.apps_scroll)
 
-            # ── CONNECTORS panel — Gmail, Calendar, GitHub, Slack, etc.
-            # Each tile is a clickable shortcut that pre-fills the prompt
-            # with a workflow targeting that service via the browser.
-            self.connectors_panel = QFrame()
-            self.connectors_panel.setObjectName("connectors_panel")
-            self.connectors_panel.setStyleSheet(
-                "#connectors_panel{"
-                "  background: rgba(255,255,255,140);"
-                "  border: 1px solid rgba(20,24,32,30);"
-                "  border-radius: 16px;"
+            # ── FOLDER PANEL — Perplexity-style native folder cards
+            # Click the folder cap icon to toggle. Shows the user's main
+            # folders with their actual Windows folder icons + item counts.
+            self.folder_panel = QFrame()
+            self.folder_panel.setObjectName("folder_panel")
+            self.folder_panel.setStyleSheet(
+                "#folder_panel{ background: transparent; border: none; }")
+            fp_outer = QVBoxLayout(self.folder_panel)
+            fp_outer.setContentsMargins(8, 4, 8, 4)
+            fp_outer.setSpacing(8)
+            fp_cards = QHBoxLayout()
+            fp_cards.setSpacing(14)
+            fp_cards.addStretch()
+            self._folder_cards = []
+            home = os.path.expanduser("~")
+            for label, sub in [
+                ("Downloads", "Downloads"),
+                ("Documents", "Documents"),
+                ("Screenshots", "Pictures\\Screenshots"),
+                ("Desktop", "Desktop"),
+                ("Videos", "Videos"),
+            ]:
+                path = os.path.join(home, sub)
+                card = self._make_folder_card(label, path)
+                if card is not None:
+                    self._folder_cards.append(card)
+                    fp_cards.addWidget(card)
+            fp_cards.addStretch()
+            fp_outer.addLayout(fp_cards)
+            choose = QPushButton("Choose Folder")
+            choose.setCursor(Qt.PointingHandCursor)
+            choose.setStyleSheet(
+                "QPushButton{"
+                "  color: rgba(240,242,248,235);"
+                "  background: rgba(255,255,255,28);"
+                "  border: 1px solid rgba(255,255,255,75);"
+                "  border-radius: 14px;"
+                "  padding: 6px 18px;"
+                "  font-size: 11px;"
+                "  font-weight: 500;"
                 "}"
+                "QPushButton:hover{ background: rgba(255,255,255,48);"
+                "  border-color: rgba(255,255,255,140); }"
             )
-            conn_inner = QVBoxLayout(self.connectors_panel)
-            conn_inner.setContentsMargins(10, 8, 10, 10)
-            conn_inner.setSpacing(8)
-            conn_title = QLabel("Connectors")
-            conn_title.setStyleSheet(
-                "color: #1A1D24; background: transparent; font-weight: 600;")
-            conn_title.setFont(QFont("Segoe UI Variable Text", 10, QFont.DemiBold))
-            conn_inner.addWidget(conn_title)
-            # Horizontal scroll holds the connector tiles so any number fits
-            conn_scroll = QScrollArea()
-            conn_scroll.setWidgetResizable(True)
-            conn_scroll.setFixedHeight(42)
-            conn_scroll.setHorizontalScrollBarPolicy(Qt.ScrollBarAsNeeded)
-            conn_scroll.setVerticalScrollBarPolicy(Qt.ScrollBarAlwaysOff)
-            conn_scroll.setFrameShape(QFrame.NoFrame)
-            conn_scroll.setStyleSheet(
-                "QScrollArea{background:transparent;border:none;}"
-                "QScrollBar:horizontal{background:transparent;height:5px;margin:0;}"
-                "QScrollBar::handle:horizontal{"
-                "  background:rgba(20,24,32,90);border-radius:2px;min-width:30px;}"
-                "QScrollBar::add-line:horizontal,QScrollBar::sub-line:horizontal{width:0;}"
-            )
-            conn_inner_w = QWidget()
-            conn_inner_w.setStyleSheet("background: transparent;")
-            conn_grid = QHBoxLayout(conn_inner_w)
-            conn_grid.setContentsMargins(0, 0, 0, 0)
-            conn_grid.setSpacing(6)
-            for c in CONNECTORS:
-                tile = QPushButton(f" {c['label']}")
-                tile.setIcon(_icon(c["icon"], 14, c["tint"], 1.8))
-                tile.setIconSize(QSize(14, 14))
-                tile.setCursor(Qt.PointingHandCursor)
-                tile.setToolTip(c["tip"])
-                tile.setFixedHeight(30)
-                # Size to text so labels don't truncate (Outlook, Calendar, etc.)
-                from PySide6.QtGui import QFontMetrics
-                fm = QFontMetrics(tile.font())
-                tile.setMinimumWidth(fm.horizontalAdvance(c["label"]) + 44)
-                tile.setStyleSheet(
-                    "QPushButton{"
-                    "  color: #1A1D24;"
-                    "  background: rgba(255,255,255,235);"
-                    "  border: 1px solid rgba(20,24,32,55);"
-                    "  border-radius: 14px;"
-                    "  padding: 4px 10px;"
-                    "  font-size: 11px;"
-                    "}"
-                    "QPushButton:hover{"
-                    "  background: %s;"
-                    "  border-color: %s;"
-                    "  color: #062925;"
-                    "}" % (ACCENT, ACCENT)
-                )
-                tile.clicked.connect(
-                    lambda _c=False, cid=c["id"]: self._apply_connector(cid))
-                conn_grid.addWidget(tile)
-            conn_grid.addStretch()
-            conn_scroll.setWidget(conn_inner_w)
-            conn_inner.addWidget(conn_scroll)
-            self.connectors_panel.hide()
-            outer.addWidget(self.connectors_panel)
+            choose.clicked.connect(lambda _c=False: self._pick_folder_dialog())
+            choose_row = QHBoxLayout()
+            choose_row.addStretch()
+            choose_row.addWidget(choose)
+            choose_row.addStretch()
+            fp_outer.addLayout(choose_row)
+            self.folder_panel.hide()
+            outer.addWidget(self.folder_panel)
 
             # ---- widget container (scrollable) ----
             self.widget_scroll = QScrollArea()
@@ -1480,22 +1493,105 @@ def main(port: int = 8000) -> int:
             self._scoped_window = win if btn.isChecked() else None
             self._refresh_placeholder()
 
-        # ── Folder picker ───────────────────────────────────────────────
+        # ── Folder panel — Perplexity-style inline cards ──────────────
         def _pick_folder(self) -> None:
-            from PySide6.QtWidgets import QFileDialog
+            """Toggle the inline folder panel showing Downloads/Documents/etc.
+            A "Choose Folder" button opens the native dialog for custom paths."""
             checked = self.cap_buttons["folder"].isChecked()
+            self.folder_panel.setVisible(checked)
             if not checked:
                 self._scoped_folder = None
                 self._refresh_placeholder()
-                return
+            self._adjust()
+
+        def _pick_folder_dialog(self) -> None:
+            """Native file dialog for arbitrary folder selection."""
+            from PySide6.QtWidgets import QFileDialog
             folder = QFileDialog.getExistingDirectory(
                 self, "Pick a project folder",
                 self._scoped_folder or os.path.expanduser("~"))
-            if not folder:
+            if folder:
+                self._scoped_folder = folder
+                self._refresh_placeholder()
                 self.cap_buttons["folder"].setChecked(False)
-                return
-            self._scoped_folder = folder
+                self.folder_panel.hide()
+                self._adjust()
+
+        def _select_folder_card(self, path: str, card_btn) -> None:
+            """Click handler for one of the folder cards in the panel."""
+            for c in self._folder_cards:
+                if c is not card_btn:
+                    c.setChecked(False)
+            self._scoped_folder = path if card_btn.isChecked() else None
             self._refresh_placeholder()
+
+        def _make_folder_card(self, label: str, path: str):
+            """Build one folder card: native blue folder icon + label + count.
+            Returns None if the folder doesn't exist on this machine."""
+            from PySide6.QtCore import QFileInfo, Qt
+            from PySide6.QtGui import QIcon, QPixmap
+            from PySide6.QtWidgets import QFileIconProvider
+
+            if not os.path.isdir(path):
+                return None
+
+            # Count items (cheap — main user folders are small enough)
+            try:
+                items = sum(1 for _ in os.scandir(path))
+            except Exception:
+                items = 0
+
+            CARD_W, CARD_H = 110, 120
+            card = QPushButton()
+            card.setCheckable(True)
+            card.setCursor(Qt.PointingHandCursor)
+            card.setFixedSize(CARD_W, CARD_H)
+            card.setToolTip(path)
+            card.setStyleSheet(
+                "QPushButton{"
+                "  background: transparent;"
+                "  border: 1px solid transparent;"
+                "  border-radius: 14px;"
+                "  text-align: center;"
+                "}"
+                "QPushButton:hover{ background: rgba(255,255,255,28); }"
+                "QPushButton:checked{"
+                "  background: rgba(255,255,255,48);"
+                "  border: 1.5px solid rgba(255,255,255,140);"
+                "}"
+            )
+
+            # Native blue folder icon via shell
+            icon_lbl = QLabel(card)
+            icon_lbl.setGeometry((CARD_W - 64) // 2, 10, 64, 60)
+            icon_lbl.setAlignment(Qt.AlignCenter)
+            icon_lbl.setStyleSheet("background: transparent;")
+            provider = QFileIconProvider()
+            qicon = provider.icon(QFileInfo(path))
+            pm = qicon.pixmap(56, 56) if qicon and not qicon.isNull() else None
+            if pm is not None and not pm.isNull():
+                icon_lbl.setPixmap(pm)
+
+            # Folder name
+            name_lbl = QLabel(label, card)
+            name_lbl.setGeometry(4, 74, CARD_W - 8, 18)
+            name_lbl.setAlignment(Qt.AlignCenter)
+            name_lbl.setStyleSheet(
+                "color: #FFFFFF; background: transparent;")
+            f = QFont("Segoe UI Variable Text", 10, QFont.DemiBold)
+            name_lbl.setFont(f)
+
+            # Item count
+            count_lbl = QLabel(f"{items} items", card)
+            count_lbl.setGeometry(4, 94, CARD_W - 8, 16)
+            count_lbl.setAlignment(Qt.AlignCenter)
+            count_lbl.setStyleSheet(
+                "color: rgba(240,242,248,170); background: transparent;")
+            count_lbl.setFont(QFont("Segoe UI Variable Text", 9))
+
+            card.clicked.connect(
+                lambda _c=False, p=path, b=card: self._select_folder_card(p, b))
+            return card
 
         # ── Image picker ────────────────────────────────────────────────
         # Trick: open the image with the OS default viewer, then scope the
@@ -1801,11 +1897,8 @@ def main(port: int = 8000) -> int:
 
         def _on_running(self, running: bool) -> None:
             self._busy = running
-            # When busy: hide recipe chips, show live action ticker.
-            # When idle: hide ticker, show recipe chips so the user knows
-            # what they can do next.
-            for b in self.recipe_buttons:
-                b.setVisible(not running)
+            # Recipe chips are hidden by default (Perplexity-clean look).
+            # Only the live action ticker toggles based on running state.
             self.action_ticker.setVisible(running)
             if running:
                 self.action_label.setText("Starting…")
@@ -1819,8 +1912,33 @@ def main(port: int = 8000) -> int:
             self.update()
             QTimer.singleShot(0, self._adjust)
 
+        # Status strings the backend emits that aren't useful for the user.
+        # Filter them so the live ticker stays clean.
+        _NOISY_STATUS = (
+            "Structured planning failed",
+            "Native tool stream stalled",
+            "falling back to XML",
+            "Client error '404",
+            "validation error",
+            "Field required",
+        )
+
         def _on_status(self, msg: str) -> None:
-            self.status.setText(msg[:90])
+            if not msg:
+                return
+            lower = msg.lower()
+            for noise in self._NOISY_STATUS:
+                if noise.lower() in lower:
+                    # Show a friendlier version instead of internal noise
+                    self.status.setText("Adjusting strategy…")
+                    return
+            # Trim and show clean status text
+            clean = msg.strip()
+            # Skip the per-second "waiting on model (step X, Ys)" ticker —
+            # the live action ticker already shows progress.
+            if "waiting on model" in lower:
+                return
+            self.status.setText(clean[:90])
 
         def _on_agent_delta(self, delta: str) -> None:
             """Append a streaming text chunk to the live answer card."""
@@ -1848,6 +1966,50 @@ def main(port: int = 8000) -> int:
             self.action_label.setText(phrase[:80])
             self._pulse_action_dot()
 
+            # Virtual cursor — paint an animated cursor with a smooth
+            # bezier path + ripple + action label whenever the agent does
+            # ANYTHING. Free models can flail with coordinates, so giving
+            # the user a clear visual cue is essential.
+            lname = (name or "").lower()
+            try:
+                if lname in ("mouse_click", "double_click"):
+                    xy = parse_click_xy(args)
+                    if xy is not None:
+                        verb = "Double-clicking" if lname == "double_click" else "Clicking"
+                        self._vcursor.show_click(*xy, label=verb)
+                elif lname == "left_click_drag":
+                    xy = parse_click_xy(args)
+                    if xy is not None:
+                        self._vcursor.show_click(*xy, label="Dragging")
+                elif lname in ("keyboard_type", "type_with_delay"):
+                    self._vcursor.show_type(
+                        self._vcursor._cursor_x if self._vcursor._cursor_x > 0 else 600,
+                        self._vcursor._cursor_y if self._vcursor._cursor_y > 0 else 400,
+                        text=str(args)[:32],
+                    )
+                elif lname == "key":
+                    self._vcursor.show_action(f"Pressing {str(args)[:24]}")
+                elif lname == "scroll":
+                    self._vcursor.show_action("Scrolling")
+                elif lname == "screenshot":
+                    self._vcursor.show_action("Looking at the screen")
+                elif lname == "screen_context":
+                    self._vcursor.show_action("Reading the screen")
+                elif lname == "focus_window":
+                    self._vcursor.show_action(f"Focusing {str(args)[:24]}")
+                elif lname == "find_on_screen":
+                    self._vcursor.show_action("Locating element")
+                elif lname == "web_search":
+                    self._vcursor.show_action(f"Searching: {str(args)[:24]}")
+                elif lname == "web_fetch":
+                    self._vcursor.show_action(f"Fetching {str(args)[:30]}")
+                elif lname == "write_file":
+                    self._vcursor.show_action(f"Writing {str(args)[:24]}")
+                elif lname == "read_file":
+                    self._vcursor.show_action(f"Reading {str(args)[:24]}")
+            except Exception:
+                pass
+
         def _pulse_action_dot(self) -> None:
             """Quick teal flash on the live-ticker dot when a new tool runs."""
             try:
@@ -1857,29 +2019,6 @@ def main(port: int = 8000) -> int:
                     "color: %s; background: transparent; font-size: 14px;" % ACCENT))
             except Exception:
                 pass
-
-        # ── Connectors panel toggle ──────────────────────────────────
-        def _toggle_connectors(self) -> None:
-            checked = self.cap_buttons["link"].isChecked()
-            self.connectors_panel.setVisible(checked)
-            self._adjust()
-
-        def _apply_connector(self, connector_id: str) -> None:
-            c = next((x for x in CONNECTORS if x["id"] == connector_id), None)
-            if not c:
-                return
-            # Hide the connectors panel and untick the link button
-            self.cap_buttons["link"].setChecked(False)
-            self.connectors_panel.hide()
-            # Pre-fill the input + stash mode hint
-            self.input.setText(c["prompt"])
-            self.input.setFocus()
-            try:
-                self.input.setCursorPosition(len(self.input.text()))
-            except Exception:
-                pass
-            self._recipe_hint = {"mode": c["mode"], "verb": "Working"}
-            self._adjust()
 
         # ── Recipe library ────────────────────────────────────────────
         def _apply_recipe(self, recipe_id: str) -> None:
@@ -1940,6 +2079,22 @@ def main(port: int = 8000) -> int:
             self.status.hide()
             self.input.show()
             clean = (text or "").strip()
+
+            # Treat known no-content / boilerplate replies as failures so we
+            # don't render an empty "Answer" card.
+            if clean.lower() in {
+                "", "done.", "done", "complete", "finished",
+                "still working — taking longer than expected.",
+            }:
+                # Friendlier surface error so the user knows it didn't crash
+                self.status.setText("No response — try rephrasing")
+                self.status.show()
+                QTimer.singleShot(3000, self.status.hide)
+                self._answer_card = None
+                self._answer_text_buf = ""
+                self._answer_tools_used = []
+                self._adjust()
+                return
 
             # Reality-check any "saved to X" file claims so the user sees
             # when the agent hallucinated a file write that didn't happen.
@@ -2046,31 +2201,31 @@ def main(port: int = 8000) -> int:
             path = QPainterPath()
             path.addRoundedRect(0.5, 0.5, w - 1, h - 1, r, r)
 
-            # ── LIGHT LIQUID-GLASS (Perplexity Personal Computer aesthetic)
-            # Bright translucent white with desktop bleed-through, hairline
-            # dark edge for definition, soft inner highlight on top.
+            # ── PERPLEXITY PERSONAL COMPUTER glass (two-tone)
+            # Outer capsule = dark translucent glass (lets wallpaper through
+            # subtly). The input pill, painted inside via QSS, is bright
+            # solid white so it "floats" inside the darker capsule.
 
-            # 1) Tint — near-white with subtle vertical falloff
+            # 1) Tint — soft dark grey, holds shape but desktop bleeds through
             tint = QLinearGradient(0, 0, 0, h)
-            tint.setColorAt(0.0, QColor(252, 252, 254, 215))
-            tint.setColorAt(1.0, QColor(238, 240, 245, 225))
+            tint.setColorAt(0.0, QColor(38, 42, 50, 130))
+            tint.setColorAt(1.0, QColor(20, 24, 30, 155))
             p.fillPath(path, tint)
 
-            # 2) Inner top highlight — narrow bright sheen along the top rim
+            # 2) Wet top highlight — bright sheen along the top rim
             hl = QLinearGradient(0, 0, 0, h)
-            hl.setColorAt(0.00, QColor(255, 255, 255, 200))
-            hl.setColorAt(0.06, QColor(255, 255, 255, 110))
-            hl.setColorAt(0.18, QColor(255, 255, 255, 40))
-            hl.setColorAt(0.40, QColor(255, 255, 255, 0))
+            hl.setColorAt(0.00, QColor(255, 255, 255, 130))
+            hl.setColorAt(0.10, QColor(255, 255, 255, 50))
+            hl.setColorAt(0.30, QColor(255, 255, 255, 0))
+            hl.setColorAt(0.95, QColor(255, 255, 255, 10))
+            hl.setColorAt(1.00, QColor(255, 255, 255, 26))
             p.fillPath(path, hl)
 
-            # 3) 1px outer stroke — soft dark hairline (defines the edge on
-            # any wallpaper, light or dark). Brighter inset on top for the
-            # "lit" feel.
+            # 3) 1px outer stroke — bright on top fading to subtle dark below
             edge = QLinearGradient(0, 0, 0, h)
-            edge.setColorAt(0.0, QColor(255, 255, 255, 230))
-            edge.setColorAt(0.4, QColor(0, 0, 0, 30))
-            edge.setColorAt(1.0, QColor(0, 0, 0, 55))
+            edge.setColorAt(0.0, QColor(255, 255, 255, 200))
+            edge.setColorAt(0.5, QColor(255, 255, 255, 60))
+            edge.setColorAt(1.0, QColor(255, 255, 255, 40))
             p.setPen(QPen(edge, 1.0))
             p.drawPath(path)
             p.end()

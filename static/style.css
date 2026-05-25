@@ -3478,3 +3478,106 @@
   body.qt-shell .vcap-reply {
     background: rgba(255,255,255,.07);
   }
+
+  /* ─────────────────────────────────────────────────────────────
+     CONNECTORS — dashboard sidebar section + connector tile UI.
+     Used by index.html #connectors-grid (rendered by renderConnectors()
+     in app.js). Styled to fit Claude Code's clean, low-chrome aesthetic.
+     ───────────────────────────────────────────────────────────── */
+  .settings-hint {
+    margin: 4px 0 10px;
+    font-size: 11px;
+    color: var(--muted-2);
+    line-height: 1.45;
+    letter-spacing: -0.005em;
+  }
+  .connectors-grid {
+    display: grid;
+    grid-template-columns: repeat(2, 1fr);
+    gap: 8px;
+    margin-top: 6px;
+  }
+  .conn-tile {
+    display: flex;
+    flex-direction: column;
+    gap: 6px;
+    padding: 10px 12px;
+    border: 1px solid var(--line);
+    border-radius: var(--r-md);
+    background: var(--bg-2);
+    transition: border-color var(--dur) ease, background var(--dur) ease;
+  }
+  .conn-tile:hover {
+    border-color: var(--line-3);
+    background: var(--bg-3);
+  }
+  .conn-tile.linked {
+    border-color: hsl(var(--accent-h) 60% 55% / 0.6);
+    background: hsl(var(--accent-h) 60% 50% / 0.06);
+  }
+  .conn-tile-head {
+    display: flex;
+    align-items: center;
+    gap: 8px;
+  }
+  .conn-tile-swatch {
+    width: 22px; height: 22px;
+    border-radius: 6px;
+    display: flex; align-items: center; justify-content: center;
+    color: #fff;
+    font-size: 11px;
+    font-weight: 700;
+    letter-spacing: -0.02em;
+    flex-shrink: 0;
+  }
+  .conn-tile-name {
+    font-weight: 600;
+    font-size: 12px;
+    color: var(--ink);
+    letter-spacing: -0.005em;
+    flex: 1;
+    min-width: 0;
+    white-space: nowrap;
+    overflow: hidden;
+    text-overflow: ellipsis;
+  }
+  .conn-tile-status {
+    font-size: 10px;
+    color: var(--muted-2);
+    text-transform: uppercase;
+    letter-spacing: 0.08em;
+  }
+  .conn-tile.linked .conn-tile-status {
+    color: hsl(var(--accent-h) 60% 55%);
+  }
+  .conn-tile-tip {
+    font-size: 11px;
+    color: var(--muted-2);
+    line-height: 1.4;
+    margin: 0;
+  }
+  .conn-tile-action {
+    align-self: flex-start;
+    padding: 4px 10px;
+    border-radius: 999px;
+    border: 1px solid var(--line-2);
+    background: transparent;
+    color: var(--ink-2);
+    font-size: 11px;
+    font-weight: 500;
+    cursor: pointer;
+    transition: all var(--dur) ease;
+  }
+  .conn-tile-action:hover {
+    border-color: var(--accent);
+    color: var(--accent);
+  }
+  .conn-tile.linked .conn-tile-action {
+    border-color: hsl(var(--accent-h) 60% 55% / 0.5);
+    color: hsl(var(--accent-h) 60% 55%);
+  }
+  .conn-tile.linked .conn-tile-action:hover {
+    background: var(--err);
+    color: #fff;
+    border-color: var(--err);
+  }

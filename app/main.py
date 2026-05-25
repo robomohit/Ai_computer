@@ -842,6 +842,36 @@ def _required_key_for_model(model: str) -> Optional[str]:
             return env_var
     return "OPENROUTER_API_KEY"  # default fallback
 
+# ── Connectors API (additive — used by the dashboard sidebar)
+@app.get("/api/connectors")
+async def get_connectors():
+    from .connectors import list_with_state
+    return {"connectors": list_with_state()}
+
+
+from pydantic import BaseModel as _BM_Conn
+class _LinkBody(_BM_Conn):
+    notes: str = ""
+
+
+@app.post("/api/connectors/{connector_id}/link")
+async def link_connector(connector_id: str, body: _LinkBody | None = None):
+    from .connectors import link
+    notes = body.notes if body else ""
+    c = link(connector_id, notes=notes)
+    if c is None:
+        raise HTTPException(status_code=404, detail="Unknown connector")
+    return c
+
+
+@app.post("/api/connectors/{connector_id}/unlink")
+async def unlink_connector(connector_id: str):
+    from .connectors import unlink, get
+    if get(connector_id) is None:
+        raise HTTPException(status_code=404, detail="Unknown connector")
+    return unlink(connector_id)
+
+
 @app.get("/api/models")
 async def get_models():
     """Return only models whose API keys are actually configured."""

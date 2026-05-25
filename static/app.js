@@ -3285,3 +3285,111 @@
   })();
 
   init();
+
+/* ─────────────────────────────────────────────────────────────────
+ * CONNECTORS — dashboard sidebar section.
+ * Renders cards for each connector from /api/connectors and lets
+ * the user Link/Unlink. Linked connectors become available to the
+ * widget+agent automatically (the backend reads /api/connectors).
+ * ───────────────────────────────────────────────────────────────── */
+(function initConnectors(){
+  const ICONS = {
+    mail:     '<svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.8"><rect x="2" y="4" width="20" height="16" rx="2"/><polyline points="2 6 12 13 22 6"/></svg>',
+    calendar: '<svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.8"><rect x="3" y="4" width="18" height="18" rx="2"/><line x1="16" y1="2" x2="16" y2="6"/><line x1="8" y1="2" x2="8" y2="6"/><line x1="3" y1="10" x2="21" y2="10"/></svg>',
+    github:   '<svg viewBox="0 0 24 24" fill="currentColor"><path d="M12 2A10 10 0 0 0 9 21.5c.5.1.7-.2.7-.5v-1.8c-2.8.6-3.4-1.4-3.4-1.4-.5-1.1-1.1-1.4-1.1-1.4-.9-.6.1-.6.1-.6 1 .1 1.5 1 1.5 1 .9 1.5 2.3 1.1 2.9.8.1-.7.4-1.1.6-1.4-2.2-.3-4.6-1.1-4.6-5 0-1.1.4-2 1-2.7-.1-.3-.4-1.3.1-2.7 0 0 .8-.3 2.7 1a9.4 9.4 0 0 1 5 0c1.9-1.3 2.7-1 2.7-1 .5 1.4.2 2.4.1 2.7.6.7 1 1.6 1 2.7 0 3.9-2.4 4.7-4.6 5 .4.3.7.9.7 1.9v2.7c0 .3.2.6.7.5A10 10 0 0 0 12 2z"/></svg>',
+    slack:    '<svg viewBox="0 0 24 24" fill="currentColor"><rect x="2" y="8" width="6" height="2" rx="1"/><rect x="14" y="14" width="6" height="2" rx="1"/><rect x="8" y="14" width="2" height="6" rx="1"/><rect x="14" y="4" width="2" height="6" rx="1"/></svg>',
+    notion:   '<svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.8"><rect x="3" y="3" width="18" height="18" rx="2"/><line x1="8" y1="7" x2="8" y2="17"/><line x1="8" y1="7" x2="16" y2="17"/><line x1="16" y1="7" x2="16" y2="17"/></svg>',
+    drive:    '<svg viewBox="0 0 24 24" fill="currentColor"><polygon points="12 3 3 18 7 18 12 9 17 18 21 18"/></svg>',
+    youtube:  '<svg viewBox="0 0 24 24" fill="currentColor"><rect x="2" y="6" width="20" height="12" rx="3"/><polygon points="10 9 16 12 10 15" fill="#fff"/></svg>',
+    folder:   '<svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.8"><path d="M3 7.5a2 2 0 0 1 2-2h4l2 2h8a2 2 0 0 1 2 2V17a2 2 0 0 1-2 2H5a2 2 0 0 1-2-2z"/></svg>',
+    clipboard:'<svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.8"><rect x="8" y="3" width="8" height="4" rx="1"/><path d="M16 5h2a2 2 0 0 1 2 2v12a2 2 0 0 1-2 2H6a2 2 0 0 1-2-2V7a2 2 0 0 1 2-2h2"/></svg>',
+  };
+
+  const url = (path) => path;
+
+  async function ensureSession() {
+    try { await fetch(url('/api/session'), {method:'POST'}); } catch {}
+  }
+
+  async function fetchConnectors() {
+    await ensureSession();
+    const r = await fetch(url('/api/connectors'), {credentials:'include'});
+    if (!r.ok) throw new Error('connectors fetch: ' + r.status);
+    return (await r.json()).connectors || [];
+  }
+
+  async function toggleLink(id, linked) {
+    await ensureSession();
+    const path = linked
+      ? `/api/connectors/${id}/unlink`
+      : `/api/connectors/${id}/link`;
+    const r = await fetch(url(path), {method:'POST', credentials:'include',
+      headers:{'Content-Type':'application/json'},
+      body: linked ? '{}' : '{"notes":""}'});
+    if (!r.ok) throw new Error('toggle failed: ' + r.status);
+    return await r.json();
+  }
+
+  function render(items) {
+    const grid = document.getElementById('connectors-grid');
+    const countEl = document.getElementById('connector-count');
+    if (!grid) return;
+    grid.innerHTML = '';
+    items.forEach((c) => {
+      const tile = document.createElement('div');
+      tile.className = 'conn-tile' + (c.linked ? ' linked' : '');
+      tile.innerHTML = `
+        <div class="conn-tile-head">
+          <span class="conn-tile-swatch" style="background:${c.tint}">
+            ${ICONS[c.icon] || ICONS.folder}
+          </span>
+          <span class="conn-tile-name">${c.label}</span>
+          <span class="conn-tile-status">${c.linked ? '✓ Linked' : c.auth_kind === 'local' ? 'Built-in' : 'Not linked'}</span>
+        </div>
+        <p class="conn-tile-tip">${c.tip || ''}</p>
+        ${c.auth_kind === 'local' ? '' :
+          `<button class="conn-tile-action" data-id="${c.id}" data-linked="${c.linked}">${c.linked ? 'Unlink' : 'Link'}</button>`}
+      `;
+      const btn = tile.querySelector('button.conn-tile-action');
+      if (btn) {
+        btn.addEventListener('click', async (e) => {
+          const id = btn.dataset.id;
+          const linked = btn.dataset.linked === 'true';
+          btn.disabled = true;
+          btn.textContent = linked ? 'Unlinking…' : 'Linking…';
+          try {
+            await toggleLink(id, linked);
+            await load();
+          } catch (err) {
+            btn.textContent = 'Error';
+            console.error(err);
+          }
+        });
+      }
+      grid.appendChild(tile);
+    });
+    if (countEl) {
+      const n = items.filter((c) => c.linked).length;
+      countEl.textContent = `${n}/${items.length}`;
+    }
+  }
+
+  async function load() {
+    try {
+      const items = await fetchConnectors();
+      render(items);
+    } catch (e) {
+      console.error('[connectors] load failed', e);
+    }
+  }
+
+  if (document.readyState === 'loading') {
+    document.addEventListener('DOMContentLoaded', load);
+  } else {
+    load();
+  }
+  // refresh on settings modal open
+  document.getElementById('open-settings')?.addEventListener('click', () => {
+    setTimeout(load, 50);
+  });
+})();

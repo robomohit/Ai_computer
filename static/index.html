@@ -109,6 +109,16 @@
           <input id="isolated-app-id" type="text" placeholder="e.g. Chrome, Notepad…">
           <p style="font-size:var(--fs-label);color:var(--muted-2);margin-top:6px;line-height:1.4">The agent will only see and control this app.</p>
         </div>
+        <div class="skills-section" id="connectors-section">
+          <div class="history-header">
+            <span>Connectors</span><span id="connector-count">0</span>
+          </div>
+          <p class="settings-hint">Link services so the agent can drive them on your behalf. Web connectors use the browser via Playwright — no API keys needed.</p>
+          <div class="connectors-grid" id="connectors-grid">
+            <!-- Rendered via JS — see app.js renderConnectors() -->
+          </div>
+        </div>
+
         <div class="skills-section" id="skills-section">
           <div class="history-header"><span>Expertise Library</span><span id="skill-count">0</span></div>
           <div class="skills-grid" id="skills-grid">
