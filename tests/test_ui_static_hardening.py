@@ -274,6 +274,15 @@ def test_live_reasoning_not_filtered_by_step_announcement(monkeypatch):
     assert js.index(live_guard) < js.index(step_filter), "live guard must precede step filter"
 
 
+def test_ai28_liquid_glass_css_static_asset():
+    """AI-28: liquid-glass.css is present, non-empty, and linked from index.html."""
+    css_path = _STATIC / "liquid-glass.css"
+    assert css_path.exists(), "static/liquid-glass.css not found"
+    assert css_path.stat().st_size > 0, "static/liquid-glass.css is empty"
+    html = STATIC_HTML.read_text(encoding="utf-8")
+    assert "liquid-glass.css" in html, "liquid-glass.css not linked from index.html"
+
+
 def test_ai15_voice_widget_v2_drag_strip_hotkey():
     """AI-15: drag persists, live activity strip, Ctrl+Shift+Space toggles pill."""
     html = STATIC_HTML.read_text(encoding="utf-8")
