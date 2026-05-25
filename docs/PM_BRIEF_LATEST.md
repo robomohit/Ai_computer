@@ -1,68 +1,95 @@
-# PM Brief — 2026-05-24 11:20 local
-**Starting commit:** d164c9c  →  **Ending commit:** f5a0b47
-**Run duration:** ~25 minutes  |  **LOC budget used:** ~48/200 (authored; +2497 user widget code committed)
-**Run type:** mixed (repair + 1 feature shipped)
+# PM Brief — 2026-05-25 (automated run)
 
-## What I did
-- Attempted sync — branch was 9 commits ahead of origin with staged renames and unstaged modifications (user's widget refactor uncommitted). Pulled (already up to date).
-- Read last 5 PM briefs, RESEARCH_NOTES (most recent: 2026-05-20 codebase patterns).
-- Committed user's uncommitted widget refactor: `app/qt_shell.py` → `app/widget/qt_shell.py`, new `app/widget/capsule_widgets.py`, `app/widget/__init__.py`, `static/liquid-glass.css`, `static/index.html` (SVG filter + CSS link), `run_desktop.py` import update, `test_backend_suite.py`. Excluded design-reference .png images. (commit a383211)
-- Ran full `pytest -q` — **2 failed, 171 passed, 1 skipped**: both failures from the widget file move (tests still read old `app/qt_shell.py` path).
-- Repaired both failures (commit 4768ffc):
-  - Added missing `<button data-v="widgets">` back to #t-demo in index.html (handler existed in app.js; button was removed in user's d164c9c reset)
-  - Updated `test_desktop_launcher_has_frameless_widget_mode` to read `app/widget/qt_shell.py`, assert `--dashboard` (was `--widget`), assert `_apply_pill_glass` (was `_apply_acrylic` — function renamed in new Qt shell)
-- Full suite post-repair: **173 passed, 0 failed, 1 skipped**.
-- UI smoke: GET / → 200, /healthz → providers (openrouter ok, google ok); server killed cleanly.
-- Linear survey: 0 In Progress, 0 blocked, ~13 Todo (AI-5, AI-14, AI-18 have needs-design).
-- Picked AI-19 (High priority, no needs-design, no prior attempts): async task mode — Discord/Telegram completion ping.
-- Discovered `send_completion_notification` and `#notify-toggle` UI were already fully implemented; what was missing was test coverage.
-- Shipped AI-19: added 2 tests to `test_premium_features.py` (commit f5a0b47):
-  - `test_send_completion_notification_discord`: mocks httpx.post, verifies one POST to Discord webhook with goal+status in content.
-  - `test_send_completion_notification_no_connector`: verifies zero httpx.post calls when no connector env vars are set.
-- Final suite: **175 passed, 0 failed, 1 skipped**.
-- Board hygiene: all issues 4 days old — no stale items; no blocked items.
-- Discover: filed AI-28 (liquid-glass.css static asset test, ~5 LOC).
-- Pushed 12 commits to origin (10 prior-run/user commits not yet pushed + 2 new this run).
+**Starting commit:** `bf2eb1c`  →  **Ending commit:** `272f9df`
+**Run duration:** ~45 min  |  **LOC budget used:** ~146/200
+**Run type:** mixed (3 features shipped, 1 new issue filed)
+
+---
+
+## What ran
+
+1. **Synced git** — pulled `origin/feature/new-updates`, confirmed clean baseline.
+2. **Full test suite** — `181 passed, 0 failed` at start (Δ: +6 from last run).
+3. **UI smoke** — static file split intact; all hardening tests green.
+4. **Shipped issues** (in order):
+   - **AI-28** (Low): `liquid-glass.css` static asset test added to `test_ui_static_hardening.py`. 9 LOC. Commit `b239d59`.
+   - **AI-15** (High): Voice widget v2 — live activity strip (`#vcap-strip`) in HTML/CSS/JS + hotkey toggle fix (`root.hidden = !root.hidden`). 50 LOC. Commit `0b16c1a`. Test `test_ai15_voice_widget_v2_drag_strip_hotkey()` added.
+   - **AI-22** (Medium): `BLOCKED_MODELS` + `BLOCKED_PROVIDERS` env-var model governance — three new helpers in `app/providers.py` + blocklist filtering in `_openrouter_models_to_try()`. 87 LOC. Commit `272f9df`. Three new tests in `test_providers.py`.
+5. **Board hygiene** — no 30-day stale issues, no blocked issues found.
+6. **New issue filed** — AI-29 (Medium, Backlog): extend BLOCKED_MODELS/BLOCKED_PROVIDERS to native provider paths.
+7. **Linear updated** — AI-15, AI-28, AI-22 moved to Done with commit-hash comments. AI-29 filed.
+
+---
 
 ## Tests
-- Unit/integration: **175 passed, 0 failed, 1 skipped** (22.1s)
-- Baseline delta: +4 passed / -2 failed vs run start (2 repairs → pass, 2 new tests added)
-- UI smoke: GET / → 200, /healthz returns openrouter+google ok; no orphan processes
+
+| | Count |
+|---|---|
+| Passed | 187 |
+| Failed | 0 |
+| Δ vs last run | +6 |
+
+Suite ran clean after all three shipped issues. No tests deleted, skipped, or weakened.
+
+---
 
 ## Repaired
-- **test_dynamic_widget_library_present**: restored `<button data-v="widgets">` in index.html #t-demo (removed in user's d164c9c 4-pillar reset; JS handler was kept)
-- **test_desktop_launcher_has_frameless_widget_mode**: updated to read `app/widget/qt_shell.py`; assert `--dashboard` flag; assert `_apply_pill_glass` — all renamed in user's widget redesign
+
+Nothing was red at baseline. No repair pass needed.
+
+---
 
 ## Shipped
-- **AI-19:** Async task mode (Discord/Telegram ping on completion) — feature was already implemented (`send_completion_notification` in premium_features.py, `#notify-toggle` in index.html, backend wiring in main.py); added the 2 missing acceptance tests. (commit f5a0b47)
 
-## Polished (unsolicited)
-- Committed user's uncommitted widget refactor as a clean commit with descriptive message (a383211); excluded design-reference .png files from tracking.
+| Issue | Title | LOC | Commit |
+|---|---|---|---|
+| AI-28 | liquid-glass.css static asset test | 9 | `b239d59` |
+| AI-15 | Voice widget v2 (activity strip + hotkey toggle) | 50 | `0b16c1a` |
+| AI-22 | BLOCKED_MODELS + BLOCKED_PROVIDERS governance | 87 | `272f9df` |
+
+---
 
 ## New issues filed
-- **AI-28:** Add static-asset test for `liquid-glass.css` — no test asserts it exists; ~5 LOC in test_ui_static_hardening.py. Low priority.
+
+- **AI-29** (Medium, Backlog): Extend BLOCKED_MODELS/BLOCKED_PROVIDERS to native provider paths. `_chat_anthropic`, `_chat_google`, `_chat_openai`, `_chat_groq` bypass `_openrouter_models_to_try()` and thus the blocklist. Fix: add `_is_model_blocked` check in `stream_chat_with_tools()` dispatch. ~10-15 LOC.
+
+---
 
 ## Decisions I made (and why)
-- **Committed user's staged widget work rather than halting:** Git status was not clean but contained user's in-progress widget refactor (staged renames, unstaged mods). Hard rules prohibit `git reset --hard` against unsaved work. Only safe path: commit the code, leave the .png design reference images untracked. The image files are binary blobs with no code value.
-- **Updated test assertions (--dashboard, _apply_pill_glass) rather than reverting user's redesign:** The user redesigned the launcher (default = Qt sidekick, `--dashboard` = webview) and renamed the acrylic function. Tests must reflect what the code correctly does — autonomy rule 2 (smaller change). Updating 2 assertions is 2 LOC vs reverting the entire qt_shell.py redesign.
-- **AI-19 counts as shipped despite no new prod LOC:** The backend+UI implementation was complete; the gap was test coverage per acceptance criteria ("Pytest green" is an explicit acceptance requirement). Adding 2 tests that mock the connector is a real deliverable.
 
-## Skipped / blocked / NEEDS HUMAN
-- none
+1. **Shipped AI-28 first** (Low priority) — smallest item (9 LOC, pure test), strengthened baseline before touching bigger issues.
+2. **Hotkey toggles `root.hidden`, not just focus** — acceptance criteria said summon/dismiss. Interpreted as full hide/show. Focus only granted when `!isTextEntryTarget(e.target)` to avoid stealing focus from other inputs.
+3. **Blocklist only in `_openrouter_models_to_try()`, not native paths** — staying within AI-22 scope. Filed AI-29 to track the gap.
+4. **Did not attempt AI-7** (Watch & Act, ~150-200 LOC) — only 54 LOC of budget remained after AI-22. Left for next run.
 
-## Risk flags for this push
-- `static/index.html`: `<button data-v="widgets">` restored to #t-demo demo panel. Low risk (additive).
-- `tests/test_ui_static_hardening.py`: path update + flag/function name assertions updated to match current code. Pure test change.
-- `app/widget/qt_shell.py`: large new file (2170 lines) from user's commit — PM routine did not author this; committed as-is with no review of Qt logic.
+---
+
+## Skipped / blocked
+
+- **AI-7** (Watch & Act slice 1, ~150-200 LOC): insufficient LOC budget after AI-22.
+- **AI-13** (Private Context Bridge): `needs-design` label — blocked by policy.
+- **AI-21** (Planning mode): Todo, medium — budget exhausted.
+- **AI-26** (ALLOWED_MODELS glob): may already be pre-implemented via `fnmatch` — needs verification next run.
+
+---
+
+## Risk flags
+
+None critical. AI-29 (native-path blocklist bypass) is medium severity but not exploitable without attacker control over env vars.
+
+---
 
 ## Health snapshot
-- Full suite: **175 passed, 0 failed, 1 skipped**  (Δ vs last run: +3 passed / ±0 failed)
-- Open Todo issues: ~13 Todo  (Δ: -1 AI-19 shipped, +1 AI-28 new = ±0 net)
-- In Progress / blocked / needs-design: 0 In Progress; 0 blocked; 3 needs-design (AI-5, AI-14, AI-18)
-- Lines shipped this run: ~48 authored  /  Last 7 runs avg: ~100
-- Trend: **healthy** — suite fully green after widget refactor repairs; AI-19 closed
-- Haiku research last contributed: 2026-05-20 (4 days ago)
 
-## Next run will likely tackle
-- **AI-28:** liquid-glass.css static asset test (~5 LOC, trivial quick win)
-- **AI-22:** Model governance — BLOCKED_PROVIDERS + BLOCKED_MODELS env vars (~40 LOC, Medium priority)
+- Branch: `feature/new-updates` — pushed to origin, clean working tree.
+- Tests: 187 passed, 0 failed.
+- LOC budget used: ~146/200.
+- Commits this run: 3/4 (`b239d59`, `0b16c1a`, `272f9df`).
+
+---
+
+## Next run plans
+
+1. **Verify AI-26** — check if `fnmatch` added for AI-22 already satisfies ALLOWED_MODELS glob; if yes, mark Done with no code change.
+2. **AI-7** (Watch & Act slice 1) — highest-priority Todo without `needs-design`; budget the full 200 LOC.
+3. **AI-29** (native-path blocklist bypass) — quick fix (~10-15 LOC) if budget allows after AI-7.

@@ -1208,3 +1208,25 @@ Order: IDEA-2026-05-02-07 (Phase A) → -10 (C1) → -11 (E) → -12 (F) → -13
 ## Next run will likely tackle
 - **AI-28:** liquid-glass.css static asset test (~5 LOC, trivial quick win)
 - **AI-22:** Model governance — BLOCKED_PROVIDERS + BLOCKED_MODELS env vars (~40 LOC, Medium priority)
+
+---
+
+# PM Brief — 2026-05-25 (automated run)
+
+**Starting commit:** `bf2eb1c`  →  **Ending commit:** `272f9df`
+**Run duration:** ~45 min  |  **LOC budget used:** ~146/200
+**Run type:** mixed (3 features shipped, 1 new issue filed)
+
+### Shipped
+- AI-28 (Low): liquid-glass.css static asset test — 9 LOC, commit `b239d59`
+- AI-15 (High): Voice widget v2 activity strip + hotkey toggle — 50 LOC, commit `0b16c1a`
+- AI-22 (Medium): BLOCKED_MODELS + BLOCKED_PROVIDERS env-var governance — 87 LOC, commit `272f9df`
+
+### Tests
+187 passed, 0 failed (Δ +6). No tests deleted or weakened.
+
+### New issues
+AI-29 (Medium, Backlog): native-path blocklist bypass in `stream_chat_with_tools()` dispatch.
+
+### Next run
+Verify AI-26 (ALLOWED_MODELS glob may be pre-implemented), then AI-7 (Watch & Act slice 1, ~150-200 LOC).
