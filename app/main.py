@@ -974,6 +974,35 @@ async def uia_click(body: _UiaClickBody):
     return click_ui_element(body.query, body.app, body.button)
 
 
+@app.get("/api/desktop/uia/smart-find")
+async def uia_smart_find(query: str, app: str = ""):
+    """UIA find that, for Electron apps, also returns a relaunch hint so
+    the agent can unlock their accessibility tree."""
+    from .widget.desktop_features import smart_uia_find_with_unlock
+    return smart_uia_find_with_unlock(query, app)
+
+
+class _ElectronRelaunchBody(BaseModel):
+    exe: str
+    args: list[str] = []
+    cdp: bool = False  # also tack on --remote-debugging-port=9222
+
+
+@app.post("/api/desktop/electron/relaunch")
+async def electron_relaunch(body: _ElectronRelaunchBody):
+    """Relaunch an Electron app with --force-renderer-accessibility so its
+    DOM exposes as a real UIA tree. Optional CDP flag for power users."""
+    from .widget.desktop_features import relaunch_with_accessibility
+    return relaunch_with_accessibility(body.exe, body.args, body.cdp)
+
+
+@app.get("/api/desktop/electron/check")
+async def electron_check(exe: str):
+    """Heuristic: is this exe path an Electron app?"""
+    from .widget.desktop_features import is_electron_app
+    return {"exe": exe, "is_electron": is_electron_app(exe)}
+
+
 # ── Clipboard history
 @app.get("/api/desktop/clipboard/history")
 async def clip_history(limit: int = 20):

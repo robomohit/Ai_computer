@@ -376,6 +376,150 @@ def find_ui_element(query: str, app_hint: str = "") -> dict:
     return {"ok": True, **item}
 
 
+# ─────────────────────────────────────────────────────────────────────────────
+# ELECTRON ACCESSIBILITY UNLOCK
+#
+# Chromium-based desktop apps (VS Code, Slack, Discord, Teams, Notion, Spotify,
+# Cursor, Antigravity, Comet, etc.) ship with their UI Automation tree empty
+# until an "assistive technology" is detected. Our UIA agent looks like nothing
+# to them. The fix is a documented Chromium command-line switch:
+#
+#     --force-renderer-accessibility
+#
+# When the app is launched with this flag, every DOM element shows up in the
+# Windows UIA tree as a real control. Our existing find_ui_element /
+# click_ui_element helpers then work on Electron apps with zero extra code.
+#
+# We DO NOT implement DLL injection. AV will flag it, anti-cheat will ban,
+# the maintenance burden is unacceptable for a consumer product.
+# We DO NOT implement Chrome DevTools Protocol by default. The flag stops
+# working across Electron upgrades (electron/electron#41325, #10445); we keep
+# detection here so power users can opt in if they want.
+# ─────────────────────────────────────────────────────────────────────────────
+
+# Known Electron exe basenames — the agent uses this to suggest a relaunch
+# instead of fumbling vision on a blank UIA tree.
+ELECTRON_EXES = {
+    "code.exe", "cursor.exe", "windsurf.exe", "antigravity.exe",
+    "slack.exe", "discord.exe", "teams.exe", "ms-teams.exe",
+    "notion.exe", "spotify.exe", "obsidian.exe", "github desktop.exe",
+    "1password.exe", "figma.exe", "linear.exe", "raycast.exe",
+    "trello.exe", "whatsapp.exe", "signal.exe", "comet.exe",
+}
+
+
+def is_electron_app(exe_path: str) -> bool:
+    """Returns True if the .exe path looks like an Electron app.
+    Heuristics:
+      * known exe basename
+      * `resources/app.asar` next to the exe
+      * sibling `chrome_100_percent.pak` (Chromium asset bundle)
+    """
+    if not exe_path:
+        return False
+    base = os.path.basename(exe_path).lower()
+    if base in ELECTRON_EXES:
+        return True
+    try:
+        d = Path(exe_path).parent
+        if (d / "resources" / "app.asar").exists():
+            return True
+        # Chromium content asset
+        if (d / "chrome_100_percent.pak").exists():
+            return True
+    except Exception:
+        pass
+    return False
+
+
+def relaunch_with_accessibility(exe_path: str,
+                                args: list[str] | None = None,
+                                also_remote_debug: bool = False) -> dict:
+    """Re-launch an Electron app with --force-renderer-accessibility so its
+    DOM exposes as a UIA tree. If `also_remote_debug` is True, also tack on
+    --remote-debugging-port=9222 for the CDP power-user path.
+
+    NOTE: This does NOT kill an already-running instance. The agent should
+    propose this to the user and let them close + relaunch themselves.
+    Returns the launched subprocess PID (or error).
+    """
+    import subprocess
+    if not exe_path or not os.path.exists(exe_path):
+        return {"ok": False, "error": f"exe not found: {exe_path}"}
+    cmd = [exe_path]
+    cmd += list(args or [])
+    cmd.append("--force-renderer-accessibility")
+    if also_remote_debug:
+        cmd.append("--remote-debugging-port=9222")
+    try:
+        proc = subprocess.Popen(cmd, close_fds=True)
+        return {
+            "ok": True,
+            "pid": proc.pid,
+            "exe": exe_path,
+            "flags": cmd[len(args or [])+1:],
+            "note": ("Existing instance (if any) was NOT terminated — "
+                     "Electron apps fight to single-instance themselves; "
+                     "if the new window doesn't appear, close the running "
+                     "copy first."),
+        }
+    except Exception as exc:
+        return {"ok": False, "error": str(exc)}
+
+
+def smart_uia_find_with_unlock(query: str, app_hint: str = "") -> dict:
+    """UIA find that, on empty result for an Electron app, surfaces a clear
+    "relaunch with --force-renderer-accessibility" suggestion instead of
+    falling back to vision.
+
+    Identifies the foreground app, checks if it's Electron, and if so
+    returns hit + an `electron_hint` field even when the find succeeded
+    (so the agent can choose to relaunch for richer access)."""
+    hit = find_ui_element(query, app_hint)
+    # Determine current foreground exe to advise on
+    try:
+        import uiautomation as uia
+        fg = uia.GetForegroundControl()
+        # Walk up to top-level control
+        top = fg
+        while top and top.GetParentControl():
+            if top.GetParentControl() == uia.GetRootControl():
+                break
+            top = top.GetParentControl()
+        exe = ""
+        try:
+            user32 = ctypes.windll.user32
+            kernel32 = ctypes.windll.kernel32
+            hwnd = top.NativeWindowHandle if top else 0
+            pid = wintypes.DWORD(0)
+            if hwnd:
+                user32.GetWindowThreadProcessId(hwnd, ctypes.byref(pid))
+                PROCESS_QUERY_LIMITED_INFORMATION = 0x1000
+                h = kernel32.OpenProcess(
+                    PROCESS_QUERY_LIMITED_INFORMATION, False, pid.value)
+                if h:
+                    ebuf = ctypes.create_unicode_buffer(1024)
+                    size = wintypes.DWORD(1024)
+                    kernel32.QueryFullProcessImageNameW(
+                        h, 0, ebuf, ctypes.byref(size))
+                    exe = ebuf.value
+                    kernel32.CloseHandle(h)
+        except Exception:
+            pass
+        if exe and is_electron_app(exe):
+            hit = dict(hit) if isinstance(hit, dict) else {"ok": False}
+            hit["electron_hint"] = {
+                "exe": exe,
+                "tip": ("This is an Electron app — its DOM is invisible "
+                        "to UIA by default. Call /api/desktop/electron/"
+                        "relaunch with this exe path to launch it with "
+                        "--force-renderer-accessibility, then retry."),
+            }
+        return hit
+    except Exception:
+        return hit
+
+
 def click_ui_element(query: str, app_hint: str = "",
                      button: str = "left") -> dict:
     """Find a control then physically click its center via pyautogui."""
