@@ -618,6 +618,7 @@ def main(port: int = 8000) -> int:
     from .capsule_widgets import create_widget, set_api_base
     from PySide6.QtWidgets import QFrame
     from .virtual_cursor import VirtualCursorOverlay, parse_click_xy
+    from . import desktop_features as _df
 
     BASE = f"http://127.0.0.1:{port}"
     set_api_base(BASE)
@@ -1919,6 +1920,11 @@ def main(port: int = 8000) -> int:
                 "text": user_text[:1000],
             })
             self.input.clear()
+            # Persist the goal so we can offer to resume if the widget crashes
+            try:
+                _df.save_pending_task(goal, attach.get("recipe_mode") or "auto")
+            except Exception:
+                pass
             self.runner.submit(goal, attach)
             self._adjust()
 
@@ -2287,6 +2293,12 @@ def main(port: int = 8000) -> int:
                 if sources:
                     self._append_sources_strip(self._answer_card, sources)
 
+            # Task ended successfully — clear pending-task crash flag.
+            try:
+                _df.clear_pending_task()
+            except Exception:
+                pass
+
             # Reset streaming state so the NEXT prompt gets a fresh card
             # (multi-turn stacking: don't delete old cards).
             self._answer_card = None
@@ -2503,6 +2515,26 @@ def main(port: int = 8000) -> int:
             _wb.open(f"http://127.0.0.1:{port}")
         act_dash.triggered.connect(_open_dash)
         menu.addAction(act_dash)
+
+        # Snap layout submenu — instant native window arrangement
+        layout_menu = menu.addMenu("Snap layout")
+        for _name, _spec in _df.LAYOUTS.items():
+            _act = QAction(f"{_name.title()} — {_spec['description']}",
+                            layout_menu)
+            _act.triggered.connect(
+                lambda _checked=False, n=_name: _df.apply_layout(n))
+            layout_menu.addAction(_act)
+
+        # Autostart toggle
+        act_autostart = QAction("Start with Windows", menu)
+        act_autostart.setCheckable(True)
+        act_autostart.setChecked(_df.is_autostart_enabled())
+        def _toggle_autostart(checked):
+            _df.set_autostart(checked)
+            act_autostart.setChecked(_df.is_autostart_enabled())
+        act_autostart.toggled.connect(_toggle_autostart)
+        menu.addAction(act_autostart)
+
         menu.addSeparator()
         act_quit = QAction("Quit AI Computer", menu)
         act_quit.triggered.connect(app.quit)

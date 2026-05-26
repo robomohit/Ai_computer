@@ -872,6 +872,46 @@ async def unlink_connector(connector_id: str):
     return unlink(connector_id)
 
 
+# ── Desktop-features API (snap layouts, telemetry promise, autostart) ──
+@app.get("/api/desktop/telemetry")
+async def telemetry_promise():
+    """Single source of truth for the privacy panel — always telemetry-off."""
+    from .widget.desktop_features import TELEMETRY_PROMISE
+    return TELEMETRY_PROMISE
+
+
+@app.get("/api/desktop/layouts")
+async def list_snap_layouts():
+    from .widget.desktop_features import LAYOUTS
+    return {"layouts": [
+        {"id": k, "description": v["description"]}
+        for k, v in LAYOUTS.items()
+    ]}
+
+
+@app.post("/api/desktop/layouts/{layout_id}/apply")
+async def apply_snap_layout(layout_id: str):
+    from .widget.desktop_features import apply_layout
+    return apply_layout(layout_id)
+
+
+@app.get("/api/desktop/autostart")
+async def get_autostart():
+    from .widget.desktop_features import is_autostart_enabled
+    return {"enabled": is_autostart_enabled()}
+
+
+class _AutostartBody(BaseModel):
+    enabled: bool
+
+
+@app.post("/api/desktop/autostart")
+async def set_autostart_endpoint(body: _AutostartBody):
+    from .widget.desktop_features import set_autostart, is_autostart_enabled
+    set_autostart(body.enabled)
+    return {"enabled": is_autostart_enabled()}
+
+
 @app.get("/api/models")
 async def get_models():
     """Return only models whose API keys are actually configured."""
