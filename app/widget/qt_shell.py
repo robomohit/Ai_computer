@@ -2468,16 +2468,64 @@ def main(port: int = 8000) -> int:
     def hotkey_callback():
         signaler.toggle.emit()
 
+    # ── EXPLAIN-THIS-SCREEN hotkey signal ────────────────────────────
+    class _ExplainSig(QObject):
+        fire = Signal()
+    explain_sig = _ExplainSig()
+    def _explain_fire():
+        # Auto-fill the input with the explain prompt and submit
+        win.show(); win.activateWindow(); win.raise_()
+        win.input.setText(
+            "Take a screenshot of the foreground window and explain what's "
+            "visible. Identify the app, what the user is probably trying to "
+            "do, and 2-3 suggested next actions.")
+        win.input.setFocus()
+        # Fire submit asynchronously so the show() animation can settle
+        QTimer.singleShot(150, win._submit)
+    explain_sig.fire.connect(_explain_fire)
+
     try:
         import keyboard
-        # Register the global hotkey
         keyboard.add_hotkey('ctrl+shift+space', hotkey_callback)
         print("[Desktop] Global hotkey Ctrl+Shift+Space registered.",
+              flush=True)
+        # "Explain this screen" — Ctrl+Shift+E
+        keyboard.add_hotkey('ctrl+shift+e',
+                            lambda: explain_sig.fire.emit())
+        print("[Desktop] Explain hotkey Ctrl+Shift+E registered.",
               flush=True)
     except ImportError:
         print("[Desktop] Install 'keyboard' (pip install keyboard) for global hotkeys.")
     except Exception as e:
         print(f"[Desktop] Could not register global hotkey: {e}")
+
+    # Start clipboard-history background watcher + scheduler + region-watch
+    try:
+        _df.start_clipboard_watcher()
+        print("[Desktop] Clipboard history watcher started.", flush=True)
+    except Exception as e:
+        print(f"[Desktop] Clipboard watcher failed: {e}", flush=True)
+
+    try:
+        def _schedule_submit(goal: str, mode: str):
+            win.runner.submit(goal, {"recipe_mode": mode})
+        _df.start_scheduler_daemon(_schedule_submit)
+        print("[Desktop] Scheduled-recipe daemon started.", flush=True)
+    except Exception as e:
+        print(f"[Desktop] Scheduler failed: {e}", flush=True)
+
+    try:
+        def _notify(name: str, prompt: str):
+            try:
+                tray.showMessage(
+                    f"Watch: {name}", prompt or "Region changed",
+                    QSystemTrayIcon.Information, 5000)
+            except Exception:
+                pass
+        _df.start_watch_daemon(_notify)
+        print("[Desktop] Region-watch daemon started.", flush=True)
+    except Exception as e:
+        print(f"[Desktop] Watch daemon failed: {e}", flush=True)
 
     # ── System tray icon — table-stakes hygiene so the app feels native.
     # Shows in the Windows taskbar tray, right-click for Show/Hide/Quit.

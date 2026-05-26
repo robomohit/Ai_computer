@@ -276,6 +276,676 @@ def load_pending_task() -> Optional[dict]:
 # ─────────────────────────────────────────────────────────────────────────────
 # TELEMETRY — always off. Single source of truth for the privacy panel.
 # ─────────────────────────────────────────────────────────────────────────────
+# ─────────────────────────────────────────────────────────────────────────────
+# UIA TREE NAVIGATION — find controls by name/role, no pixel coords
+# Uses Microsoft IUIAutomation COM via the `uiautomation` PyPI lib if present.
+# ─────────────────────────────────────────────────────────────────────────────
+def _uia_root(app_hint: str = ""):
+    """Return the right starting control to search.
+    - If app_hint matches a top-level window title (case-insensitive
+      substring), search that one.
+    - Else search the foreground window.
+    """
+    import uiautomation as uia
+    if app_hint:
+        hint = app_hint.lower()
+        for top in uia.GetRootControl().GetChildren():
+            try:
+                if hint in (top.Name or "").lower():
+                    return top
+            except Exception:
+                continue
+    return uia.GetForegroundControl()
+
+
+def _score_match(query: str, name: str, aid: str, role: str) -> int:
+    """Higher = better match."""
+    q = query.lower().strip()
+    n = (name or "").lower()
+    a = (aid or "").lower()
+    r = (role or "").lower()
+    if not q:
+        return 0
+    if n == q:    return 100   # exact name
+    if a == q:    return 95    # exact automation id
+    if n.startswith(q): return 70
+    if q in n:    return 50
+    if q in a:    return 40
+    if q in r:    return 20
+    # Word-boundary match in name (e.g. "send" in "Send button")
+    if any(w == q for w in n.split()):
+        return 60
+    return 0
+
+
+def find_ui_elements(query: str, app_hint: str = "",
+                     limit: int = 5) -> dict:
+    """Return up to `limit` matching controls, ranked by match score."""
+    try:
+        import uiautomation as uia  # noqa: F401
+    except ImportError:
+        return {"ok": False,
+                "error": "uiautomation not installed (pip install uiautomation)"}
+    try:
+        root = _uia_root(app_hint)
+        candidates: list[tuple[int, dict]] = []
+
+        def walk(ctrl, depth=0):
+            if depth > 10:
+                return
+            try:
+                name = ctrl.Name or ""
+                aid = ctrl.AutomationId or ""
+                role = ctrl.ControlTypeName or ""
+                score = _score_match(query, name, aid, role)
+                if score > 0:
+                    rect = ctrl.BoundingRectangle
+                    # Skip 0-size controls (offscreen / hidden)
+                    if rect.right > rect.left and rect.bottom > rect.top:
+                        candidates.append((score, {
+                            "name": name,
+                            "automation_id": aid,
+                            "control_type": role,
+                            "x": (rect.left + rect.right) // 2,
+                            "y": (rect.top + rect.bottom) // 2,
+                            "width": rect.right - rect.left,
+                            "height": rect.bottom - rect.top,
+                            "score": score,
+                        }))
+                for child in ctrl.GetChildren():
+                    walk(child, depth + 1)
+            except Exception:
+                pass
+
+        walk(root)
+        candidates.sort(key=lambda x: -x[0])
+        items = [c for _, c in candidates[:limit]]
+        if not items:
+            return {"ok": False, "error": f"no UIA control matched '{query}'"}
+        return {"ok": True, "items": items}
+    except Exception as exc:
+        return {"ok": False, "error": str(exc)}
+
+
+def find_ui_element(query: str, app_hint: str = "") -> dict:
+    """Single-result variant — returns the highest-scoring match."""
+    res = find_ui_elements(query, app_hint, limit=1)
+    if not res.get("ok"):
+        return res
+    item = res["items"][0]
+    return {"ok": True, **item}
+
+
+def click_ui_element(query: str, app_hint: str = "",
+                     button: str = "left") -> dict:
+    """Find a control then physically click its center via pyautogui."""
+    hit = find_ui_element(query, app_hint)
+    if not hit.get("ok"):
+        return hit
+    try:
+        import pyautogui
+        pyautogui.click(hit["x"], hit["y"], button=button)
+        return {"ok": True, "clicked": {"name": hit["name"],
+                                         "x": hit["x"], "y": hit["y"],
+                                         "control_type": hit["control_type"]}}
+    except Exception as exc:
+        return {"ok": False, "error": str(exc), "found_at": hit}
+
+
+# ─────────────────────────────────────────────────────────────────────────────
+# CLIPBOARD HISTORY — tail clipboard in a background thread, keep last N items
+# ─────────────────────────────────────────────────────────────────────────────
+_clip_history: list[dict] = []        # newest first
+_CLIP_HISTORY_MAX = 50
+_clip_lock = None                     # threading.Lock lazily created
+_clip_thread_started = False
+
+
+def _clip_path() -> Path:
+    base = Path(os.environ.get("AI_COMPUTER_WORKSPACE", ".")).resolve()
+    return base / "clipboard_history.json"
+
+
+def _load_clip_history() -> None:
+    global _clip_history
+    try:
+        if _clip_path().exists():
+            _clip_history = json.loads(_clip_path().read_text(encoding="utf-8"))
+    except Exception:
+        _clip_history = []
+
+
+def _save_clip_history() -> None:
+    try:
+        _clip_path().parent.mkdir(parents=True, exist_ok=True)
+        _clip_path().write_text(
+            json.dumps(_clip_history[:_CLIP_HISTORY_MAX], indent=2),
+            encoding="utf-8")
+    except Exception:
+        pass
+
+
+def start_clipboard_watcher() -> None:
+    """Idempotent: starts a background thread that polls the clipboard
+    every 1s and prepends new text to the history."""
+    global _clip_thread_started, _clip_lock
+    if _clip_thread_started:
+        return
+    _clip_thread_started = True
+    import threading
+    _clip_lock = threading.Lock()
+    _load_clip_history()
+
+    def _poll():
+        last_text = ""
+        while True:
+            try:
+                # Use Qt's clipboard if available (already in capsule app)
+                from PySide6.QtWidgets import QApplication
+                app = QApplication.instance()
+                if app is None:
+                    time.sleep(2)
+                    continue
+                cb = app.clipboard()
+                text = (cb.text() or "").strip()
+                if text and text != last_text and len(text) <= 8000:
+                    last_text = text
+                    with _clip_lock:
+                        # dedupe: bump existing item to front
+                        _clip_history[:] = [
+                            h for h in _clip_history if h["text"] != text]
+                        _clip_history.insert(0, {
+                            "text": text,
+                            "ts": time.time(),
+                            "preview": text[:120],
+                        })
+                        del _clip_history[_CLIP_HISTORY_MAX:]
+                        _save_clip_history()
+            except Exception:
+                pass
+            time.sleep(1.0)
+
+    t = threading.Thread(target=_poll, daemon=True)
+    t.start()
+
+
+def list_clipboard_history(limit: int = 20) -> list[dict]:
+    return _clip_history[:limit]
+
+
+def search_clipboard_history(query: str, limit: int = 10) -> list[dict]:
+    q = query.lower()
+    return [h for h in _clip_history if q in h["text"].lower()][:limit]
+
+
+# ─────────────────────────────────────────────────────────────────────────────
+# SCHEDULED RECIPES — JSON-persisted cron list, daemon checks every minute
+# ─────────────────────────────────────────────────────────────────────────────
+def _sched_path() -> Path:
+    base = Path(os.environ.get("AI_COMPUTER_WORKSPACE", ".")).resolve()
+    return base / "scheduled_recipes.json"
+
+
+def list_scheduled() -> list[dict]:
+    try:
+        if _sched_path().exists():
+            return json.loads(_sched_path().read_text(encoding="utf-8"))
+    except Exception:
+        pass
+    return []
+
+
+def add_scheduled(name: str, when: str, goal: str, mode: str = "auto") -> dict:
+    """`when` is a simple "HH:MM" (daily) or "weekday HH:MM" (Mon..Sun)
+    or `every Nm` (every N minutes)."""
+    item = {
+        "id": f"sch-{int(time.time())}",
+        "name": name, "when": when, "goal": goal, "mode": mode,
+        "last_run": 0,
+    }
+    items = list_scheduled()
+    items.append(item)
+    _sched_path().parent.mkdir(parents=True, exist_ok=True)
+    _sched_path().write_text(json.dumps(items, indent=2), encoding="utf-8")
+    return item
+
+
+def remove_scheduled(sid: str) -> bool:
+    items = [i for i in list_scheduled() if i["id"] != sid]
+    _sched_path().write_text(json.dumps(items, indent=2), encoding="utf-8")
+    return True
+
+
+_sched_thread_started = False
+
+
+def start_scheduler_daemon(submit_fn) -> None:
+    """`submit_fn(goal, mode)` is called when a scheduled item is due."""
+    global _sched_thread_started
+    if _sched_thread_started:
+        return
+    _sched_thread_started = True
+    import threading
+    from datetime import datetime
+
+    DOW = ["mon", "tue", "wed", "thu", "fri", "sat", "sun"]
+
+    def _due(when: str, now: datetime, last: float) -> bool:
+        try:
+            w = when.strip().lower()
+            # "every Nm"
+            if w.startswith("every"):
+                parts = w.split()
+                if len(parts) >= 2 and parts[1].endswith("m"):
+                    n = int(parts[1][:-1])
+                    return time.time() - last >= n * 60
+            # "HH:MM" daily
+            if ":" in w and " " not in w:
+                hh, mm = w.split(":"); hh = int(hh); mm = int(mm)
+                if now.hour == hh and now.minute == mm:
+                    if (time.time() - last) > 90:
+                        return True
+            # "mon 09:00" weekday
+            if " " in w:
+                day, t = w.split(); hh, mm = t.split(":")
+                if (DOW[now.weekday()] == day.lower()
+                        and now.hour == int(hh) and now.minute == int(mm)):
+                    if (time.time() - last) > 90:
+                        return True
+        except Exception:
+            return False
+        return False
+
+    def _loop():
+        while True:
+            try:
+                items = list_scheduled()
+                now = datetime.now()
+                for it in items:
+                    if _due(it["when"], now, it.get("last_run", 0)):
+                        try:
+                            submit_fn(it["goal"], it.get("mode", "auto"))
+                        except Exception:
+                            pass
+                        it["last_run"] = time.time()
+                        _sched_path().write_text(
+                            json.dumps(items, indent=2), encoding="utf-8")
+            except Exception:
+                pass
+            time.sleep(30)
+
+    threading.Thread(target=_loop, daemon=True).start()
+
+
+# ─────────────────────────────────────────────────────────────────────────────
+# FORM-PROFILE AUTOFILL — store named profiles, fill matching labels via UIA
+# ─────────────────────────────────────────────────────────────────────────────
+def _profile_path() -> Path:
+    base = Path(os.environ.get("AI_COMPUTER_WORKSPACE", ".")).resolve()
+    return base / "form_profiles.json"
+
+
+def list_profiles() -> dict:
+    try:
+        if _profile_path().exists():
+            return json.loads(_profile_path().read_text(encoding="utf-8"))
+    except Exception:
+        pass
+    return {}
+
+
+def save_profile(name: str, fields: dict) -> dict:
+    profiles = list_profiles()
+    profiles[name] = fields
+    _profile_path().parent.mkdir(parents=True, exist_ok=True)
+    _profile_path().write_text(json.dumps(profiles, indent=2), encoding="utf-8")
+    return profiles[name]
+
+
+def delete_profile(name: str) -> None:
+    profiles = list_profiles()
+    profiles.pop(name, None)
+    _profile_path().write_text(json.dumps(profiles, indent=2), encoding="utf-8")
+
+
+def autofill_active_form(profile_name: str) -> dict:
+    """Walk the foreground app's UIA tree, find inputs, match each field's
+    label/AutomationId to a profile key, type the matching value."""
+    profiles = list_profiles()
+    profile = profiles.get(profile_name)
+    if not profile:
+        return {"ok": False, "error": f"no profile '{profile_name}'"}
+    try:
+        import uiautomation as uia
+    except ImportError:
+        return {"ok": False, "error": "needs `pip install uiautomation`"}
+    root = uia.GetForegroundControl()
+    filled: list[str] = []
+    # Field-name → list of label keywords to match (case-insensitive)
+    syn = {
+        "name":     ["name", "full name", "first name"],
+        "email":    ["email", "e-mail"],
+        "phone":    ["phone", "telephone", "mobile"],
+        "address":  ["address", "street"],
+        "city":     ["city"],
+        "state":    ["state", "province"],
+        "zip":      ["zip", "postal", "postcode"],
+        "country":  ["country"],
+        "company":  ["company", "organization", "employer"],
+        "title":    ["title", "job title", "role"],
+    }
+    def walk(ctrl, depth=0):
+        if depth > 8: return
+        try:
+            if (ctrl.ControlTypeName or "").lower() == "edit":
+                label = (ctrl.Name or "").lower()
+                aid = (ctrl.AutomationId or "").lower()
+                for key, value in profile.items():
+                    keys = syn.get(key.lower(), [key.lower()])
+                    if any(k in label or k in aid for k in keys):
+                        try:
+                            ctrl.SendKeys(str(value), waitTime=0.05)
+                            filled.append(f"{key}={value}")
+                            break
+                        except Exception:
+                            pass
+            for child in ctrl.GetChildren():
+                walk(child, depth + 1)
+        except Exception:
+            pass
+    walk(root)
+    return {"ok": True, "filled": filled,
+            "skipped_due_to_no_match": [k for k in profile if k not in
+                                         [f.split("=")[0] for f in filled]]}
+
+
+# ─────────────────────────────────────────────────────────────────────────────
+# SCREEN-REGION WATCH & NOTIFY
+# ─────────────────────────────────────────────────────────────────────────────
+def _watches_path() -> Path:
+    base = Path(os.environ.get("AI_COMPUTER_WORKSPACE", ".")).resolve()
+    return base / "screen_watches.json"
+
+
+def list_watches() -> list[dict]:
+    try:
+        if _watches_path().exists():
+            return json.loads(_watches_path().read_text(encoding="utf-8"))
+    except Exception:
+        pass
+    return []
+
+
+def add_watch(name: str, x: int, y: int, w: int, h: int,
+              every_sec: int, prompt: str = "") -> dict:
+    item = {"id": f"watch-{int(time.time())}",
+            "name": name, "x": x, "y": y, "w": w, "h": h,
+            "every_sec": max(15, int(every_sec)),
+            "prompt": prompt or "Has this region changed meaningfully?",
+            "last_check": 0, "last_hash": ""}
+    items = list_watches()
+    items.append(item)
+    _watches_path().parent.mkdir(parents=True, exist_ok=True)
+    _watches_path().write_text(json.dumps(items, indent=2), encoding="utf-8")
+    return item
+
+
+def remove_watch(wid: str) -> bool:
+    items = [i for i in list_watches() if i["id"] != wid]
+    _watches_path().write_text(json.dumps(items, indent=2), encoding="utf-8")
+    return True
+
+
+def _grab_region_hash(x: int, y: int, w: int, h: int) -> str:
+    """Quick perceptual-ish hash: capture region, compute md5 of downscaled."""
+    import hashlib
+    try:
+        import mss
+        with mss.mss() as sct:
+            shot = sct.grab({"left": x, "top": y, "width": w, "height": h})
+            data = shot.rgb
+        # Downsample to 16x16-ish chunks for change tolerance
+        return hashlib.md5(data[::64]).hexdigest()
+    except Exception:
+        return ""
+
+
+_watch_thread_started = False
+
+
+def start_watch_daemon(notify_fn) -> None:
+    """`notify_fn(name, prompt)` is called when a watched region changes."""
+    global _watch_thread_started
+    if _watch_thread_started:
+        return
+    _watch_thread_started = True
+    import threading
+
+    def _loop():
+        while True:
+            try:
+                items = list_watches()
+                changed = False
+                for w in items:
+                    if time.time() - w.get("last_check", 0) < w["every_sec"]:
+                        continue
+                    h = _grab_region_hash(w["x"], w["y"], w["w"], w["h"])
+                    if h and w.get("last_hash") and h != w["last_hash"]:
+                        try:
+                            notify_fn(w["name"], w["prompt"])
+                        except Exception:
+                            pass
+                    w["last_hash"] = h
+                    w["last_check"] = time.time()
+                    changed = True
+                if changed:
+                    _watches_path().write_text(
+                        json.dumps(items, indent=2), encoding="utf-8")
+            except Exception:
+                pass
+            time.sleep(5)
+
+    threading.Thread(target=_loop, daemon=True).start()
+
+
+# ─────────────────────────────────────────────────────────────────────────────
+# CROSS-APP "SEND TO" — last answer → Notepad / Excel / clipboard
+# ─────────────────────────────────────────────────────────────────────────────
+def send_to(target: str, text: str) -> dict:
+    """target = 'notepad' | 'excel' | 'clipboard' | 'paint'"""
+    import subprocess, tempfile
+    if target == "clipboard":
+        try:
+            from PySide6.QtWidgets import QApplication
+            app = QApplication.instance()
+            if app is None:
+                return {"ok": False, "error": "no Qt app running"}
+            app.clipboard().setText(text)
+            return {"ok": True, "target": "clipboard"}
+        except Exception as e:
+            return {"ok": False, "error": str(e)}
+    if target == "notepad":
+        try:
+            tmp = tempfile.NamedTemporaryFile(suffix=".txt", delete=False,
+                                              mode="w", encoding="utf-8")
+            tmp.write(text); tmp.close()
+            subprocess.Popen(["notepad.exe", tmp.name])
+            return {"ok": True, "target": "notepad", "path": tmp.name}
+        except Exception as e:
+            return {"ok": False, "error": str(e)}
+    if target == "excel":
+        # If the text looks like CSV/TSV, save as .csv and open with Excel
+        try:
+            tmp = tempfile.NamedTemporaryFile(suffix=".csv", delete=False,
+                                              mode="w", encoding="utf-8")
+            tmp.write(text); tmp.close()
+            os.startfile(tmp.name)
+            return {"ok": True, "target": "excel", "path": tmp.name}
+        except Exception as e:
+            return {"ok": False, "error": str(e)}
+    if target == "paint":
+        try:
+            subprocess.Popen(["mspaint.exe"])
+            return {"ok": True, "target": "paint"}
+        except Exception as e:
+            return {"ok": False, "error": str(e)}
+    return {"ok": False, "error": f"unknown target '{target}'"}
+
+
+# ─────────────────────────────────────────────────────────────────────────────
+# OCR — Windows 11 has Windows.Media.Ocr but binding is heavy. Fall back to
+# pytesseract if present, otherwise gracefully report.
+# ─────────────────────────────────────────────────────────────────────────────
+def ocr_region(x: int, y: int, w: int, h: int) -> dict:
+    try:
+        import mss
+        with mss.mss() as sct:
+            shot = sct.grab({"left": x, "top": y, "width": w, "height": h})
+            from PIL import Image
+            img = Image.frombytes("RGB", shot.size, shot.rgb)
+    except Exception as e:
+        return {"ok": False, "error": f"capture failed: {e}"}
+    try:
+        import pytesseract
+        text = pytesseract.image_to_string(img)
+        return {"ok": True, "text": text.strip(), "backend": "tesseract"}
+    except ImportError:
+        return {"ok": False, "error": "pytesseract not installed; "
+                "`pip install pytesseract` + install Tesseract OCR binary"}
+    except Exception as e:
+        return {"ok": False, "error": str(e)}
+
+
+# ─────────────────────────────────────────────────────────────────────────────
+# LOCAL RAG — folder embedding + question answering via chroma
+# ─────────────────────────────────────────────────────────────────────────────
+def rag_index_folder(folder: str, name: str = "default") -> dict:
+    """Embed all .txt/.md/.py files in folder into a chroma collection."""
+    try:
+        import chromadb
+    except ImportError:
+        return {"ok": False, "error": "chromadb not installed"}
+    try:
+        client = chromadb.PersistentClient(
+            path=str(Path(os.environ.get(
+                "AI_COMPUTER_WORKSPACE", ".")).resolve() / "rag_db"))
+        try:
+            coll = client.get_collection(name)
+        except Exception:
+            coll = client.create_collection(name)
+        docs = []
+        ids = []
+        for p in Path(folder).rglob("*"):
+            if p.is_file() and p.suffix.lower() in {".txt", ".md", ".py",
+                                                     ".js", ".ts", ".json"}:
+                try:
+                    text = p.read_text(encoding="utf-8", errors="replace")
+                    # Skip very large files
+                    if len(text) > 50_000:
+                        text = text[:50_000]
+                    # Naive chunk: 1.5KB blocks
+                    for i in range(0, len(text), 1500):
+                        chunk = text[i:i+1500]
+                        if chunk.strip():
+                            docs.append(chunk)
+                            ids.append(f"{p.name}#{i}")
+                except Exception:
+                    continue
+        if not docs:
+            return {"ok": False, "error": "no indexable files found"}
+        # chroma's default embedder downloads a small model; OK for ship MVP
+        coll.add(documents=docs, ids=ids)
+        return {"ok": True, "collection": name, "n_chunks": len(docs)}
+    except Exception as e:
+        return {"ok": False, "error": str(e)}
+
+
+def rag_query(name: str, query: str, top_k: int = 5) -> dict:
+    try:
+        import chromadb
+        client = chromadb.PersistentClient(
+            path=str(Path(os.environ.get(
+                "AI_COMPUTER_WORKSPACE", ".")).resolve() / "rag_db"))
+        coll = client.get_collection(name)
+        res = coll.query(query_texts=[query], n_results=top_k)
+        return {"ok": True, "hits": [
+            {"id": i, "doc": d}
+            for i, d in zip(res["ids"][0], res["documents"][0])
+        ]}
+    except Exception as e:
+        return {"ok": False, "error": str(e)}
+
+
+# ─────────────────────────────────────────────────────────────────────────────
+# PER-APP TRUST POLICIES
+# ─────────────────────────────────────────────────────────────────────────────
+def _trust_path() -> Path:
+    base = Path(os.environ.get("AI_COMPUTER_WORKSPACE", ".")).resolve()
+    return base / "trust_policies.json"
+
+
+def list_trust() -> dict:
+    try:
+        if _trust_path().exists():
+            return json.loads(_trust_path().read_text(encoding="utf-8"))
+    except Exception:
+        pass
+    return {}
+
+
+def set_trust(exe_name: str, level: str) -> dict:
+    """level ∈ {allow, ask, deny}"""
+    if level not in ("allow", "ask", "deny"):
+        return {"ok": False, "error": f"bad level '{level}'"}
+    pol = list_trust()
+    pol[exe_name.lower()] = level
+    _trust_path().parent.mkdir(parents=True, exist_ok=True)
+    _trust_path().write_text(json.dumps(pol, indent=2), encoding="utf-8")
+    return {"ok": True, "exe": exe_name.lower(), "level": level}
+
+
+def get_trust(exe_name: str) -> str:
+    return list_trust().get(exe_name.lower(), "ask")
+
+
+# ─────────────────────────────────────────────────────────────────────────────
+# UNDO STACK — record inverse actions, replay
+# ─────────────────────────────────────────────────────────────────────────────
+_undo_stack: list[dict] = []
+_UNDO_MAX = 20
+
+
+def record_undo(action: dict) -> None:
+    """action: {kind: 'type'|'move'|'click', inverse_fn_name, args}"""
+    _undo_stack.append(action)
+    del _undo_stack[:-_UNDO_MAX]
+
+
+def pop_and_execute_undo() -> dict:
+    if not _undo_stack:
+        return {"ok": False, "error": "nothing to undo"}
+    last = _undo_stack.pop()
+    # Built-in handlers
+    kind = last.get("kind")
+    try:
+        if kind == "type":
+            # Ctrl+Z in active app
+            import pyautogui
+            pyautogui.hotkey("ctrl", "z")
+            return {"ok": True, "undone": "Ctrl+Z to undo last type"}
+        if kind == "move_file":
+            import shutil
+            shutil.move(last["args"]["dst"], last["args"]["src"])
+            return {"ok": True, "undone": "file moved back"}
+        if kind == "close_tab":
+            import pyautogui
+            pyautogui.hotkey("ctrl", "shift", "t")
+            return {"ok": True, "undone": "Ctrl+Shift+T to reopen tab"}
+        return {"ok": False, "error": f"unknown undo kind '{kind}'"}
+    except Exception as e:
+        return {"ok": False, "error": str(e)}
+
+
 TELEMETRY_PROMISE = {
     "telemetry_enabled": False,
     "outbound_destinations": [

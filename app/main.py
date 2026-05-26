@@ -912,6 +912,202 @@ async def set_autostart_endpoint(body: _AutostartBody):
     return {"enabled": is_autostart_enabled()}
 
 
+# ── UIA navigation
+@app.get("/api/desktop/uia/find")
+async def uia_find(query: str, app: str = ""):
+    from .widget.desktop_features import find_ui_element
+    return find_ui_element(query, app)
+
+
+@app.get("/api/desktop/uia/candidates")
+async def uia_candidates(query: str, app: str = "", limit: int = 5):
+    """Return top-N ranked candidates for the query."""
+    from .widget.desktop_features import find_ui_elements
+    return find_ui_elements(query, app, limit)
+
+
+class _UiaClickBody(BaseModel):
+    query: str
+    app: str = ""
+    button: str = "left"
+
+
+@app.post("/api/desktop/uia/click")
+async def uia_click(body: _UiaClickBody):
+    """Find a control by name + physically click it via pyautogui."""
+    from .widget.desktop_features import click_ui_element
+    return click_ui_element(body.query, body.app, body.button)
+
+
+# ── Clipboard history
+@app.get("/api/desktop/clipboard/history")
+async def clip_history(limit: int = 20):
+    from .widget.desktop_features import list_clipboard_history
+    return {"items": list_clipboard_history(limit)}
+
+
+@app.get("/api/desktop/clipboard/search")
+async def clip_search(q: str, limit: int = 10):
+    from .widget.desktop_features import search_clipboard_history
+    return {"items": search_clipboard_history(q, limit)}
+
+
+# ── Scheduled recipes
+@app.get("/api/desktop/scheduled")
+async def list_sched():
+    from .widget.desktop_features import list_scheduled
+    return {"items": list_scheduled()}
+
+
+class _SchedBody(BaseModel):
+    name: str
+    when: str
+    goal: str
+    mode: str = "auto"
+
+
+@app.post("/api/desktop/scheduled")
+async def add_sched(body: _SchedBody):
+    from .widget.desktop_features import add_scheduled
+    return add_scheduled(body.name, body.when, body.goal, body.mode)
+
+
+@app.delete("/api/desktop/scheduled/{sid}")
+async def del_sched(sid: str):
+    from .widget.desktop_features import remove_scheduled
+    return {"ok": remove_scheduled(sid)}
+
+
+# ── Form profiles + autofill
+@app.get("/api/desktop/profiles")
+async def get_profiles():
+    from .widget.desktop_features import list_profiles
+    return list_profiles()
+
+
+class _ProfileBody(BaseModel):
+    name: str
+    fields: dict
+
+
+@app.post("/api/desktop/profiles")
+async def put_profile(body: _ProfileBody):
+    from .widget.desktop_features import save_profile
+    return save_profile(body.name, body.fields)
+
+
+@app.delete("/api/desktop/profiles/{name}")
+async def del_profile(name: str):
+    from .widget.desktop_features import delete_profile
+    delete_profile(name)
+    return {"ok": True}
+
+
+@app.post("/api/desktop/profiles/{name}/autofill")
+async def do_autofill(name: str):
+    from .widget.desktop_features import autofill_active_form
+    return autofill_active_form(name)
+
+
+# ── Screen-region watch
+@app.get("/api/desktop/watches")
+async def get_watches():
+    from .widget.desktop_features import list_watches
+    return {"items": list_watches()}
+
+
+class _WatchBody(BaseModel):
+    name: str
+    x: int
+    y: int
+    w: int
+    h: int
+    every_sec: int = 60
+    prompt: str = ""
+
+
+@app.post("/api/desktop/watches")
+async def add_watch_ep(body: _WatchBody):
+    from .widget.desktop_features import add_watch
+    return add_watch(body.name, body.x, body.y, body.w, body.h,
+                     body.every_sec, body.prompt)
+
+
+@app.delete("/api/desktop/watches/{wid}")
+async def del_watch(wid: str):
+    from .widget.desktop_features import remove_watch
+    return {"ok": remove_watch(wid)}
+
+
+# ── Cross-app "send to"
+class _SendBody(BaseModel):
+    target: str  # 'notepad' | 'excel' | 'clipboard' | 'paint'
+    text: str
+
+
+@app.post("/api/desktop/send-to")
+async def send_to_ep(body: _SendBody):
+    from .widget.desktop_features import send_to
+    return send_to(body.target, body.text)
+
+
+# ── OCR
+class _OcrBody(BaseModel):
+    x: int
+    y: int
+    w: int
+    h: int
+
+
+@app.post("/api/desktop/ocr")
+async def ocr_ep(body: _OcrBody):
+    from .widget.desktop_features import ocr_region
+    return ocr_region(body.x, body.y, body.w, body.h)
+
+
+# ── Local RAG over a folder
+class _RagIndexBody(BaseModel):
+    folder: str
+    name: str = "default"
+
+
+@app.post("/api/desktop/rag/index")
+async def rag_index_ep(body: _RagIndexBody):
+    from .widget.desktop_features import rag_index_folder
+    return rag_index_folder(body.folder, body.name)
+
+
+@app.get("/api/desktop/rag/query")
+async def rag_query_ep(name: str, q: str, top_k: int = 5):
+    from .widget.desktop_features import rag_query
+    return rag_query(name, q, top_k)
+
+
+# ── Per-app trust policies
+@app.get("/api/desktop/trust")
+async def list_trust_ep():
+    from .widget.desktop_features import list_trust
+    return list_trust()
+
+
+class _TrustBody(BaseModel):
+    exe: str
+    level: str
+
+
+@app.post("/api/desktop/trust")
+async def set_trust_ep(body: _TrustBody):
+    from .widget.desktop_features import set_trust
+    return set_trust(body.exe, body.level)
+
+
+# ── Undo stack
+@app.post("/api/desktop/undo")
+async def undo_ep():
+    from .widget.desktop_features import pop_and_execute_undo
+    return pop_and_execute_undo()
+
+
 @app.get("/api/models")
 async def get_models():
     """Return only models whose API keys are actually configured."""
