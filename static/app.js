@@ -279,7 +279,7 @@
 
   // Phase C2: build a step-timeline inside the turn-summary body on first expand.
   // Raw tool cards are hidden; one icon-gutter row per step is shown instead.
-  const _STEP_ICONS = { command: '⟩', file: '✎', search: '◎', browser: '⊞', action: '⊙', step: '·' };
+  const _STEP_ICONS = { command: '⟩', file: '✎', search: '◎', browser: '⊞', action: '⊙', step: '<svg aria-hidden="true" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><circle cx="12" cy="12" r="2"></circle></svg>' };
   const _buildTurnTimeline = (body, steps) => {
     if (!steps.length) return;
     Array.from(body.children).forEach(c => { if (!c.classList.contains('turn-timeline')) c.style.display = 'none'; });
@@ -797,7 +797,7 @@
       <span class="history-copy">
         <span class="history-goal"></span>
         <span class="history-meta">${relTime(taskRecord.created_at || taskRecord.timestamp || taskRecord.finished_at) || humanize(status || 'saved')}</span>
-        <button type="button" class="history-retask" tabindex="-1">↻ Copy task</button>
+        <button type="button" class="history-retask" tabindex="-1"><svg aria-hidden="true" width="14" height="14" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><path d="M3 12a9 9 0 1 0 9-9 9.75 9.75 0 0 0-6.74 2.74L3 8"/><path d="M3 3v5h5"/></svg> Copy task</button>
       </span>
     `;
     item.querySelector('.history-goal').textContent = taskRecord.goal || '(untitled)';
@@ -3364,7 +3364,7 @@
             ${ICONS[c.icon] || ICONS.folder}
           </span>
           <span class="conn-tile-name">${c.label}</span>
-          <span class="conn-tile-status">${c.linked ? '✓ Linked' : c.auth_kind === 'local' ? 'Built-in' : 'Not linked'}</span>
+          <span class="conn-tile-status">${c.linked ? '<svg aria-hidden="true" aria-label="Linked" width="14" height="14" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><polyline points="20 6 9 17 4 12"></polyline></svg> Linked' : c.auth_kind === 'local' ? 'Built-in' : 'Not linked'}</span>
         </div>
         <p class="conn-tile-tip">${c.tip || ''}</p>
         ${c.auth_kind === 'local' ? '' :

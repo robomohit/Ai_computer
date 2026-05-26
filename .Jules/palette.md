@@ -1,3 +1,7 @@
 ## 2026-04-21 - [Clean Stream UI]
 **Learning:** Text-based icons (`=` and `x`) paired with missing `aria-label`s hurt both aesthetic consistency and screen reader usability. Bulky box-shadows and thick borders on chat/stream UI components often contribute to cognitive overload.
 **Action:** Always replace purely structural text pseudo-icons with semantic SVGs that gracefully handle color-inversion and hover states. When updating streaming UIs (like chat), default to flatter layouts (removing heavy borders and drop shadows) to emulate modern clean patterns (e.g. Claude Code) while maintaining distinct backgrounds to separate context zones.
+
+## 2026-05-26 - [Avoid Over-replacing Semantic Text]
+**Learning:** While replacing purely structural pseudo-icons (like `x`, `=`, `↻`, `✓`, `·`) with SVGs improves accessibility, it is important to preserve valid text typography. For example, replacing a scaling multiplier `1.0×` with `1.0&times;` or an SVG might be unnecessary or semantically incorrect if it's not a structural icon but rather part of the content text. Using the literal character `×` with standard text assignment (`.textContent`) is safer and cleaner than using `.innerHTML` solely to render HTML entities.
+**Action:** When evaluating text elements for SVG replacement, ensure they are acting as structural pseudo-icons (like a close button `✕` or checkmark `✓`). Leave natural text and standard typography (like multipliers `×`) as plain text via `.textContent`. Always review changes to ensure no temporary scripts are left in the repository.
