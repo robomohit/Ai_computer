@@ -70,13 +70,41 @@ async def _lifespan(application):
         except Exception as exc:
             _lifespan_log.warning("MCP server initialization failed: %s", exc)
 
-    global _telegram_task, _discord_task
+    global _telegram_task, _discord_task, _automation_task
     await _init_mcp()
     _telegram_task = asyncio.create_task(start_telegram(service))
     _discord_task = asyncio.create_task(start_discord(service))
+
+    from .automation import get_registry as _get_auto_registry, poll_and_fire as _poll_and_fire
+
+    async def _automation_submit(goal: str) -> None:
+        tid = f"automation-{uuid.uuid4().hex[:8]}"
+        for env_var, mdl in [
+            ("OPENROUTER_API_KEY", "openrouter/nvidia/nemotron-3-super-120b-a12b:free"),
+            ("ANTHROPIC_API_KEY", "claude-3-5-sonnet-20241022"),
+            ("OPENAI_API_KEY", "gpt-4o-mini"),
+            ("GOOGLE_API_KEY", "gemini-2.0-flash"),
+            ("GROQ_API_KEY", "groq/llama-3.3-70b-versatile"),
+        ]:
+            if os.environ.get(env_var):
+                selected = mdl
+                break
+        else:
+            _lifespan_log.warning("Automation: no API key configured, cannot fire trigger for %r", goal)
+            return
+        spec = {
+            "task_id": tid, "goal": goal, "model": selected,
+            "mode": "auto", "screen_width": 1280, "screen_height": 800,
+            "environment": _build_task_environment(HOME_DIR, project_folder_selected=False),
+        }
+        _start_task_from_spec(spec)
+        _lifespan_log.info("Automation: fired task %s for goal %r", tid, goal)
+
+    _automation_task = asyncio.create_task(_poll_and_fire(_automation_submit))
+
     yield
-    # Shutdown: cancel integrations, then clean up background browsers
-    for _t in (_telegram_task, _discord_task):
+    # Shutdown: cancel integrations and automation poller, then clean up background browsers
+    for _t in (_telegram_task, _discord_task, _automation_task):
         if _t and not _t.done():
             _t.cancel()
             try:
@@ -191,6 +219,7 @@ bearer = HTTPBearer(auto_error=False)
 _tasks: Dict[str, TaskRecord] = {}
 _telegram_task: Optional[asyncio.Task] = None
 _discord_task: Optional[asyncio.Task] = None
+_automation_task: Optional[asyncio.Task] = None
 
 def _prune_sessions(now: Optional[datetime] = None) -> None:
     now = now or datetime.now(timezone.utc)
@@ -590,6 +619,12 @@ class TaskIn(BaseModel):
     notify_on_completion: bool = False
     auto_commit: bool = False
     autonomy_level: Literal["careful", "balanced", "fast"] = "balanced"
+
+
+class AutomationIn(BaseModel):
+    schedule: str = Field(..., description="5-field cron expression: 'minute hour mday month wday'")
+    task_template: str = Field(..., min_length=1, max_length=2000)
+
 
 @app.middleware("http")
 async def limit_request_size(request: Request, call_next):
@@ -1569,3 +1604,30 @@ async def permissions(body: PermissionIn):
 @app.get("/api/permissions/{task_id}", dependencies=[Depends(verify_token)])
 async def list_permissions(task_id: str):
     return {"task_id": task_id, "granted": service.permissions.granted_scopes(task_id)}
+
+
+# ── Automation (Watch & Act slice 1, AI-7) ────────────────────────────────────
+
+@app.get("/api/automation", dependencies=[Depends(verify_token)])
+async def list_automation():
+    from .automation import get_registry
+    return {"triggers": get_registry().list_triggers()}
+
+
+@app.post("/api/automation", dependencies=[Depends(verify_token)])
+async def add_automation(body: AutomationIn):
+    from .automation import get_registry, CronTrigger
+    try:
+        trigger = CronTrigger(body.schedule, body.task_template)
+    except ValueError as exc:
+        raise HTTPException(status_code=400, detail=str(exc))
+    return get_registry().add(trigger)
+
+
+@app.delete("/api/automation/{trigger_id}", dependencies=[Depends(verify_token)])
+async def remove_automation(trigger_id: str):
+    from .automation import get_registry
+    removed = get_registry().remove(trigger_id)
+    if not removed:
+        raise HTTPException(status_code=404, detail="Trigger not found")
+    return {"removed": True, "id": trigger_id}
