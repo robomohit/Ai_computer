@@ -1141,20 +1141,22 @@ def main(port: int = 8000) -> int:
             self.recipes_row = QHBoxLayout()
             self.recipes_row.setSpacing(6)
             self.recipes_row.addStretch()
+            # Recipe chips — discoverable quick-actions that match the
+            # darker capsule (white-on-dark glass). Hover lifts to accent.
             recipe_qss = (
                 "QPushButton{"
-                "  color: #1A1D24;"
-                "  background: rgba(255,255,255,200);"
-                "  border: 1px solid rgba(20,24,32,40);"
+                "  color: rgba(240,242,248,225);"
+                "  background: rgba(255,255,255,30);"
+                "  border: 1px solid rgba(255,255,255,55);"
                 "  border-radius: 13px;"
                 "  padding: 5px 12px 5px 8px;"
                 "  font-size: 11px;"
                 "}"
                 "QPushButton:hover{"
-                "  background: %s;"
-                "  border-color: %s;"
+                "  background: rgba(91,224,208,80);"
+                "  border-color: rgba(91,224,208,180);"
                 "  color: #062925;"
-                "}" % (ACCENT, ACCENT)
+                "}"
             )
             self.recipe_buttons = []
             for r in RECIPES:
@@ -1166,7 +1168,8 @@ def main(port: int = 8000) -> int:
                 btn.setStyleSheet(recipe_qss)
                 btn.clicked.connect(
                     lambda _c=False, rid=r["id"]: self._apply_recipe(rid))
-                btn.hide()  # hidden by default — Perplexity reference omits them
+                # Visible by default — recipes are the discoverability hook
+                # that tells the user "this is an action agent, not a chat".
                 self.recipe_buttons.append(btn)
                 self.recipes_row.addWidget(btn)
             self.recipes_row.addStretch()
@@ -1913,8 +1916,10 @@ def main(port: int = 8000) -> int:
 
         def _on_running(self, running: bool) -> None:
             self._busy = running
-            # Recipe chips are hidden by default (Perplexity-clean look).
-            # Only the live action ticker toggles based on running state.
+            # Hide recipe chips while busy; show the action ticker.
+            # When idle, show recipes again so the user knows what's possible.
+            for b in self.recipe_buttons:
+                b.setVisible(not running)
             self.action_ticker.setVisible(running)
             if running:
                 self.action_label.setText("Starting…")
@@ -1943,15 +1948,20 @@ def main(port: int = 8000) -> int:
             if not msg:
                 return
             lower = msg.lower()
+            # Surface OpenRouter rate-limits in plain English instead of JSON
+            if "rate-limited" in lower or "429" in lower or "retry shortly" in lower:
+                self.status.setText("Free tier rate-limited — retrying…")
+                return
+            if "openrouter error" in lower:
+                # Many of these are transient; show a calm placeholder
+                self.status.setText("Switching models…")
+                return
             for noise in self._NOISY_STATUS:
                 if noise.lower() in lower:
-                    # Show a friendlier version instead of internal noise
                     self.status.setText("Adjusting strategy…")
                     return
             # Trim and show clean status text
             clean = msg.strip()
-            # Skip the per-second "waiting on model (step X, Ys)" ticker —
-            # the live action ticker already shows progress.
             if "waiting on model" in lower:
                 return
             self.status.setText(clean[:90])
@@ -2133,7 +2143,6 @@ def main(port: int = 8000) -> int:
                 "", "done.", "done", "complete", "finished",
                 "still working — taking longer than expected.",
             }:
-                # Friendlier surface error so the user knows it didn't crash
                 self.status.setText("No response — try rephrasing")
                 self.status.show()
                 QTimer.singleShot(3000, self.status.hide)
@@ -2142,6 +2151,19 @@ def main(port: int = 8000) -> int:
                 self._answer_tools_used = []
                 self._adjust()
                 return
+
+            # Detect free-tier rate-limit cascade and surface a clear note
+            cl = clean.lower()
+            if ("rate-limited" in cl or "rate limit" in cl
+                    or "openrouter error" in cl):
+                # Replace cryptic JSON with a plain-English answer card
+                clean = (
+                    "All free OpenRouter models are rate-limited right now. "
+                    "Wait ~30-60 seconds and try again, or link your own "
+                    "OpenRouter key in Settings → Connectors to remove the "
+                    "limit. Original error preserved below.\n\n"
+                    + clean[:600]
+                )
 
             # Reality-check any "saved to X" file claims so the user sees
             # when the agent hallucinated a file write that didn't happen.
