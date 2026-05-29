@@ -1082,6 +1082,13 @@ def main(port: int = 8000) -> int:
             self._clipboard_text = None       # captured via Clipboard button
             self._attached_file = None        # {"path":..., "text":..., "is_image":bool}
 
+            # Adaptive glass — sampled luminance of whatever is behind the
+            # capsule. A dark backdrop gets clear bright-edged glass; a light
+            # backdrop gets a denser tint + soft dark edge so it never washes
+            # out into muddy grey or shows seams. Re-sampled on a slow timer
+            # and after drags. 0.0 = dark bg, 1.0 = light bg.
+            self._bg_light = 0.0
+
             # Virtual cursor overlay — frameless click-through window that
             # paints a smooth animated cursor + ripple wherever the agent
             # clicks or types. Gives the user a visible "what just happened"
@@ -2415,10 +2422,44 @@ def main(port: int = 8000) -> int:
             hwnd = int(self.winId())
             _round_window(hwnd, self.width(), self.height(), RADIUS)
 
-        # --- liquid-glass painting ---
-        # Acrylic gives us the desktop blur behind the window. On top of that
-        # we paint a translucent tint, a wet top-highlight gradient, and a thin
-        # 1px stroke (brighter on top to mimic light catching the curved edge).
+        def _sample_bg(self) -> None:
+            """Sample a thin ring of screen pixels just OUTSIDE the capsule to
+            estimate backdrop luminance, then adapt the glass. Cheap; runs on a
+            slow timer and after drags."""
+            try:
+                import PIL.ImageGrab as ig
+                tl = self.mapToGlobal(QPoint(0, 0))
+                x, y, w, h = tl.x(), tl.y(), self.width(), self.height()
+                pad = 22
+                shot = ig.grab((x - pad, y - pad, x + w + pad, y + h + pad))
+                px = shot.load()
+                sw, sh = shot.size
+                acc = n = 0
+                # top + bottom strips, then left + right strips (the outer ring)
+                for yy in range(0, pad, 3):
+                    for xx in range(0, sw, 14):
+                        for ry in (yy, sh - 1 - yy):
+                            r, g, b = px[xx, ry][:3]
+                            acc += 0.299 * r + 0.587 * g + 0.114 * b
+                            n += 1
+                for xx in range(0, pad, 3):
+                    for yy in range(0, sh, 14):
+                        for rx in (xx, sw - 1 - xx):
+                            r, g, b = px[rx, yy][:3]
+                            acc += 0.299 * r + 0.587 * g + 0.114 * b
+                            n += 1
+                if not n:
+                    return
+                lum = acc / n / 255.0           # 0..1
+                # smooth, mapped: <0.42 dark, >0.62 light, ramp between
+                target = max(0.0, min(1.0, (lum - 0.42) / 0.20))
+                if abs(target - self._bg_light) > 0.03:
+                    self._bg_light = target
+                    self.update()
+            except Exception:
+                pass
+
+        # --- liquid-glass painting (adaptive) ---
         def paintEvent(self, _e) -> None:
             # ── Apple "liquid glass" material ────────────────────────────────
             # Layered to mimic a thick slab of refractive glass sitting over the
@@ -2438,61 +2479,75 @@ def main(port: int = 8000) -> int:
             path = QPainterPath()
             path.addRoundedRect(inset, inset, w - 1, h - 1, r, r)
 
-            # 1) Cool, clear tint — the acrylic backdrop already supplies the
-            #    frost, so keep this light so it reads as glass, not a slab.
+            # Adaptive blend: t=0 over a dark backdrop (clear glass + bright
+            # edge lensing), t=1 over a light backdrop (denser dark tint so it
+            # never washes to grey, faded highlights, soft DARK edge instead of
+            # the bright rim that would otherwise show as seams on light).
+            t = self._bg_light
+
+            def L(a, b):
+                return a + (b - a) * t
+
+            # 1) Tint — same dark glass colour, but denser over a light backdrop.
             tint = QLinearGradient(0, 0, 0, h)
-            tint.setColorAt(0.0, QColor(60, 68, 84, 78))
-            tint.setColorAt(0.5, QColor(40, 46, 58, 96))
-            tint.setColorAt(1.0, QColor(26, 30, 40, 120))
+            tint.setColorAt(0.0, QColor(60, 68, 84, int(L(78, 156))))
+            tint.setColorAt(0.5, QColor(40, 46, 58, int(L(96, 178))))
+            tint.setColorAt(1.0, QColor(26, 30, 40, int(L(120, 205))))
             p.fillPath(path, tint)
 
-            # 2a) Broad top specular sheen.
+            # 2a) Broad top specular sheen — fades out over light backdrops.
             sheen = QLinearGradient(0, 0, 0, h)
-            sheen.setColorAt(0.00, QColor(255, 255, 255, 95))
-            sheen.setColorAt(0.14, QColor(255, 255, 255, 34))
+            sheen.setColorAt(0.00, QColor(255, 255, 255, int(L(95, 36))))
+            sheen.setColorAt(0.14, QColor(255, 255, 255, int(L(34, 12))))
             sheen.setColorAt(0.40, QColor(255, 255, 255, 0))
             p.fillPath(path, sheen)
 
-            # 2b) Soft specular highlight blob, upper-left (a glossy hotspot).
+            # 2b) Soft specular highlight blob, upper-left.
             p.save()
             p.setClipPath(path)
             blob = QRadialGradient(QPointF(w * 0.30, h * 0.05), w * 0.55)
-            blob.setColorAt(0.0, QColor(255, 255, 255, 70))
-            blob.setColorAt(0.5, QColor(255, 255, 255, 16))
+            blob.setColorAt(0.0, QColor(255, 255, 255, int(L(70, 26))))
+            blob.setColorAt(0.5, QColor(255, 255, 255, int(L(16, 6))))
             blob.setColorAt(1.0, QColor(255, 255, 255, 0))
             p.fillRect(QRectF(0, 0, w, h), blob)
             p.restore()
 
-            # 3) EDGE LENSING — bright inner rim hugging the perimeter. Stroke an
-            #    inset path with progressively brighter, thinner pens so the
-            #    glow concentrates right at the glass edge.
+            # 3) EDGE LENSING — bright inner rim hugging the perimeter (the
+            #    signature liquid-glass tell). Strong on dark, faded to a whisper
+            #    on light so it never reads as a hard seam.
             p.save()
             p.setClipPath(path)
             for width_px, alpha in ((7.0, 26), (4.0, 50), (2.2, 95), (1.0, 165)):
+                a = L(alpha, alpha * 0.18)
                 rim = QLinearGradient(0, 0, 0, h)
-                rim.setColorAt(0.0, QColor(255, 255, 255, min(255, alpha + 80)))
-                rim.setColorAt(0.45, QColor(255, 255, 255, alpha))
-                rim.setColorAt(1.0, QColor(205, 222, 255, min(255, alpha + 20)))
-                pen = QPen(rim, width_px)
-                p.setPen(pen)
+                rim.setColorAt(0.0, QColor(255, 255, 255, int(min(255, a + 80))))
+                rim.setColorAt(0.45, QColor(255, 255, 255, int(a)))
+                # cool-blue tail on dark, neutral white on light (no grey seam)
+                rim.setColorAt(1.0, QColor(int(L(205, 255)), int(L(222, 255)),
+                                           255, int(min(255, a + 20))))
+                p.setPen(QPen(rim, width_px))
                 p.setBrush(Qt.NoBrush)
                 p.drawPath(path)
             p.restore()
 
-            # 4) Soft inner shadow along the bottom — gives the slab thickness.
+            # 4) Soft inner shadow along the bottom — slab thickness.
             p.save()
             p.setClipPath(path)
             shadow = QLinearGradient(0, h * 0.62, 0, h)
             shadow.setColorAt(0.0, QColor(0, 0, 0, 0))
-            shadow.setColorAt(1.0, QColor(0, 0, 0, 60))
+            shadow.setColorAt(1.0, QColor(0, 0, 0, int(L(60, 80))))
             p.fillRect(QRectF(0, h * 0.62, w, h * 0.38), shadow)
             p.restore()
 
-            # 5) Crisp 1px outer rim — brightest at the top, cool tint below.
+            # 5) Crisp 1px outer rim — bright white on dark (light catching the
+            #    edge), soft dark on light (clean edge definition, no glow seam).
             edge = QLinearGradient(0, 0, 0, h)
-            edge.setColorAt(0.0, QColor(255, 255, 255, 225))
-            edge.setColorAt(0.5, QColor(220, 230, 245, 70))
-            edge.setColorAt(1.0, QColor(255, 255, 255, 55))
+            edge.setColorAt(0.0, QColor(int(L(255, 70)), int(L(255, 78)),
+                                        int(L(255, 92)), int(L(225, 90))))
+            edge.setColorAt(0.5, QColor(int(L(220, 60)), int(L(230, 66)),
+                                        int(L(245, 80)), int(L(70, 55))))
+            edge.setColorAt(1.0, QColor(int(L(255, 60)), int(L(255, 66)),
+                                        int(L(255, 80)), int(L(55, 70))))
             p.setPen(QPen(edge, 1.0))
             p.setBrush(Qt.NoBrush)
             p.drawPath(path)
@@ -2509,11 +2564,19 @@ def main(port: int = 8000) -> int:
 
         def mouseReleaseEvent(self, _e) -> None:
             self._drag = None
+            self._sample_bg()  # re-adapt glass to the new backdrop
 
         def showEvent(self, e) -> None:  # noqa: N802
             super().showEvent(e)
             hwnd = int(self.winId())
             _round_window(hwnd, self.width(), self.height(), RADIUS)
+            # Adaptive-glass sampler: initial read + slow periodic re-read so the
+            # capsule keeps matching whatever ends up behind it.
+            self._sample_bg()
+            if not hasattr(self, "_bg_timer"):
+                self._bg_timer = QTimer(self)
+                self._bg_timer.timeout.connect(self._sample_bg)
+                self._bg_timer.start(1500)
             # spring entry — fade + slide
             self.setWindowOpacity(0.0)
             self._intro = QPropertyAnimation(self, b"windowOpacity")
