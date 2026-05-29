@@ -280,6 +280,11 @@ def load_pending_task() -> Optional[dict]:
 # UIA TREE NAVIGATION — find controls by name/role, no pixel coords
 # Uses Microsoft IUIAutomation COM via the `uiautomation` PyPI lib if present.
 # ─────────────────────────────────────────────────────────────────────────────
+# Electron/Chromium apps nest their DOM deeply (Discord's search box sits at
+# UIA depth 12+). A shallow walk silently misses real controls, so we go deep.
+_UIA_MAX_DEPTH = 40
+
+
 def _uia_root(app_hint: str = ""):
     """Return the right starting control to search.
     - If app_hint matches a top-level window title (case-insensitive
@@ -331,7 +336,7 @@ def find_ui_elements(query: str, app_hint: str = "",
         candidates: list[tuple[int, dict]] = []
 
         def walk(ctrl, depth=0):
-            if depth > 10:
+            if depth > _UIA_MAX_DEPTH:
                 return
             try:
                 name = ctrl.Name or ""
@@ -551,7 +556,7 @@ def _find_uia_control(query: str, app_hint: str = ""):
 
         def walk(ctrl, depth=0):
             nonlocal best
-            if depth > 10:
+            if depth > _UIA_MAX_DEPTH:
                 return
             try:
                 name = ctrl.Name or ""
