@@ -1104,6 +1104,7 @@ def main(port: int = 8000) -> int:
             # out into muddy grey or shows seams. Re-sampled on a slow timer
             # and after drags. 0.0 = dark bg, 1.0 = light bg.
             self._bg_light = 0.0
+            self._animating = False           # True during grow/shrink tween
 
             # Virtual cursor overlay — frameless click-through window that
             # paints a smooth animated cursor + ripple wherever the agent
@@ -2453,11 +2454,16 @@ def main(port: int = 8000) -> int:
             anim.setEasingCurve(QEasingCurve.OutCubic)
             anim.setStartValue(QRect(g.x(), g.y(), g.width(), from_h))
             anim.setEndValue(QRect(g.x(), g.y(), g.width(), to_h))
-            # Per-frame: re-clip the rounded region to the current height.
-            anim.valueChanged.connect(
-                lambda _v: _clip_region(int(self.winId()),
-                                        self.width(), self.height(), RADIUS))
-            anim.finished.connect(self._reshape)  # full region + acrylic at end
+
+            # While animating, resizeEvent re-clips region-only (fast); full
+            # region+acrylic reshape happens once on finish.
+            self._animating = True
+
+            def _done():
+                self._animating = False
+                self._reshape()
+
+            anim.finished.connect(_done)
             self._grow_anim = anim
             anim.start()
 
@@ -2640,6 +2646,23 @@ def main(port: int = 8000) -> int:
             self._slide.start()
             self.input.setFocus()
 
+        def _fade_hide(self) -> None:
+            """Smoothly fade the capsule out, then hide it (no graphics effect —
+            animates the window opacity directly, which is artifact-safe)."""
+            anim = QPropertyAnimation(self, b"windowOpacity", self)
+            anim.setDuration(160)
+            anim.setStartValue(self.windowOpacity() or 1.0)
+            anim.setEndValue(0.0)
+            anim.setEasingCurve(QEasingCurve.InCubic)
+
+            def _done():
+                self.hide()
+                self.setWindowOpacity(1.0)  # reset for next show
+
+            anim.finished.connect(_done)
+            self._fade_anim = anim
+            anim.start()
+
         def keyPressEvent(self, e) -> None:
             if e.key() == Qt.Key_Escape:
                 if self.reply.isVisible():
@@ -2650,13 +2673,17 @@ def main(port: int = 8000) -> int:
                     self._adjust()
                 else:
                     self.input.clear()
-                    self.hide()
+                    self._fade_hide()
             else:
                 super().keyPressEvent(e)
 
         def resizeEvent(self, e) -> None:  # noqa: N802
             super().resizeEvent(e)
-            self._reshape()
+            if getattr(self, "_animating", False):
+                # Fast path during the grow/shrink animation — clip only.
+                _clip_region(int(self.winId()), self.width(), self.height(), RADIUS)
+            else:
+                self._reshape()
 
     class HotkeySignaler(QObject):
         toggle = Signal()
@@ -2666,7 +2693,7 @@ def main(port: int = 8000) -> int:
     signaler = HotkeySignaler()
     def on_toggle():
         if win.isVisible():
-            win.hide()
+            win._fade_hide()
         else:
             win.show()
             win.activateWindow()
