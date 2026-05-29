@@ -132,6 +132,22 @@ def _round_window(hwnd: int, w: int, h: int, radius: int = 28) -> None:
     _apply_pill_glass(hwnd, w, h, radius)
 
 
+def _clip_region(hwnd: int, w: int, h: int, radius: int) -> None:
+    """Fast rounded-rect window clip ONLY (no acrylic re-apply). Used per-frame
+    during the grow/shrink animation so the rounded shape tracks the changing
+    height without the cost/flicker of re-applying the acrylic backdrop."""
+    if w <= 0 or h <= 0:
+        return
+    r = min(radius, h // 2, MAX_CORNER_RADIUS)
+    try:
+        gdi = ctypes.windll.gdi32
+        user32 = ctypes.windll.user32
+        rgn = gdi.CreateRoundRectRgn(0, 0, w + 1, h + 1, r * 2, r * 2)
+        user32.SetWindowRgn(wintypes.HWND(hwnd), rgn, True)
+    except Exception:
+        pass
+
+
 # ─────────────────────────────────────────────────────────────────────────────
 # RECIPES — the agent's "what can it do for me" entry points.
 # Each recipe is a high-value action workflow the agent will execute.
@@ -2405,18 +2421,45 @@ def main(port: int = 8000) -> int:
                 print(f"[capsule] sources strip failed: {exc}", flush=True)
 
         def _adjust(self) -> None:
-            # Walk the layout and force every child's preferred height into
-            # the capsule's hint, then resize manually. adjustSize() alone
-            # doesn't pick up the scroll area's new max-height fast enough.
+            # Compute the target height from the layout, then SMOOTHLY animate
+            # the capsule to it (Perplexity-style dynamic growth) instead of
+            # snapping. The rounded window region tracks each frame.
             self.adjustSize()
             try:
                 hint = self.layout().sizeHint()
                 target_h = max(self.minimumHeight(), hint.height())
-                if target_h != self.height():
-                    self.resize(self.width(), target_h)
             except Exception:
-                pass
-            QTimer.singleShot(0, self._reshape)
+                QTimer.singleShot(0, self._reshape)
+                return
+            cur_h = self.height()
+            if target_h == cur_h:
+                QTimer.singleShot(0, self._reshape)
+                return
+            self._animate_height(cur_h, target_h)
+
+        def _animate_height(self, from_h: int, to_h: int) -> None:
+            g = self.geometry()
+            # cancel any in-flight growth so rapid updates don't stack/fight
+            prev = getattr(self, "_grow_anim", None)
+            if prev is not None:
+                try:
+                    prev.stop()
+                except Exception:
+                    pass
+            anim = QPropertyAnimation(self, b"geometry", self)
+            # Slightly longer for big jumps, snappy for small ones.
+            dist = abs(to_h - from_h)
+            anim.setDuration(max(160, min(340, 140 + dist // 3)))
+            anim.setEasingCurve(QEasingCurve.OutCubic)
+            anim.setStartValue(QRect(g.x(), g.y(), g.width(), from_h))
+            anim.setEndValue(QRect(g.x(), g.y(), g.width(), to_h))
+            # Per-frame: re-clip the rounded region to the current height.
+            anim.valueChanged.connect(
+                lambda _v: _clip_region(int(self.winId()),
+                                        self.width(), self.height(), RADIUS))
+            anim.finished.connect(self._reshape)  # full region + acrylic at end
+            self._grow_anim = anim
+            anim.start()
 
         def _reshape(self) -> None:
             hwnd = int(self.winId())
