@@ -1983,13 +1983,15 @@ class ToolExecutor:
         return ToolResult(ok=True, output=f"'{res.get('name') or query}' ready after {res.get('waited_s','?')}s @ ({res.get('x')},{res.get('y')}).", data=res)
 
     def electron_check(self, exe: str):
-        from .widget.desktop_features import is_electron_app
-        is_e = is_electron_app(exe)
-        return ToolResult(ok=True, output=f"is_electron={is_e}", data={"exe": exe, "is_electron": is_e})
+        from .widget.desktop_features import is_electron_app, resolve_app_exe
+        resolved = resolve_app_exe(exe)
+        is_e = is_electron_app(resolved)
+        return ToolResult(ok=True, output=f"is_electron={is_e} (exe={resolved})", data={"exe": resolved, "is_electron": is_e})
 
     def electron_unlock(self, exe: str, args: list = None):
-        from .widget.desktop_features import relaunch_with_accessibility
-        res = relaunch_with_accessibility(exe, args or [], False)
+        from .widget.desktop_features import relaunch_with_accessibility, resolve_app_exe
+        resolved = resolve_app_exe(exe)
+        res = relaunch_with_accessibility(resolved, args or [], False)
         if not res.get("ok"):
             return ToolResult(ok=False, output=res.get("error", "relaunch failed"), data=res)
         return ToolResult(ok=True, output=(

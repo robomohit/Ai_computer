@@ -631,6 +631,92 @@ def _sanitize_json_text(text: str) -> str:
     text = re.sub(r'""\s*([}\]])', r'"\1', text)
     return text
 
+_HARMONY_CALL_RE = re.compile(r'call:\s*([a-zA-Z_][\w]*)\s*(\{)', re.DOTALL)
+_HARMONY_FUNC_RE = re.compile(r'to=functions\.([a-zA-Z_][\w.]*)', re.DOTALL)
+
+
+def _first_balanced_braces(text: str, start: int = 0) -> Optional[str]:
+    """Return the substring of the first balanced {...} block at/after start."""
+    i = text.find("{", start)
+    if i < 0:
+        return None
+    depth = 0
+    for j in range(i, len(text)):
+        c = text[j]
+        if c == "{":
+            depth += 1
+        elif c == "}":
+            depth -= 1
+            if depth == 0:
+                return text[i:j + 1]
+    return None
+
+
+def _relaxed_json_obj(s: str) -> dict:
+    """Parse a possibly-sloppy JSON object: strict -> key-quoted -> key:value."""
+    if not s:
+        return {}
+    # minimal repair: quote bare keys ({app: -> {"app":) without the aggressive
+    # comma-insertion in _sanitize_json_text (which corrupts string values).
+    key_quoted = re.sub(r'([{,]\s*)([a-zA-Z_]\w*)(\s*:)', r'\1"\2"\3', s)
+    for candidate in (s, key_quoted):
+        try:
+            out = json.loads(candidate)
+            if isinstance(out, dict):
+                return out
+        except Exception:
+            pass
+    out: dict = {}
+    body = s.strip().lstrip("{").rstrip("}")
+    for m in re.finditer(
+        r'([a-zA-Z_]\w*)\s*:\s*("(?:[^"\\]|\\.)*"|true|false|-?\d+(?:\.\d+)?|[^,}\n]+)',
+        body,
+    ):
+        k = m.group(1)
+        v = m.group(2).strip()
+        if v.startswith('"') and v.endswith('"'):
+            v = v[1:-1]
+        elif v in ("true", "false"):
+            v = (v == "true")
+        elif re.fullmatch(r'-?\d+', v):
+            v = int(v)
+        elif re.fullmatch(r'-?\d+\.\d+', v):
+            v = float(v)
+        out[k] = v
+    return out
+
+
+def parse_harmony_tool_call(text: str) -> Optional[tuple]:
+    """gpt-oss / OpenAI 'harmony' models sometimes emit a tool call as TEXT
+    instead of a native tool_calls payload, e.g.:
+        <|tool_call>call:uia_wait{app:<|"|>Discord<|"|>,query:<|"|>meme<|"|>}<tool_call|>
+        <|channel|>commentary to=functions.uia_click<|message|>{"query":"meme"}<|call|>
+    Detect and parse these so the agent executes the call instead of treating
+    it as a final answer. Returns (name, args) or None.
+    """
+    if not text:
+        return None
+    if "call:" not in text and "to=functions" not in text and "tool_call" not in text:
+        return None
+    # Normalise harmony artifacts: the escaped-quote token and stray <|...|> tags.
+    cleaned = text.replace('<|"|>', '"')
+    cleaned = cleaned.replace("<tool_call|>", " ").replace("<|tool_call>", " ")
+    cleaned = re.sub(r'<\|[^>]*\|>', ' ', cleaned)
+    # Form 1: call:NAME{...}
+    m = _HARMONY_CALL_RE.search(cleaned)
+    if m:
+        name = m.group(1)
+        body = _first_balanced_braces(cleaned, m.start(2)) or ""
+        return name, _relaxed_json_obj(body)
+    # Form 2: to=functions.NAME ... {json}
+    mf = _HARMONY_FUNC_RE.search(cleaned)
+    if mf:
+        name = mf.group(1).split(".")[-1]
+        body = _first_balanced_braces(cleaned, mf.end()) or ""
+        return name, _relaxed_json_obj(body)
+    return None
+
+
 def _extract_json(text: str) -> dict:
     """Extract and repair JSON from LLM response text. Always returns a dict."""
     if not text:
@@ -1734,6 +1820,20 @@ class PlannerProvider:
                                             return
 
                                         if finish_reason == "stop" and not tool_calls_accum:
+                                            # gpt-oss/harmony models sometimes emit a tool call as
+                                            # plain text instead of a native tool_calls payload —
+                                            # parse and execute it instead of finishing early.
+                                            _harmony = parse_harmony_tool_call(thought_buffer)
+                                            if _harmony:
+                                                _hname, _hargs = _harmony
+                                                yield {
+                                                    "type": "tool_call",
+                                                    "id": "",
+                                                    "name": _hname,
+                                                    "args": _hargs,
+                                                    "thought": "",
+                                                }
+                                                return
                                             yield {"type": "text_only", "content": thought_buffer}
                                             return
 
@@ -1751,9 +1851,15 @@ class PlannerProvider:
         if last_err:
             raise last_err
 
-        # If we reach here without a tool call, yield what we have
+        # If we reach here without a tool call, yield what we have — but first
+        # check for a harmony tool call leaked into the text.
         if thought_buffer:
-            yield {"type": "text_only", "content": thought_buffer}
+            _harmony = parse_harmony_tool_call(thought_buffer)
+            if _harmony:
+                _hname, _hargs = _harmony
+                yield {"type": "tool_call", "id": "", "name": _hname, "args": _hargs, "thought": ""}
+            else:
+                yield {"type": "text_only", "content": thought_buffer}
 
     def plan_hierarchical(
         self,
