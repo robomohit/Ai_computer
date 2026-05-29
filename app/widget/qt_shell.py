@@ -45,6 +45,51 @@ _DWM_BB_ENABLE = 0x01
 _DWM_BB_BLURREGION = 0x02
 
 
+# ── Acrylic backdrop (Win10/11) via undocumented SetWindowCompositionAttribute.
+# Gives a strong frosted/blurred backdrop with a tint — much closer to Apple
+# "liquid glass" than the weak DwmEnableBlurBehindWindow gaussian. The window
+# region (SetWindowRgn) clips it to the rounded pill, so no rectangular halo.
+class _ACCENT_POLICY(ctypes.Structure):
+    _fields_ = [
+        ("AccentState", ctypes.c_uint),
+        ("AccentFlags", ctypes.c_uint),
+        ("GradientColor", ctypes.c_uint),   # 0xAABBGGRR
+        ("AnimationId", ctypes.c_uint),
+    ]
+
+
+class _WINCOMPATTRDATA(ctypes.Structure):
+    _fields_ = [
+        ("Attribute", ctypes.c_int),
+        ("Data", ctypes.c_void_p),
+        ("SizeOfData", ctypes.c_size_t),
+    ]
+
+
+_ACCENT_ENABLE_ACRYLICBLURBEHIND = 4
+_WCA_ACCENT_POLICY = 19
+
+
+def _apply_acrylic(hwnd: int, tint_abgr: int = 0x252028_00) -> bool:
+    """Enable acrylic blur-behind on the window. GradientColor is 0xAABBGGRR —
+    the low 0xAA byte is the tint opacity. A low alpha keeps it clear/glassy and
+    lets our painted material define the look. Returns True on success."""
+    try:
+        user32 = ctypes.windll.user32
+        accent = _ACCENT_POLICY()
+        accent.AccentState = _ACCENT_ENABLE_ACRYLICBLURBEHIND
+        accent.AccentFlags = 0
+        accent.GradientColor = tint_abgr
+        data = _WINCOMPATTRDATA()
+        data.Attribute = _WCA_ACCENT_POLICY
+        data.Data = ctypes.cast(ctypes.byref(accent), ctypes.c_void_p)
+        data.SizeOfData = ctypes.sizeof(accent)
+        fn = user32.SetWindowCompositionAttribute
+        return bool(fn(wintypes.HWND(hwnd), ctypes.byref(data)))
+    except Exception:
+        return False
+
+
 MAX_CORNER_RADIUS = 32  # rounded-rectangle look, not a pill
 
 
@@ -68,13 +113,16 @@ def _apply_pill_glass(hwnd: int, w: int, h: int, radius: int) -> None:
         clip_rgn = gdi.CreateRoundRectRgn(0, 0, w + 1, h + 1, r * 2, r * 2)
         user32.SetWindowRgn(wintypes.HWND(hwnd), clip_rgn, True)
 
-        blur_rgn = gdi.CreateRoundRectRgn(0, 0, w + 1, h + 1, r * 2, r * 2)
-        bb = _DWM_BLURBEHIND()
-        bb.dwFlags = _DWM_BB_ENABLE | _DWM_BB_BLURREGION
-        bb.fEnable = 1
-        bb.hRgnBlur = blur_rgn
-        bb.fTransitionOnMaximized = 0
-        dwm.DwmEnableBlurBehindWindow(wintypes.HWND(hwnd), ctypes.byref(bb))
+        # Prefer the strong acrylic frost (clipped to the pill by SetWindowRgn).
+        # Fall back to the weak DWM region-blur if acrylic is unavailable.
+        if not _apply_acrylic(hwnd):
+            blur_rgn = gdi.CreateRoundRectRgn(0, 0, w + 1, h + 1, r * 2, r * 2)
+            bb = _DWM_BLURBEHIND()
+            bb.dwFlags = _DWM_BB_ENABLE | _DWM_BB_BLURREGION
+            bb.fEnable = 1
+            bb.hRgnBlur = blur_rgn
+            bb.fTransitionOnMaximized = 0
+            dwm.DwmEnableBlurBehindWindow(wintypes.HWND(hwnd), ctypes.byref(bb))
     except Exception:
         pass
 
@@ -608,9 +656,10 @@ def _icon(name: str, size: int = 18, color: str = "#E8EAED", width: float = 1.9)
 
 def main(port: int = 8000) -> int:
     from PySide6.QtCore import (Qt, QTimer, QObject, Signal, QPoint, QSize,
-                                QPropertyAnimation, QEasingCurve, QRect)
+                                QPropertyAnimation, QEasingCurve, QRect,
+                                QRectF, QPointF)
     from PySide6.QtGui import (QColor, QPainter, QPainterPath, QPen, QFont,
-                               QLinearGradient, QFontDatabase)
+                               QLinearGradient, QRadialGradient, QFontDatabase)
     from PySide6.QtWidgets import (QApplication, QWidget, QLineEdit, QPushButton,
                                    QLabel, QVBoxLayout, QHBoxLayout, QScrollArea,
                                    QSizePolicy)
@@ -2371,39 +2420,81 @@ def main(port: int = 8000) -> int:
         # we paint a translucent tint, a wet top-highlight gradient, and a thin
         # 1px stroke (brighter on top to mimic light catching the curved edge).
         def paintEvent(self, _e) -> None:
+            # ── Apple "liquid glass" material ────────────────────────────────
+            # Layered to mimic a thick slab of refractive glass sitting over the
+            # DWM-blurred backdrop:
+            #   1. clear cool tint (lets the blur read as glass, not plastic)
+            #   2. broad top specular sheen + a soft top-left highlight blob
+            #   3. EDGE LENSING — a bright inner rim that hugs the whole
+            #      perimeter (light refracting through the glass edge); this is
+            #      the signature liquid-glass tell
+            #   4. a soft inner shadow along the bottom for slab thickness
+            #   5. a crisp 1px outer rim, brightest at the top
             p = QPainter(self)
             p.setRenderHint(QPainter.Antialiasing)
             w, h = self.width(), self.height()
-            r = min(h / 2, w / 2, MAX_CORNER_RADIUS)  # rounded rect, capped
+            r = min(h / 2, w / 2, MAX_CORNER_RADIUS)
+            inset = 0.5
             path = QPainterPath()
-            path.addRoundedRect(0.5, 0.5, w - 1, h - 1, r, r)
+            path.addRoundedRect(inset, inset, w - 1, h - 1, r, r)
 
-            # ── PERPLEXITY PERSONAL COMPUTER glass (two-tone)
-            # Outer capsule = dark translucent glass (lets wallpaper through
-            # subtly). The input pill, painted inside via QSS, is bright
-            # solid white so it "floats" inside the darker capsule.
-
-            # 1) Tint — soft dark grey, holds shape but desktop bleeds through
+            # 1) Cool, clear tint — the acrylic backdrop already supplies the
+            #    frost, so keep this light so it reads as glass, not a slab.
             tint = QLinearGradient(0, 0, 0, h)
-            tint.setColorAt(0.0, QColor(38, 42, 50, 130))
-            tint.setColorAt(1.0, QColor(20, 24, 30, 155))
+            tint.setColorAt(0.0, QColor(60, 68, 84, 78))
+            tint.setColorAt(0.5, QColor(40, 46, 58, 96))
+            tint.setColorAt(1.0, QColor(26, 30, 40, 120))
             p.fillPath(path, tint)
 
-            # 2) Wet top highlight — bright sheen along the top rim
-            hl = QLinearGradient(0, 0, 0, h)
-            hl.setColorAt(0.00, QColor(255, 255, 255, 130))
-            hl.setColorAt(0.10, QColor(255, 255, 255, 50))
-            hl.setColorAt(0.30, QColor(255, 255, 255, 0))
-            hl.setColorAt(0.95, QColor(255, 255, 255, 10))
-            hl.setColorAt(1.00, QColor(255, 255, 255, 26))
-            p.fillPath(path, hl)
+            # 2a) Broad top specular sheen.
+            sheen = QLinearGradient(0, 0, 0, h)
+            sheen.setColorAt(0.00, QColor(255, 255, 255, 95))
+            sheen.setColorAt(0.14, QColor(255, 255, 255, 34))
+            sheen.setColorAt(0.40, QColor(255, 255, 255, 0))
+            p.fillPath(path, sheen)
 
-            # 3) 1px outer stroke — bright on top fading to subtle dark below
+            # 2b) Soft specular highlight blob, upper-left (a glossy hotspot).
+            p.save()
+            p.setClipPath(path)
+            blob = QRadialGradient(QPointF(w * 0.30, h * 0.05), w * 0.55)
+            blob.setColorAt(0.0, QColor(255, 255, 255, 70))
+            blob.setColorAt(0.5, QColor(255, 255, 255, 16))
+            blob.setColorAt(1.0, QColor(255, 255, 255, 0))
+            p.fillRect(QRectF(0, 0, w, h), blob)
+            p.restore()
+
+            # 3) EDGE LENSING — bright inner rim hugging the perimeter. Stroke an
+            #    inset path with progressively brighter, thinner pens so the
+            #    glow concentrates right at the glass edge.
+            p.save()
+            p.setClipPath(path)
+            for width_px, alpha in ((7.0, 26), (4.0, 50), (2.2, 95), (1.0, 165)):
+                rim = QLinearGradient(0, 0, 0, h)
+                rim.setColorAt(0.0, QColor(255, 255, 255, min(255, alpha + 80)))
+                rim.setColorAt(0.45, QColor(255, 255, 255, alpha))
+                rim.setColorAt(1.0, QColor(205, 222, 255, min(255, alpha + 20)))
+                pen = QPen(rim, width_px)
+                p.setPen(pen)
+                p.setBrush(Qt.NoBrush)
+                p.drawPath(path)
+            p.restore()
+
+            # 4) Soft inner shadow along the bottom — gives the slab thickness.
+            p.save()
+            p.setClipPath(path)
+            shadow = QLinearGradient(0, h * 0.62, 0, h)
+            shadow.setColorAt(0.0, QColor(0, 0, 0, 0))
+            shadow.setColorAt(1.0, QColor(0, 0, 0, 60))
+            p.fillRect(QRectF(0, h * 0.62, w, h * 0.38), shadow)
+            p.restore()
+
+            # 5) Crisp 1px outer rim — brightest at the top, cool tint below.
             edge = QLinearGradient(0, 0, 0, h)
-            edge.setColorAt(0.0, QColor(255, 255, 255, 200))
-            edge.setColorAt(0.5, QColor(255, 255, 255, 60))
-            edge.setColorAt(1.0, QColor(255, 255, 255, 40))
+            edge.setColorAt(0.0, QColor(255, 255, 255, 225))
+            edge.setColorAt(0.5, QColor(220, 230, 245, 70))
+            edge.setColorAt(1.0, QColor(255, 255, 255, 55))
             p.setPen(QPen(edge, 1.0))
+            p.setBrush(Qt.NoBrush)
             p.drawPath(path)
             p.end()
 
