@@ -1951,6 +1951,19 @@ class ToolExecutor:
 
     # ── UIA (UI Automation) tools — drive native/Electron apps by control
     #    name/AutomationId, no screenshots, no pixel guessing. ──────────────
+    @staticmethod
+    def _uia_rect_token(rect: dict) -> str:
+        """Encode a control's on-screen bounds so the capsule's overlay can
+        draw a focus ring there. Parsed by the widget; harmless to the model."""
+        try:
+            l, t = int(rect["left"]), int(rect["top"])
+            w, h = int(rect["width"]), int(rect["height"])
+            if w > 0 and h > 0:
+                return f" [uia:{l},{t},{w},{h}]"
+        except Exception:
+            pass
+        return ""
+
     def uia_find(self, query: str, app: str = "", limit: int = 5):
         from .widget.desktop_features import find_ui_elements
         res = find_ui_elements(query, app, limit)
@@ -1959,21 +1972,33 @@ class ToolExecutor:
         lines = [f"{i+1}. {c.get('name') or c.get('automation_id') or '(unnamed)'} "
                  f"[{c.get('control_type')}] @ ({c['x']},{c['y']}) score={c.get('score')}"
                  for i, c in enumerate(res.get("items", []))]
-        return ToolResult(ok=True, output="UIA matches:\n" + "\n".join(lines), data=res)
+        # focus-ring token for the top match (center x,y + w,h -> left,top,w,h)
+        tok = ""
+        items = res.get("items", [])
+        if items:
+            c0 = items[0]
+            ww, hh = int(c0.get("width", 0)), int(c0.get("height", 0))
+            if ww > 0 and hh > 0:
+                tok = self._uia_rect_token({
+                    "left": int(c0["x"]) - ww // 2, "top": int(c0["y"]) - hh // 2,
+                    "width": ww, "height": hh})
+        return ToolResult(ok=True, output="UIA matches:\n" + "\n".join(lines) + tok, data=res)
 
     def uia_click(self, query: str, app: str = ""):
         from .widget.desktop_features import invoke_ui_element
         res = invoke_ui_element(query, app)
         if not res.get("ok"):
             return ToolResult(ok=False, output=res.get("error", "click failed"), data=res)
-        return ToolResult(ok=True, output=f"Activated '{res.get('target')}' via {res.get('method')}.", data=res)
+        tok = self._uia_rect_token(res.get("rect", {}))
+        return ToolResult(ok=True, output=f"Activated '{res.get('target')}' via {res.get('method')}.{tok}", data=res)
 
     def uia_type(self, query: str, text: str, app: str = "", clear_first: bool = False, submit: bool = False):
         from .widget.desktop_features import type_into_ui_element
         res = type_into_ui_element(query, text, app, clear_first, submit)
         if not res.get("ok"):
             return ToolResult(ok=False, output=res.get("error", "type failed"), data=res)
-        return ToolResult(ok=True, output=f"Typed into '{res.get('target')}' via {res.get('method')}.", data=res)
+        tok = self._uia_rect_token(res.get("rect", {}))
+        return ToolResult(ok=True, output=f"Typed into '{res.get('target')}' via {res.get('method')}.{tok}", data=res)
 
     def uia_wait(self, query: str, app: str = "", timeout: float = 6.0):
         from .widget.desktop_features import wait_for_ui_element

@@ -450,6 +450,12 @@ def _humanize_tool(name: str, args: str) -> str:
         "file_glob":      f"Listing files {a}",
         "file_grep":      f"Searching files {a}",
         "find_on_screen": "Locating element on screen",
+        "uia_find":       f"Locating {a}" if a else "Locating control",
+        "uia_click":      f"Clicking {a}" if a else "Clicking control",
+        "uia_type":       f"Typing into {a}" if a else "Typing",
+        "uia_wait":       f"Waiting for {a}" if a else "Waiting for control",
+        "electron_check": "Checking app type",
+        "electron_unlock":"Unlocking app accessibility",
         "lint_file":      f"Linting {a}",
         "ui_critique":    "Critiquing the UI",
         "todo_write":     "Updating plan",
@@ -918,7 +924,10 @@ def main(port: int = 8000) -> int:
                             elif t == "action_result":
                                 aid = ev.get("action_id")
                                 name = action_type_by_id.get(aid or "", "")
-                                out = str(ev.get("output", ""))[:160]
+                                # Keep enough text that trailing tokens (e.g. the
+                                # UIA focus-ring [uia:l,t,w,h]) survive — uia_find
+                                # appends it after a multi-line match list.
+                                out = str(ev.get("output", ""))[:600]
                                 if name and out:
                                     self.toolResult.emit(name, out)
                             elif t == "tool":
@@ -2165,6 +2174,28 @@ def main(port: int = 8000) -> int:
             output text carries real coordinates like
             'Clicked left 1 times at 656, 525'."""
             lname = (name or "").lower()
+            # ── UIA actions: draw a precise focus ring on the real control ──
+            if lname in ("uia_click", "uia_type", "uia_find"):
+                try:
+                    import re as _re
+                    m = _re.search(r"\[uia:(-?\d+),(-?\d+),(\d+),(\d+)\]", output)
+                    if m:
+                        l, t, w, h = (int(m.group(i)) for i in range(1, 5))
+                        tgt_m = _re.search(r"'([^']+)'", output)
+                        tgt = (tgt_m.group(1) if tgt_m else "").strip()
+                        if lname == "uia_click":
+                            label = f"Clicking {tgt}" if tgt else "Clicking"
+                            kind = "click"
+                        elif lname == "uia_type":
+                            label = f"Typing into {tgt}" if tgt else "Typing"
+                            kind = "type"
+                        else:
+                            label = f"Found {tgt}" if tgt else "Located"
+                            kind = "find"
+                        self._vcursor.show_uia(l, t, w, h, label=label, kind=kind)
+                except Exception as exc:
+                    print(f"[capsule] uia overlay error: {exc}", flush=True)
+                return
             if lname not in ("mouse_click", "double_click",
                               "left_click_drag", "keyboard_type",
                               "type_with_delay"):

@@ -714,6 +714,21 @@ def _find_uia_control(query: str, app_hint: str = ""):
         return None, {"ok": False, "error": str(exc)}
 
 
+def _onscreen_rect(ctrl) -> dict:
+    """Current on-screen bounds of a live control as {left, top, width, height}.
+    Read AFTER ScrollIntoView so virtualized/offscreen controls report real
+    coordinates. Returns zeros if unavailable."""
+    try:
+        r = ctrl.BoundingRectangle
+        w = max(0, r.right - r.left)
+        h = max(0, r.bottom - r.top)
+        if w > 0 and h > 0:
+            return {"left": r.left, "top": r.top, "width": w, "height": h}
+    except Exception:
+        pass
+    return {"left": 0, "top": 0, "width": 0, "height": 0}
+
+
 def type_into_ui_element(query: str, text: str, app_hint: str = "",
                          clear_first: bool = False,
                          submit: bool = False) -> dict:
@@ -812,7 +827,8 @@ def type_into_ui_element(query: str, text: str, app_hint: str = "",
             method += "+enter"
         return {"ok": True, "method": method,
                 "target": info["name"] or info["automation_id"],
-                "control_type": info["control_type"]}
+                "control_type": info["control_type"],
+                "rect": _onscreen_rect(ctrl)}
     except Exception as exc:
         return {"ok": False, "error": str(exc), "found_at": info}
 
@@ -836,13 +852,17 @@ def invoke_ui_element(query: str, app_hint: str = "") -> dict:
             time.sleep(0.05)
     except Exception:
         pass
+    # Capture the on-screen bounds NOW (after scroll, before activation may
+    # navigate the control away) for the UIA focus-ring overlay.
+    rect = _onscreen_rect(ctrl)
     # 1. InvokePattern — the cleanest activation
     try:
         ip = ctrl.GetInvokePattern()
         if ip is not None:
             ip.Invoke()
             return {"ok": True, "method": "invoke_pattern",
-                    "target": target, "control_type": info["control_type"]}
+                    "target": target, "control_type": info["control_type"],
+                    "rect": rect}
     except Exception:
         pass
     # 2. SelectionItemPattern — for list/tree items (Discord servers & channels)
@@ -851,19 +871,19 @@ def invoke_ui_element(query: str, app_hint: str = "") -> dict:
         if sp is not None:
             sp.Select()
             return {"ok": True, "method": "selection_pattern",
-                    "target": target, "control_type": info["control_type"]}
+                    "target": target, "control_type": info["control_type"],
+                    "rect": rect}
     except Exception:
         pass
     # 3. Coordinate click — only if the control now has a real on-screen rect.
     try:
         import pyautogui
-        rect = ctrl.BoundingRectangle
-        if rect.right > rect.left and rect.bottom > rect.top:
-            x = (rect.left + rect.right) // 2
-            y = (rect.top + rect.bottom) // 2
+        if rect["width"] > 0 and rect["height"] > 0:
+            x = rect["left"] + rect["width"] // 2
+            y = rect["top"] + rect["height"] // 2
             pyautogui.click(x, y)
             return {"ok": True, "method": "click_fallback",
-                    "x": x, "y": y, "target": target}
+                    "x": x, "y": y, "target": target, "rect": rect}
         return {"ok": False,
                 "error": f"'{target}' has no invokable pattern and no on-screen "
                          "rect to click", "found_at": info}

@@ -21,7 +21,7 @@ from __future__ import annotations
 import math
 import re
 
-from PySide6.QtCore import (Qt, QPoint, QRect, QTimer,
+from PySide6.QtCore import (Qt, QPoint, QRect, QRectF, QTimer,
                              QPropertyAnimation, QEasingCurve, Property,
                              QObject)
 from PySide6.QtGui import (QColor, QPainter, QPen, QBrush, QPainterPath,
@@ -64,6 +64,28 @@ class _Caret:
         return self.t < self.duration_ms
 
 
+class _Spotlight:
+    """A precise focus-ring around a real UIA control's bounds, with a label.
+    This is the UIA analogue of the virtual mouse: instead of guessing a pixel
+    and moving a cursor, UIA knows the control's EXACT rectangle, so we trace it
+    directly — a snapping focus ring + glow + a 'what it's doing' label."""
+    __slots__ = ("x", "y", "w", "h", "label", "kind", "t", "duration_ms")
+
+    def __init__(self, x, y, w, h, label="", kind="click", duration_ms=2200):
+        self.x = int(x); self.y = int(y)
+        self.w = max(8, int(w)); self.h = max(8, int(h))
+        self.label = (label or "")[:48]
+        self.kind = kind                 # click | type | find
+        self.t = 0.0
+        self.duration_ms = duration_ms
+
+    def alive(self) -> bool:
+        return self.t < self.duration_ms
+
+    def progress(self) -> float:
+        return min(1.0, self.t / max(1, self.duration_ms))
+
+
 class VirtualCursorOverlay(QWidget):
     """Full-screen click-through overlay that paints animated agent activity."""
 
@@ -100,6 +122,7 @@ class VirtualCursorOverlay(QWidget):
 
         self._ripples: list[_Ripple] = []
         self._carets: list[_Caret] = []
+        self._spotlights: list[_Spotlight] = []
         self._cursor_x = -100
         self._cursor_y = -100
         self._cursor_visible_until = 0  # epoch ms; 0 = hide
@@ -146,6 +169,17 @@ class VirtualCursorOverlay(QWidget):
             self._set_action_label(f"Typing “{text[:24]}”")
         else:
             self._set_action_label("Typing")
+        self._bump_cursor_visibility()
+        self._ensure_visible()
+
+    def show_uia(self, x: int, y: int, w: int, h: int,
+                 label: str = "", kind: str = "click") -> None:
+        """UIA action feedback: trace a focus ring around the control's exact
+        bounds and show what's happening. No cursor travel — UIA acts directly
+        on the control, so we highlight precisely instead of faking a click.
+        Keep only the latest spotlight so the view stays clean."""
+        self._spotlights = [s for s in self._spotlights if s.progress() < 0.7]
+        self._spotlights.append(_Spotlight(x, y, w, h, label, kind))
         self._bump_cursor_visibility()
         self._ensure_visible()
 
@@ -261,6 +295,9 @@ class VirtualCursorOverlay(QWidget):
         for c in self._carets:
             c.t += self.TICK_MS
         self._carets = [c for c in self._carets if c.alive()]
+        for s in self._spotlights:
+            s.t += self.TICK_MS
+        self._spotlights = [s for s in self._spotlights if s.alive()]
 
         # Hide if everything is done — also wait for the action label
         # fade to finish so the user gets to read what just happened.
@@ -269,6 +306,7 @@ class VirtualCursorOverlay(QWidget):
                        (self._ACTION_LABEL_HOLD_MS
                         + self._ACTION_LABEL_FADE_MS))
         all_done = (not self._ripples and not self._carets
+                    and not self._spotlights
                     and not self._trail
                     and not label_alive
                     and now_ms >= self._cursor_visible_until
@@ -338,6 +376,11 @@ class VirtualCursorOverlay(QWidget):
                 p.drawText(rect.adjusted(8, 0, -8, 0),
                            Qt.AlignVCenter | Qt.AlignLeft, c.text)
 
+        # 3b. UIA spotlights — focus ring tracing a real control's bounds
+        now0 = self._now_ms()
+        for s in self._spotlights:
+            self._paint_spotlight(p, s, now0)
+
         # 4. Cursor + soft accent glow halo
         now = self._now_ms()
         if now < self._cursor_visible_until and self._cursor_x >= 0:
@@ -361,6 +404,88 @@ class VirtualCursorOverlay(QWidget):
             self._paint_action_label(p, cx, cy, now)
 
         p.end()
+
+    def _paint_spotlight(self, p: QPainter, s: "_Spotlight", now_ms: int) -> None:
+        """Draw a snapping focus ring + glow around a UIA control's bounds, with
+        a label pill below it. Animated: a quick expand-in, hold, fade-out."""
+        prog = s.progress()
+        intro, outro = 0.10, 0.16
+        if prog < intro:
+            a = prog / intro
+        elif prog > 1 - outro:
+            a = max(0.0, (1 - prog) / outro)
+        else:
+            a = 1.0
+        if a <= 0.01:
+            return
+
+        # intro: ring starts a touch larger and snaps inward
+        grow = (1 - min(1.0, prog / intro)) * 9 if prog < intro else 0.0
+        # 'type' keeps a gentle breathing pulse while it holds
+        if s.kind == "type" and intro <= prog <= 1 - outro:
+            grow += 1.2 * (1 + math.sin(s.t / 130.0)) / 2
+
+        x = s.x - grow
+        y = s.y - grow
+        w = s.w + 2 * grow
+        h = s.h + 2 * grow
+        rad = min(14.0, h / 2)
+        rect = QRectF(x, y, w, h)
+
+        # faint interior tint
+        fc = QColor(RIPPLE_COLOR); fc.setAlpha(int(24 * a))
+        p.setPen(Qt.NoPen); p.setBrush(QBrush(fc))
+        p.drawRoundedRect(rect, rad, rad)
+
+        # soft outer glow (two passes)
+        for gw, ga in ((9.0, 16), (5.0, 30)):
+            gc = QColor(RIPPLE_COLOR); gc.setAlpha(int(ga * a))
+            p.setPen(QPen(gc, gw)); p.setBrush(Qt.NoBrush)
+            p.drawRoundedRect(rect, rad, rad)
+
+        # crisp ring
+        rc = QColor(RIPPLE_COLOR); rc.setAlpha(int(235 * a))
+        p.setPen(QPen(rc, 2.0)); p.setBrush(Qt.NoBrush)
+        p.drawRoundedRect(rect, rad, rad)
+
+        # label pill, centred below the control (flips above if no room)
+        if s.label:
+            self._draw_label_pill(p, int(x + w / 2), int(y + h + 12), s.label, a)
+
+    def _draw_label_pill(self, p: QPainter, cx: int, top_y: int,
+                         text: str, alpha_mul: float) -> None:
+        """A floating 'what it's doing' pill anchored at (cx centre, top_y)."""
+        if not text or alpha_mul <= 0.01:
+            return
+        p.setFont(QFont("Segoe UI Variable Text", 10, QFont.Medium))
+        fm = p.fontMetrics()
+        pad_x, pad_y = 12, 6
+        tw = fm.horizontalAdvance(text)
+        w = tw + pad_x * 2 + 10           # +10 for the accent dot
+        h = fm.height() + pad_y * 2
+        geo = self.geometry()
+        x = cx - w // 2
+        y = top_y
+        x = max(6, min(x, geo.width() - 6 - w))
+        if y + h > geo.height() - 6:
+            y = top_y - 24 - h
+        # drop shadow
+        for dy, sa in ((3, 26), (2, 40), (1, 54)):
+            p.setPen(Qt.NoPen)
+            p.setBrush(QBrush(QColor(0, 0, 0, int(sa * alpha_mul))))
+            p.drawRoundedRect(x, y + dy, w, h, h // 2, h // 2)
+        # glass pill
+        p.setBrush(QBrush(QColor(20, 24, 32, int(228 * alpha_mul))))
+        p.setPen(QPen(QColor(255, 255, 255, int(70 * alpha_mul)), 1.0))
+        p.drawRoundedRect(x, y, w, h, h // 2, h // 2)
+        # accent dot
+        dc = QColor(RIPPLE_COLOR); dc.setAlpha(int(235 * alpha_mul))
+        p.setBrush(QBrush(dc)); p.setPen(Qt.NoPen)
+        p.drawEllipse(QPoint(x + pad_x, y + h // 2), 3, 3)
+        # text
+        p.setPen(QPen(QColor(240, 242, 248, int(245 * alpha_mul))))
+        p.drawText(QRect(x + pad_x + 10, y, w - pad_x * 2 - 10, h),
+                   Qt.AlignVCenter | Qt.AlignLeft, text)
 
     def _paint_action_label(self, p: QPainter, cx: int, cy: int,
                             now_ms: int) -> None:
