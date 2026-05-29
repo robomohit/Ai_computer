@@ -7,6 +7,7 @@ import json
 import logging
 import os
 import re
+import subprocess
 import uuid
 from datetime import datetime, timezone
 from functools import partial
@@ -145,6 +146,34 @@ def _should_capture_post_action(action: Action, result: ToolResult, is_desktop: 
     if action.type in {ActionType.bash, ActionType.run_command}:
         return "Launched (fire-and-forget):" in (result.output or "")
     return False
+
+
+_FILE_WRITE_TYPES = frozenset({"write_file", "text_create", "text_str_replace", "text_insert"})
+
+
+def _git_commit_file(file_path: str, workspace: Path, action_type: str) -> Optional[str]:
+    """Auto-commit one file to git. Returns short hash or None (non-git / nothing staged / hook blocked)."""
+    try:
+        ws = workspace.expanduser().resolve()
+        if subprocess.run(
+            ["git", "rev-parse", "--is-inside-work-tree"],
+            cwd=str(ws), capture_output=True, check=False
+        ).returncode != 0:
+            return None
+        abs_path = file_path if os.path.isabs(file_path) else str(ws / file_path)
+        subprocess.run(["git", "add", abs_path], cwd=str(ws), capture_output=True, check=False)
+        msg = f"[ai-computer] {action_type}: {os.path.basename(file_path)}"
+        commit = subprocess.run(
+            ["git", "commit", "-m", msg], cwd=str(ws), capture_output=True, text=True, check=False
+        )
+        if commit.returncode != 0:
+            return None
+        rev = subprocess.run(
+            ["git", "rev-parse", "--short", "HEAD"], cwd=str(ws), capture_output=True, text=True, check=False
+        )
+        return rev.stdout.strip() or None
+    except Exception:
+        return None
 
 
 def _extract_point_tag(text: str) -> tuple[str, Optional[Dict[str, Any]]]:
@@ -1662,6 +1691,25 @@ class AgentService:
                         _write_content = args.get("content", "")
                         if _write_path:
                             _write_cache[_write_path] = _write_content
+
+                    # ── File-change events + git auto-commit (coding mode) ──
+                    if is_coding_mode and res.ok and action_type in _FILE_WRITE_TYPES:
+                        _fpath = args.get("path") or args.get("file_path") or args.get("target_file") or ""
+                        if _fpath:
+                            await self._emit(task_id, "file_change", {
+                                "path": _fpath,
+                                "action": action_type,
+                                "content": args.get("content") or args.get("file_text") or "",
+                            })
+                            _commit_hash = await asyncio.to_thread(
+                                _git_commit_file, _fpath, tools.workspace, action_type
+                            )
+                            if _commit_hash:
+                                await self._emit(task_id, "file_commit", {
+                                    "path": _fpath,
+                                    "commit_hash": _commit_hash,
+                                    "message": f"[ai-computer] {action_type}: {os.path.basename(_fpath)}",
+                                })
 
                     # ── Auto-screenshot after computer actions so model sees result ──
                     post_action_note = ""

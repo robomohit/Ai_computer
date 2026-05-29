@@ -9,7 +9,7 @@ import secrets
 from datetime import datetime, timedelta, timezone
 from pathlib import Path
 from typing import Any, Dict, Optional, List, Literal
-from fastapi import Depends, FastAPI, HTTPException, Request, Response, Security
+from fastapi import Body, Depends, FastAPI, HTTPException, Request, Response, Security
 from fastapi.middleware.cors import CORSMiddleware
 from fastapi.responses import FileResponse, StreamingResponse
 from fastapi.security import HTTPAuthorizationCredentials, HTTPBearer
@@ -1514,6 +1514,24 @@ async def revert_task_checkpoint(task_id: str):
     log_emitter.emit(task_id, "checkpoint_revert", result)
     if not result.get("ok"):
         raise HTTPException(status_code=409, detail=result.get("error", "Checkpoint revert failed"))
+    return result
+
+
+@app.post("/api/tasks/{task_id}/git/revert", dependencies=[Depends(verify_token)])
+async def revert_file_commit(task_id: str, body: Dict[str, Any] = Body(...)):
+    """Revert a per-file auto-commit produced by the coding agent."""
+    _validate_task_id(task_id)
+    record = _get_task_record(task_id)
+    if not record:
+        raise HTTPException(status_code=404, detail="Task not found")
+    commit_hash = (body.get("commit_hash") or "").strip()
+    if not re.fullmatch(r"[0-9a-fA-F]{7,40}", commit_hash):
+        raise HTTPException(status_code=400, detail="Invalid commit_hash")
+    workspace = _task_workspace_for_record(record)
+    result = revert_git_checkpoint(workspace, commit_hash)
+    log_emitter.emit(task_id, "file_revert", {"commit_hash": commit_hash, **result})
+    if not result.get("ok"):
+        raise HTTPException(status_code=409, detail=result.get("error", "Revert failed"))
     return result
 
 

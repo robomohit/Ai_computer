@@ -1900,6 +1900,30 @@
       return;
     }
 
+    if (event.type === 'file_commit') {
+      const entry = lastActionId && actionCards[lastActionId] ? actionCards[lastActionId] : null;
+      const revertBtn = document.createElement('button');
+      revertBtn.className = 'history-retask';
+      revertBtn.textContent = '↩ Revert';
+      revertBtn.addEventListener('click', async (e) => {
+        e.stopPropagation();
+        revertBtn.disabled = true;
+        revertBtn.textContent = 'Reverting…';
+        try {
+          await api(`/api/tasks/${task?.id}/git/revert`, 'POST', { commit_hash: event.commit_hash });
+          revertBtn.textContent = '✓ Reverted';
+        } catch { revertBtn.textContent = '✗ Failed'; revertBtn.disabled = false; }
+      });
+      if (entry) {
+        appendDetailRow(entry, 'Committed', event.commit_hash || '', event.path || '', '');
+        const rows = entry.el?.querySelector('.detail-rows');
+        if (rows) rows.appendChild(revertBtn);
+      } else {
+        renderStandaloneArtifact({ eyebrow: 'Git commit', title: event.path || '', copy: event.commit_hash || '' });
+      }
+      return;
+    }
+
     if (event.type === 'terminal_output') {
       const target = (event.action_id && actionCards[event.action_id])
         ? actionCards[event.action_id]
