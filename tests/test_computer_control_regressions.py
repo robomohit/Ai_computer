@@ -186,6 +186,7 @@ async def test_desktop_action_emits_post_screenshot_and_no_effect_hint(monkeypat
 
     monkeypatch.setattr("app.agent._capture_screenshot_b64", fake_capture)
     monkeypatch.setattr("app.agent._post_action_no_effect_hint", lambda before, after: "[no-effect hint] unchanged")
+    monkeypatch.setattr("app.agent.is_vision_model", lambda model: True)
 
     class FakeProvider:
         total_tokens = 0
