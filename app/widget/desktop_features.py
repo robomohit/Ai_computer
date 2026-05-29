@@ -284,6 +284,23 @@ def load_pending_task() -> Optional[dict]:
 # UIA depth 12+). A shallow walk silently misses real controls, so we go deep.
 _UIA_MAX_DEPTH = 40
 
+_uia_configured = False
+
+
+def _ensure_uia_config(uia) -> None:
+    """One-time tuning so UIA calls return fast instead of using the library's
+    default 10 s search timeout / 0.5 s retry interval."""
+    global _uia_configured
+    if _uia_configured:
+        return
+    for setter, val in (("SetGlobalSearchTimeout", 1.0),
+                        ("SetGlobalSearchInterval", 0.05)):
+        try:
+            getattr(uia, setter)(val)
+        except Exception:
+            pass
+    _uia_configured = True
+
 
 def _uia_root(app_hint: str = ""):
     """Return the right starting control to search.
@@ -331,12 +348,14 @@ def find_ui_elements(query: str, app_hint: str = "",
     except ImportError:
         return {"ok": False,
                 "error": "uiautomation not installed (pip install uiautomation)"}
+    _ensure_uia_config(uia)
     try:
         root = _uia_root(app_hint)
         candidates: list[tuple[int, dict]] = []
+        perfect = [0]  # count of exact (score==100) hits found so far
 
         def walk(ctrl, depth=0):
-            if depth > _UIA_MAX_DEPTH:
+            if depth > _UIA_MAX_DEPTH or perfect[0] >= limit:
                 return
             try:
                 name = ctrl.Name or ""
@@ -357,7 +376,11 @@ def find_ui_elements(query: str, app_hint: str = "",
                             "height": rect.bottom - rect.top,
                             "score": score,
                         }))
+                        if score >= 100:
+                            perfect[0] += 1
                 for child in ctrl.GetChildren():
+                    if perfect[0] >= limit:
+                        break
                     walk(child, depth + 1)
             except Exception:
                 pass
@@ -550,13 +573,15 @@ def _find_uia_control(query: str, app_hint: str = ""):
     except ImportError:
         return None, {"ok": False,
                       "error": "uiautomation not installed (pip install uiautomation)"}
+    _ensure_uia_config(uia)
     try:
         root = _uia_root(app_hint)
-        best = (0, None, None)
+        best = [0, None, None]  # score, ctrl, info (mutable for early-exit)
 
         def walk(ctrl, depth=0):
-            nonlocal best
-            if depth > _UIA_MAX_DEPTH:
+            # Stop the entire walk the instant we have a perfect match —
+            # nothing can beat an exact-name hit (score 100).
+            if depth > _UIA_MAX_DEPTH or best[0] >= 100:
                 return
             try:
                 name = ctrl.Name or ""
@@ -573,8 +598,10 @@ def _find_uia_control(query: str, app_hint: str = ""):
                             "y": (rect.top + rect.bottom) // 2,
                             "score": score,
                         }
-                        best = (score, ctrl, info)
+                        best[0], best[1], best[2] = score, ctrl, info
                 for child in ctrl.GetChildren():
+                    if best[0] >= 100:
+                        break
                     walk(child, depth + 1)
             except Exception:
                 pass
@@ -588,41 +615,94 @@ def _find_uia_control(query: str, app_hint: str = ""):
 
 
 def type_into_ui_element(query: str, text: str, app_hint: str = "",
-                         clear_first: bool = False) -> dict:
-    """Find an editable control by name/id and set its text WITHOUT pixel
-    clicks. Prefers the UIA ValuePattern (instant, reliable on Electron
-    inputs); falls back to focusing the control and typing via keyboard.
+                         clear_first: bool = False,
+                         submit: bool = False) -> dict:
+    """Find an editable control by name/id and enter text reliably and FAST.
+
+    Primary method is focus + clipboard paste: it is instant regardless of
+    text length AND fires the native input/paste events that modern web-app
+    inputs (React/Electron contenteditable — Discord, Slack, Notion, VS Code)
+    listen for. Plain UIA ValuePattern.SetValue updates the DOM value but does
+    NOT trigger React's onChange, so the app's internal state stays empty and
+    Enter sends nothing — which is exactly the Discord bug we hit. Paste avoids
+    that on every kind of input.
+
+    If `submit` is True, presses Enter afterwards in the focused control so a
+    "type and send/search" is a single reliable action.
     """
+    import uiautomation as uia
     ctrl, info = _find_uia_control(query, app_hint)
     if ctrl is None:
         return info  # error dict
-    # Strategy 1: ValuePattern.SetValue — atomic, no focus race
+    # 1. Focus the control via UIA (no pixel click). Fall back to a click on
+    #    its centre only if SetFocus is unsupported.
+    focused = False
     try:
-        vp = ctrl.GetValuePattern()
-        if vp is not None:
-            if clear_first:
+        ctrl.SetFocus()
+        focused = True
+    except Exception:
+        try:
+            import pyautogui
+            pyautogui.click(info["x"], info["y"])
+            focused = True
+        except Exception:
+            pass
+    if not focused:
+        return {"ok": False, "error": "could not focus control",
+                "found_at": info}
+    try:
+        time.sleep(0.08)  # let focus settle before sending keys
+        # All keystrokes go through the control's own SendKeys (targeted
+        # SendInput) — far more reliable than pyautogui's global hotkeys, which
+        # drop/reorder chars and leak stray keys under rapid automation.
+        if clear_first:
+            ctrl.SendKeys("{Ctrl}a{Delete}", waitTime=0)
+        # 2. Text entry via verified clipboard paste. Instant for any length AND
+        #    fires the native paste/input events that React/Electron inputs
+        #    (Discord, Slack, Notion, VS Code) require — plain
+        #    ValuePattern.SetValue updates the DOM but not React state (Enter
+        #    then sends nothing — the Discord bug), and per-char typing drops
+        #    chars on laggy WinUI inputs. We wait for the clipboard to actually
+        #    hold our text before pasting (no stale-char leak) and restore the
+        #    prior clipboard once the paste has consumed it.
+        method = "paste"
+        pasted_ok = False
+        try:
+            try:
+                saved = uia.GetClipboardText()
+            except Exception:
+                saved = ""
+            uia.SetClipboardText(text)
+            for _ in range(20):
                 try:
-                    vp.SetValue("")
+                    if uia.GetClipboardText() == text:
+                        pasted_ok = True
+                        break
                 except Exception:
                     pass
-            vp.SetValue(text)
-            return {"ok": True, "method": "value_pattern",
-                    "target": info["name"] or info["automation_id"],
-                    "control_type": info["control_type"]}
-    except Exception:
-        pass
-    # Strategy 2: focus the control then type via keyboard
-    try:
-        import pyautogui
-        try:
-            ctrl.SetFocus()
+                time.sleep(0.01)
+            if pasted_ok:
+                ctrl.SendKeys("{Ctrl}v", waitTime=0)
+                time.sleep(0.1)   # let the paste fully consume the clipboard
+                if saved:         # restore prior clipboard, after paste is done
+                    try:
+                        uia.SetClipboardText(saved)
+                    except Exception:
+                        pass
         except Exception:
-            pyautogui.click(info["x"], info["y"])
-        if clear_first:
-            pyautogui.hotkey("ctrl", "a")
-            pyautogui.press("delete")
-        pyautogui.typewrite(text, interval=0.01)
-        return {"ok": True, "method": "focus_type",
+            pasted_ok = False
+        if not pasted_ok:
+            # Fallback: type literally via pyautogui (no clipboard, and avoids
+            # SendKeys treating { } ( ) + ^ % as special tokens).
+            method = "keystroke"
+            import pyautogui
+            pyautogui.typewrite(text, interval=0.01)
+        # 3. Optional submit (send / search) in the same focused control.
+        if submit:
+            time.sleep(0.04)
+            ctrl.SendKeys("{Enter}", waitTime=0)
+            method += "+enter"
+        return {"ok": True, "method": method,
                 "target": info["name"] or info["automation_id"],
                 "control_type": info["control_type"]}
     except Exception as exc:
@@ -653,6 +733,24 @@ def invoke_ui_element(query: str, app_hint: str = "") -> dict:
                 "target": info["name"] or info["automation_id"]}
     except Exception as exc:
         return {"ok": False, "error": str(exc), "found_at": info}
+
+
+def wait_for_ui_element(query: str, app_hint: str = "",
+                        timeout: float = 6.0, interval: float = 0.12) -> dict:
+    """Poll for a control to appear, returning the instant it does. Use this
+    after a navigation/click instead of a fixed sleep — it's both faster (no
+    over-waiting) and more reliable (no under-waiting) while an app re-renders.
+    """
+    deadline = time.time() + max(0.1, timeout)
+    last = {"ok": False, "error": f"timed out waiting for '{query}'"}
+    while time.time() < deadline:
+        res = find_ui_element(query, app_hint)
+        if res.get("ok"):
+            res["waited_s"] = round(timeout - (deadline - time.time()), 2)
+            return res
+        last = res
+        time.sleep(interval)
+    return last
 
 
 # ─────────────────────────────────────────────────────────────────────────────

@@ -1960,12 +1960,19 @@ class ToolExecutor:
             return ToolResult(ok=False, output=res.get("error", "click failed"), data=res)
         return ToolResult(ok=True, output=f"Activated '{res.get('target')}' via {res.get('method')}.", data=res)
 
-    def uia_type(self, query: str, text: str, app: str = "", clear_first: bool = False):
+    def uia_type(self, query: str, text: str, app: str = "", clear_first: bool = False, submit: bool = False):
         from .widget.desktop_features import type_into_ui_element
-        res = type_into_ui_element(query, text, app, clear_first)
+        res = type_into_ui_element(query, text, app, clear_first, submit)
         if not res.get("ok"):
             return ToolResult(ok=False, output=res.get("error", "type failed"), data=res)
         return ToolResult(ok=True, output=f"Typed into '{res.get('target')}' via {res.get('method')}.", data=res)
+
+    def uia_wait(self, query: str, app: str = "", timeout: float = 6.0):
+        from .widget.desktop_features import wait_for_ui_element
+        res = wait_for_ui_element(query, app, timeout)
+        if not res.get("ok"):
+            return ToolResult(ok=False, output=res.get("error", "wait timed out"), data=res)
+        return ToolResult(ok=True, output=f"'{res.get('name') or query}' ready after {res.get('waited_s','?')}s @ ({res.get('x')},{res.get('y')}).", data=res)
 
     def electron_check(self, exe: str):
         from .widget.desktop_features import is_electron_app
@@ -2036,6 +2043,7 @@ class ToolExecutor:
         "uia_find":       ["query"],
         "uia_click":      ["query"],
         "uia_type":       ["query", "text"],
+        "uia_wait":       ["query"],
         "electron_check": ["exe"],
         "electron_unlock":["exe"],
     }
@@ -2221,7 +2229,8 @@ class ToolExecutor:
             ActionType.screen_context: lambda a: self.screen_context(),
             ActionType.uia_find: lambda a: self.uia_find(a.args["query"], a.args.get("app", ""), a.args.get("limit", 5)),
             ActionType.uia_click: lambda a: self.uia_click(a.args["query"], a.args.get("app", "")),
-            ActionType.uia_type: lambda a: self.uia_type(a.args["query"], a.args["text"], a.args.get("app", ""), a.args.get("clear_first", False)),
+            ActionType.uia_type: lambda a: self.uia_type(a.args["query"], a.args["text"], a.args.get("app", ""), a.args.get("clear_first", False), a.args.get("submit", False)),
+            ActionType.uia_wait: lambda a: self.uia_wait(a.args["query"], a.args.get("app", ""), a.args.get("timeout", 6.0)),
             ActionType.electron_check: lambda a: self.electron_check(a.args["exe"]),
             ActionType.electron_unlock: lambda a: self.electron_unlock(a.args["exe"], a.args.get("args", [])),
         }

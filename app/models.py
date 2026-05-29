@@ -99,6 +99,7 @@ class ActionType(str, Enum):
     uia_find = "uia_find"
     uia_click = "uia_click"
     uia_type = "uia_type"
+    uia_wait = "uia_wait"
     electron_check = "electron_check"
     electron_unlock = "electron_unlock"
 
