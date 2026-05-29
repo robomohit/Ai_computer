@@ -361,23 +361,36 @@ def find_ui_elements(query: str, app_hint: str = "",
                 name = ctrl.Name or ""
                 aid = ctrl.AutomationId or ""
                 role = ctrl.ControlTypeName or ""
-                score = _score_match(query, name, aid, role)
+                # Skip the root container itself (depth 0): the top-level window
+                # pane's name contains the app + current server/channel, so it
+                # would match substring queries and steal the real target.
+                score = _score_match(query, name, aid, role) if depth > 0 else 0
                 if score > 0:
                     rect = ctrl.BoundingRectangle
-                    # Skip 0-size controls (offscreen / hidden)
-                    if rect.right > rect.left and rect.bottom > rect.top:
-                        candidates.append((score, {
-                            "name": name,
-                            "automation_id": aid,
-                            "control_type": role,
-                            "x": (rect.left + rect.right) // 2,
-                            "y": (rect.top + rect.bottom) // 2,
-                            "width": rect.right - rect.left,
-                            "height": rect.bottom - rect.top,
-                            "score": score,
-                        }))
-                        if score >= 100:
-                            perfect[0] += 1
+                    has_rect = rect.right > rect.left and rect.bottom > rect.top
+                    # Electron/Chromium controls (Discord servers/channels) often
+                    # report a 0x0 rect and IsOffscreen even when they're visible
+                    # and clickable via Invoke/Select patterns. Keep them — just
+                    # rank them below on-screen matches so a visible duplicate
+                    # wins ties. uia_click scrolls them into view before acting.
+                    try:
+                        offscreen = bool(ctrl.IsOffscreen)
+                    except Exception:
+                        offscreen = False
+                    eff = score - (8 if (offscreen or not has_rect) else 0)
+                    candidates.append((eff, {
+                        "name": name,
+                        "automation_id": aid,
+                        "control_type": role,
+                        "x": (rect.left + rect.right) // 2 if has_rect else 0,
+                        "y": (rect.top + rect.bottom) // 2 if has_rect else 0,
+                        "width": max(0, rect.right - rect.left),
+                        "height": max(0, rect.bottom - rect.top),
+                        "score": score,
+                        "offscreen": offscreen or not has_rect,
+                    }))
+                    if score >= 100 and has_rect and not offscreen:
+                        perfect[0] += 1
                 for child in ctrl.GetChildren():
                     if perfect[0] >= limit:
                         break
@@ -587,18 +600,28 @@ def _find_uia_control(query: str, app_hint: str = ""):
                 name = ctrl.Name or ""
                 aid = ctrl.AutomationId or ""
                 role = ctrl.ControlTypeName or ""
-                score = _score_match(query, name, aid, role)
-                if score > best[0]:
+                # Skip the root container (depth 0) — see note in find_ui_elements.
+                score = _score_match(query, name, aid, role) if depth > 0 else 0
+                if score > 0:
                     rect = ctrl.BoundingRectangle
-                    if rect.right > rect.left and rect.bottom > rect.top:
+                    has_rect = rect.right > rect.left and rect.bottom > rect.top
+                    try:
+                        offscreen = bool(ctrl.IsOffscreen)
+                    except Exception:
+                        offscreen = False
+                    # Keep offscreen/0-size controls (Electron lists report them
+                    # even when invokable) but rank below on-screen matches.
+                    eff = score - (8 if (offscreen or not has_rect) else 0)
+                    if eff > best[0]:
                         info = {
                             "name": name, "automation_id": aid,
                             "control_type": role,
-                            "x": (rect.left + rect.right) // 2,
-                            "y": (rect.top + rect.bottom) // 2,
+                            "x": (rect.left + rect.right) // 2 if has_rect else 0,
+                            "y": (rect.top + rect.bottom) // 2 if has_rect else 0,
                             "score": score,
+                            "offscreen": offscreen or not has_rect,
                         }
-                        best[0], best[1], best[2] = score, ctrl, info
+                        best[0], best[1], best[2] = eff, ctrl, info
                 for child in ctrl.GetChildren():
                     if best[0] >= 100:
                         break
@@ -634,6 +657,14 @@ def type_into_ui_element(query: str, text: str, app_hint: str = "",
     ctrl, info = _find_uia_control(query, app_hint)
     if ctrl is None:
         return info  # error dict
+    # Bring virtualized/offscreen inputs into view first (no-op if N/A).
+    try:
+        sip = ctrl.GetScrollItemPattern()
+        if sip is not None:
+            sip.ScrollIntoView()
+            time.sleep(0.05)
+    except Exception:
+        pass
     # 1. Focus the control via UIA (no pixel click). Fall back to a click on
     #    its centre only if SetFocus is unsupported.
     focused = False
@@ -710,27 +741,55 @@ def type_into_ui_element(query: str, text: str, app_hint: str = "",
 
 
 def invoke_ui_element(query: str, app_hint: str = "") -> dict:
-    """Activate a control via the UIA InvokePattern (button press without a
-    pixel click). Falls back to a physical click if Invoke isn't supported."""
+    """Activate a control by name without a pixel click. Order of attempts:
+    scroll it into view (Electron virtualized lists), then InvokePattern (a
+    real button/menu activation), then SelectionItemPattern (servers/channels/
+    list items), and finally a coordinate click if the control has a real rect.
+    Works on offscreen/0-size Electron controls that a pixel click can't hit.
+    """
     ctrl, info = _find_uia_control(query, app_hint)
     if ctrl is None:
         return info
+    target = info["name"] or info["automation_id"]
+    # Bring virtualized/offscreen items into view first (no-op if not scrollable)
+    try:
+        sip = ctrl.GetScrollItemPattern()
+        if sip is not None:
+            sip.ScrollIntoView()
+            time.sleep(0.05)
+    except Exception:
+        pass
+    # 1. InvokePattern — the cleanest activation
     try:
         ip = ctrl.GetInvokePattern()
         if ip is not None:
             ip.Invoke()
             return {"ok": True, "method": "invoke_pattern",
-                    "target": info["name"] or info["automation_id"],
-                    "control_type": info["control_type"]}
+                    "target": target, "control_type": info["control_type"]}
     except Exception:
         pass
-    # fall back to physical click at center
+    # 2. SelectionItemPattern — for list/tree items (Discord servers & channels)
+    try:
+        sp = ctrl.GetSelectionItemPattern()
+        if sp is not None:
+            sp.Select()
+            return {"ok": True, "method": "selection_pattern",
+                    "target": target, "control_type": info["control_type"]}
+    except Exception:
+        pass
+    # 3. Coordinate click — only if the control now has a real on-screen rect.
     try:
         import pyautogui
-        pyautogui.click(info["x"], info["y"])
-        return {"ok": True, "method": "click_fallback",
-                "x": info["x"], "y": info["y"],
-                "target": info["name"] or info["automation_id"]}
+        rect = ctrl.BoundingRectangle
+        if rect.right > rect.left and rect.bottom > rect.top:
+            x = (rect.left + rect.right) // 2
+            y = (rect.top + rect.bottom) // 2
+            pyautogui.click(x, y)
+            return {"ok": True, "method": "click_fallback",
+                    "x": x, "y": y, "target": target}
+        return {"ok": False,
+                "error": f"'{target}' has no invokable pattern and no on-screen "
+                         "rect to click", "found_at": info}
     except Exception as exc:
         return {"ok": False, "error": str(exc), "found_at": info}
 
