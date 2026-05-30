@@ -730,6 +730,21 @@ class AgentService:
                 skill = skill_manager.get_skill(skill_id)
                 if skill:
                     skill_instructions += f"\n{skill.manual}\n"
+        # Connector manuals — a connector is a TOOL, its skill is the MANUAL.
+        # For any LINKED connector relevant to this goal, hand the agent its
+        # how-to so it knows exactly how to drive that surface (and the safety
+        # rails). Works for every entry point (capsule, dashboard, API).
+        try:
+            from . import connectors as _connectors
+            _briefs = _connectors.relevant_briefs(goal)
+            if _briefs:
+                skill_instructions += (
+                    "\n\n### CONNECTOR MANUALS (how to use the linked services "
+                    "this task needs)\n")
+                for _label, _manual in _briefs:
+                    skill_instructions += f"\n**{_label}**\n{_manual}\n"
+        except Exception:
+            pass
         project_rules = await asyncio.to_thread(discover_project_rules, tools.workspace)
         if project_rules:
             skill_instructions += f"\n\n### PROJECT RULES\n{project_rules}\n"

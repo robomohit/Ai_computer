@@ -148,6 +148,100 @@ CONNECTORS: list[dict] = [
 ]
 
 
+# ── Per-connector SKILLS (the "manual" for each tool) ────────────────────────
+# Each entry: keywords that mark the connector relevant to a goal, and a `skill`
+# manual the agent receives when that connector is linked AND relevant. The
+# manual tells the agent exactly how to drive that surface well + the safety
+# rails (never send/post/delete without the user's say-so).
+CONNECTOR_SKILLS: dict[str, dict] = {
+    "gmail": {"keywords": ["gmail", "email", "inbox", "mail"], "skill": (
+        "GMAIL (web). Open https://mail.google.com. The user is already signed in.\n"
+        "- Triage: read the subject + snippet of the top unread threads; classify each "
+        "as reply-needed / FYI / promo.\n"
+        "- To draft: open the thread, click Reply, write the draft, then Save (Ctrl+S) or "
+        "close — it auto-saves to Drafts. NEVER click Send unless the user explicitly asked.\n"
+        "- Search with the top search bar using Gmail operators (from:, is:unread, after:).\n"
+        "- Report a concise summary; do not delete or archive without being asked.")},
+    "outlook": {"keywords": ["outlook", "office", "email"], "skill": (
+        "OUTLOOK (web). Open https://outlook.office.com/mail. Same rules as Gmail: triage "
+        "unread, draft replies into Drafts only, NEVER send/delete without explicit consent.")},
+    "gcal": {"keywords": ["calendar", "schedule", "gcal", "meeting", "event", "agenda"], "skill": (
+        "GOOGLE CALENDAR (web). Open https://calendar.google.com. Use Week or Schedule view "
+        "to read upcoming events; report them grouped by day with times and locations, and "
+        "flag overlaps. Do NOT create, move, or delete events unless explicitly asked.")},
+    "github": {"keywords": ["github", "pr", "pull request", "issue", "repo", "review"], "skill": (
+        "GITHUB (web). Open https://github.com/notifications for the inbox, or a repo's "
+        "/pulls and /issues. Filter to items assigned to or requesting the user. Summarize "
+        "title, repo, status, and what's blocking. Do NOT merge, close, or comment unless asked.")},
+    "slack": {"keywords": ["slack", "channel", "dm", "message"], "skill": (
+        "SLACK (web). Open https://app.slack.com. Visit unread channels/DMs and summarize the "
+        "discussion (skip bot/notification channels). NEVER post a message or react unless the "
+        "user explicitly asked, and read the exact text back to them before sending.")},
+    "notion": {"keywords": ["notion", "wiki", "doc", "note", "page"], "skill": (
+        "NOTION (web). Open https://www.notion.so. Use the search (Ctrl/Cmd+P) to find pages; "
+        "open the top hit and summarize. Do NOT edit or delete pages unless explicitly asked.")},
+    "drive": {"keywords": ["drive", "google drive", "file", "document", "spreadsheet"], "skill": (
+        "GOOGLE DRIVE (web). Open https://drive.google.com. Search for the named file, open it, "
+        "and summarize. Do NOT rename, move, share, or delete files (sharing changes access — "
+        "never do it; ask the user to share manually).")},
+    "youtube": {"keywords": ["youtube", "video", "transcript", "watch"], "skill": (
+        "YOUTUBE. For a video URL, prefer the transcript: open the video, click '...more' then "
+        "'Show transcript', or use web_fetch on the URL. Produce a tight bulleted summary with "
+        "timestamps for the key points. No account actions (don't like/subscribe/comment).")},
+    "spotify": {"keywords": ["spotify", "music", "song", "playlist", "play", "track"], "skill": (
+        "SPOTIFY. If the desktop app is open, prefer UIA (uia_find/uia_click by control name); "
+        "otherwise open https://open.spotify.com. To play: search, then click the track/playlist "
+        "and the Play button. Confirm what started playing. Don't change account/library settings.")},
+    "teams": {"keywords": ["teams", "microsoft teams", "channel", "chat"], "skill": (
+        "MICROSOFT TEAMS (web). Open https://teams.microsoft.com. Summarize unread chats and the "
+        "followed channels. NEVER post or reply unless explicitly asked.")},
+    "whatsapp": {"keywords": ["whatsapp"], "skill": (
+        "WHATSAPP (web). Open https://web.whatsapp.com (the phone must be linked). Summarize "
+        "unread conversations. NEVER send a message unless the user explicitly asked, and read "
+        "the exact text back before sending.")},
+    "telegram": {"keywords": ["telegram"], "skill": (
+        "TELEGRAM (web). Open https://web.telegram.org. Summarize unread chats. NEVER send a "
+        "message unless explicitly asked; confirm the exact text first.")},
+    "discord": {"keywords": ["discord", "server", "channel"], "skill": (
+        "DISCORD (desktop app, Electron). Use UIA: focus_window 'Discord'; if uia_find returns "
+        "nothing, electron_unlock it, then retry. Click the server in the left rail by name, then "
+        "the channel (names look like '〔💬〕general'). Read messages from the message list. NEVER "
+        "send a message unless the user explicitly asked — confirm the exact text and channel first.")},
+    "linear": {"keywords": ["linear", "issue", "ticket", "sprint", "cycle"], "skill": (
+        "LINEAR (web). Open https://linear.app. Use 'My Issues' to list issues assigned to the "
+        "user, grouped by status; flag overdue ones. Do NOT change status or comment unless asked.")},
+    "jira": {"keywords": ["jira", "ticket", "issue", "board", "sprint"], "skill": (
+        "JIRA (web). Open the user's Jira board. List tickets assigned to them by status and "
+        "summarize what's in progress. Do NOT transition or comment on tickets unless asked.")},
+    "trello": {"keywords": ["trello", "board", "card", "list"], "skill": (
+        "TRELLO (web). Open https://trello.com. Summarize the named board's cards by list. Do "
+        "NOT move, archive, or edit cards unless explicitly asked.")},
+    "filesystem": {"keywords": ["file", "folder", "directory", "downloads", "documents", "desktop"], "skill": (
+        "LOCAL FILES. Use the real file tools — list_directory, read_file, write_file, file_glob, "
+        "file_grep, analyze_folder. Prefer these over screenshots. Confirm before overwriting or "
+        "deleting anything; never delete outside what the user asked.")},
+    "clipboard": {"keywords": ["clipboard", "copied", "paste"], "skill": (
+        "CLIPBOARD. Use get_clipboard to read what the user copied and set_clipboard to place a "
+        "result they can paste. The clipboard contents are often the real subject of the task.")},
+}
+
+
+def relevant_briefs(goal: str) -> list[tuple[str, str]]:
+    """For a goal, return (label, manual) for each LINKED connector whose
+    keywords appear in the goal — i.e. hand the agent the manual for the tool
+    it's about to use. Empty if nothing matches."""
+    g = (goal or "").lower()
+    out: list[tuple[str, str]] = []
+    for c in linked_only():
+        meta = CONNECTOR_SKILLS.get(c["id"], {})
+        kws = [c["id"], (c.get("label") or "").lower()] + meta.get("keywords", [])
+        if any(k and k in g for k in kws):
+            skill = meta.get("skill", "")
+            if skill:
+                out.append((c["label"], skill))
+    return out
+
+
 def store_path() -> Path:
     """workspace/connectors.json"""
     base = Path(os.environ.get("AI_COMPUTER_WORKSPACE", ".")).resolve()
@@ -181,6 +275,11 @@ def list_with_state() -> list[dict]:
         c["linked"] = bool(s.get("linked")) or c["auth_kind"] == "local"
         c["linked_at"] = s.get("linked_at")
         c["notes"] = s.get("notes", "")
+        # Expose the connector's skill manual + whether it has one, so the
+        # dashboard can show that each tool comes with a how-to for the agent.
+        meta = CONNECTOR_SKILLS.get(c["id"], {})
+        c["skill"] = meta.get("skill", "")
+        c["has_skill"] = bool(meta.get("skill"))
         out.append(c)
     return out
 

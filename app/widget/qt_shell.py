@@ -836,18 +836,18 @@ def main(port: int = 8000) -> int:
                                        "computer_isolated"):
                 payload["goal"] = self.DESKTOP_HARDENING + payload["goal"]
 
-            # Connect the dashboard's linked connectors to the agent: prepend
-            # a short hint listing services the user has authorised so the
-            # agent knows where it's allowed to act (Gmail, Slack, etc.).
+            # Tell the agent which connectors (surfaces) are linked & available.
+            # The detailed per-connector MANUAL is injected server-side by the
+            # agent (connectors.relevant_briefs) for whichever ones this goal
+            # actually needs, so it works for the dashboard path too.
             linked = self._fetch_linked_connectors()
             web_connectors = [c for c in linked
                               if c.get("auth_kind") == "browser"]
             if web_connectors:
                 names = ", ".join(c["label"] for c in web_connectors)
                 payload["goal"] = (
-                    f"[User has linked these web connectors — feel free to "
-                    f"drive them via the browser when relevant: {names}.]\n\n"
-                    + payload["goal"]
+                    f"[Linked & available services you may use when relevant: "
+                    f"{names}.]\n\n" + payload["goal"]
                 )
 
             return payload
