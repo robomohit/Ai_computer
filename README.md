@@ -36,10 +36,12 @@ OPENROUTER_API_KEY=sk-or-v1-...   # free tier — recommended
 
 ### 3. Launch
 
-**Windows:** double-click **`start.bat`** — the floating glass capsule appears at the top of your screen.
+Two native desktop surfaces (no browser needed):
 
-- Press **`Ctrl+Shift+Space`** any time to show/hide it.
-- Prefer a browser dashboard instead? Run **`start_web.bat`** and open **http://localhost:8080**.
+- **`start.bat`** — the floating glass **capsule** (the main product). Press **`Ctrl+Shift+Space`** any time to show/hide it.
+- **`start_dashboard.bat`** — the full **dashboard** in its own native window (sessions, connectors, models, MCP, skills).
+
+> Advanced: `start_web.bat` serves the dashboard over HTTP (http://localhost:8080) for a browser or another device.
 
 ---
 

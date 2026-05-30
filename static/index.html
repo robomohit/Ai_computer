@@ -476,5 +476,65 @@
 </div>
 
 <script src="/static/app.js" defer></script>
+<script>
+// Native window controls for the frameless pywebview desktop app. The custom
+// titlebar min/max/close buttons drive the DesktopBridge. No-ops in a plain
+// browser (start_web.bat), where the browser supplies its own window chrome.
+(function () {
+  function api() { return (window.pywebview && window.pywebview.api) || null; }
+  function wire(sel, method, fallback) {
+    var btn = document.querySelector(sel);
+    if (!btn) return;
+    btn.addEventListener('click', function () {
+      var a = api();
+      if (a && typeof a[method] === 'function') { try { a[method](); return; } catch (e) {} }
+      if (fallback) try { fallback(); } catch (e) {}
+    });
+  }
+  function wireDrag() {
+    var bar = document.getElementById('titlebar');
+    if (!bar) return;
+    var dragging = false, lx = 0, ly = 0;
+    bar.addEventListener('pointerdown', function (e) {
+      if (e.button !== 0) return;
+      // don't start a drag on the buttons (Commands / min / max / close)
+      if (e.target.closest && e.target.closest('.tb-right')) return;
+      var a = api();
+      if (!a || !a.move_window) return;   // browser mode — let the OS handle it
+      dragging = true; lx = e.screenX; ly = e.screenY;
+      try { bar.setPointerCapture(e.pointerId); } catch (_) {}
+    });
+    bar.addEventListener('pointermove', function (e) {
+      if (!dragging) return;
+      var dx = e.screenX - lx, dy = e.screenY - ly;
+      if (dx || dy) {
+        var a = api();
+        if (a && a.move_window) a.move_window(dx, dy);
+        lx = e.screenX; ly = e.screenY;
+      }
+    });
+    function end(e) {
+      dragging = false;
+      try { bar.releasePointerCapture(e.pointerId); } catch (_) {}
+    }
+    bar.addEventListener('pointerup', end);
+    bar.addEventListener('pointercancel', end);
+    // double-click titlebar to maximize/restore (standard desktop behaviour)
+    bar.addEventListener('dblclick', function (e) {
+      if (e.target.closest && e.target.closest('.tb-right')) return;
+      var a = api(); if (a && a.toggle_maximize) a.toggle_maximize();
+    });
+  }
+  function init() {
+    wire('.tb-wc-min', 'minimize', null);
+    wire('.tb-wc-max', 'toggle_maximize', null);
+    wire('.tb-wc-close', 'close', function () { try { window.close(); } catch (e) {} });
+    wireDrag();
+  }
+  if (document.readyState === 'loading')
+    document.addEventListener('DOMContentLoaded', init);
+  else init();
+})();
+</script>
 </body>
 </html>

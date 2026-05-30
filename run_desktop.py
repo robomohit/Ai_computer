@@ -57,6 +57,12 @@ if __name__ == "__main__":
         height=900,
         min_size=(1024, 768),
         background_color="#0a0a0a",
+        # Frameless: the dashboard draws its own titlebar (drag region + custom
+        # min/max/close wired to DesktopBridge), so we drop the OS frame to
+        # avoid a double titlebar. easy_drag=False so only the titlebar moves
+        # the window (its CSS -webkit-app-region: drag), not the whole canvas.
+        frameless=True,
+        easy_drag=False,
     )
 
     def bind_bridge(main_window, desktop_bridge):

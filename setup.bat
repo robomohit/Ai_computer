@@ -51,7 +51,7 @@ echo      Double-click start.bat to launch the floating capsule.
 echo      On first run it will ask you to paste a free OpenRouter key
 echo      (get one in ~30s at openrouter.ai/keys) - no .env editing needed.
 echo.
-echo      (Prefer the browser dashboard? Run start_web.bat instead.)
+echo      For the full dashboard window, run start_dashboard.bat.
 echo  ============================================
 echo.
 pause

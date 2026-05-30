@@ -11,7 +11,7 @@ except ImportError:
     webview = None  # type: ignore
 
 
-OVERLAY_ACCENT = "#ff8f2a"
+OVERLAY_ACCENT = "#5BE0D0"  # brand Aqua Mint
 OVERLAY_HTML = """<!doctype html>
 <html>
 <head>
@@ -34,21 +34,21 @@ OVERLAY_HTML = """<!doctype html>
       border-radius: 999px;
       animation: pulse 1.8s ease-in-out infinite;
       box-shadow:
-        0 0 18px rgba(255, 143, 42, 0.95),
-        0 0 38px rgba(255, 143, 42, 0.52),
-        0 0 64px rgba(255, 143, 42, 0.28);
+        0 0 18px rgba(91, 224, 208, 0.95),
+        0 0 38px rgba(91, 224, 208, 0.52),
+        0 0 64px rgba(91, 224, 208, 0.28);
     }
     body.top .band {
-      background: linear-gradient(180deg, rgba(255, 143, 42, 0.98), rgba(255, 143, 42, 0.58) 45%, rgba(255, 143, 42, 0.12) 85%, transparent);
+      background: linear-gradient(180deg, rgba(91, 224, 208, 0.98), rgba(91, 224, 208, 0.58) 45%, rgba(91, 224, 208, 0.12) 85%, transparent);
     }
     body.bottom .band {
-      background: linear-gradient(0deg, rgba(255, 143, 42, 0.98), rgba(255, 143, 42, 0.58) 45%, rgba(255, 143, 42, 0.12) 85%, transparent);
+      background: linear-gradient(0deg, rgba(91, 224, 208, 0.98), rgba(91, 224, 208, 0.58) 45%, rgba(91, 224, 208, 0.12) 85%, transparent);
     }
     body.left .band {
-      background: linear-gradient(90deg, rgba(255, 143, 42, 0.98), rgba(255, 143, 42, 0.58) 45%, rgba(255, 143, 42, 0.12) 85%, transparent);
+      background: linear-gradient(90deg, rgba(91, 224, 208, 0.98), rgba(91, 224, 208, 0.58) 45%, rgba(91, 224, 208, 0.12) 85%, transparent);
     }
     body.right .band {
-      background: linear-gradient(270deg, rgba(255, 143, 42, 0.98), rgba(255, 143, 42, 0.58) 45%, rgba(255, 143, 42, 0.12) 85%, transparent);
+      background: linear-gradient(270deg, rgba(91, 224, 208, 0.98), rgba(91, 224, 208, 0.58) 45%, rgba(91, 224, 208, 0.12) 85%, transparent);
     }
     @keyframes pulse {
       0%, 100% { opacity: 0.82; }
@@ -127,6 +127,20 @@ class DesktopBridge:
                 return {"ok": False, "error": "desktop window unavailable"}
             self._main_window.destroy()
             return {"ok": True}
+
+    def move_window(self, dx: float, dy: float) -> dict[str, Any]:
+        """Move the (frameless) window by a delta — drives titlebar dragging
+        from JS, since WebView2 doesn't reliably honour -webkit-app-region."""
+        with self._lock:
+            if not self._main_window:
+                return {"ok": False}
+            try:
+                self._main_window.move(
+                    int(self._main_window.x) + int(dx),
+                    int(self._main_window.y) + int(dy))
+                return {"ok": True}
+            except Exception as exc:  # pragma: no cover - defensive
+                return {"ok": False, "error": str(exc)}
 
     # Window width for the Sidekick capsule shell. The shell window hugs the
     # capsule, so JS calls set_capsule_height() to grow/shrink the window as
