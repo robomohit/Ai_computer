@@ -86,6 +86,29 @@ class _Spotlight:
         return min(1.0, self.t / max(1, self.duration_ms))
 
 
+class _AppGlow:
+    """A breathing glow tracing the edges of the whole app window the agent is
+    working in (brand-colour). Persistent: re-armed on each action, fades out
+    after a short hold of inactivity."""
+    __slots__ = ("x", "y", "w", "h", "label", "t0", "armed_until", "fade_ms")
+
+    def __init__(self, x, y, w, h, label, now, hold_ms=3500, fade_ms=480):
+        self.x = int(x); self.y = int(y); self.w = int(w); self.h = int(h)
+        self.label = (label or "")[:48]
+        self.t0 = now
+        self.armed_until = now + hold_ms
+        self.fade_ms = fade_ms
+
+    def rearm(self, x, y, w, h, label, now, hold_ms=3500):
+        self.x = int(x); self.y = int(y); self.w = int(w); self.h = int(h)
+        if label:
+            self.label = label[:48]
+        self.armed_until = now + hold_ms
+
+    def alive(self, now) -> bool:
+        return now < self.armed_until + self.fade_ms
+
+
 class VirtualCursorOverlay(QWidget):
     """Full-screen click-through overlay that paints animated agent activity."""
 
@@ -123,6 +146,7 @@ class VirtualCursorOverlay(QWidget):
         self._ripples: list[_Ripple] = []
         self._carets: list[_Caret] = []
         self._spotlights: list[_Spotlight] = []
+        self._app_glow: "_AppGlow | None" = None
         self._cursor_x = -100
         self._cursor_y = -100
         self._cursor_visible_until = 0  # epoch ms; 0 = hide
@@ -180,6 +204,19 @@ class VirtualCursorOverlay(QWidget):
         Keep only the latest spotlight so the view stays clean."""
         self._spotlights = [s for s in self._spotlights if s.progress() < 0.7]
         self._spotlights.append(_Spotlight(x, y, w, h, label, kind))
+        self._bump_cursor_visibility()
+        self._ensure_visible()
+
+    def show_app_focus(self, x: int, y: int, w: int, h: int,
+                       label: str = "") -> None:
+        """Glow the edges of the whole app window the agent is operating in
+        (brand colour), with a status label. Re-armed on every action so the
+        glow stays up while the agent works, then fades once it's idle."""
+        now = self._now_ms()
+        if self._app_glow is None:
+            self._app_glow = _AppGlow(x, y, w, h, label, now)
+        else:
+            self._app_glow.rearm(x, y, w, h, label, now)
         self._bump_cursor_visibility()
         self._ensure_visible()
 
@@ -298,6 +335,8 @@ class VirtualCursorOverlay(QWidget):
         for s in self._spotlights:
             s.t += self.TICK_MS
         self._spotlights = [s for s in self._spotlights if s.alive()]
+        if self._app_glow is not None and not self._app_glow.alive(now_ms):
+            self._app_glow = None
 
         # Hide if everything is done — also wait for the action label
         # fade to finish so the user gets to read what just happened.
@@ -307,6 +346,7 @@ class VirtualCursorOverlay(QWidget):
                         + self._ACTION_LABEL_FADE_MS))
         all_done = (not self._ripples and not self._carets
                     and not self._spotlights
+                    and self._app_glow is None
                     and not self._trail
                     and not label_alive
                     and now_ms >= self._cursor_visible_until
@@ -376,8 +416,12 @@ class VirtualCursorOverlay(QWidget):
                 p.drawText(rect.adjusted(8, 0, -8, 0),
                            Qt.AlignVCenter | Qt.AlignLeft, c.text)
 
-        # 3b. UIA spotlights — focus ring tracing a real control's bounds
+        # 3a. App-edge glow — brand-colour border around the whole target app
         now0 = self._now_ms()
+        if self._app_glow is not None:
+            self._paint_app_glow(p, self._app_glow, now0)
+
+        # 3b. UIA spotlights — focus ring tracing a real control's bounds
         for s in self._spotlights:
             self._paint_spotlight(p, s, now0)
 
@@ -404,6 +448,34 @@ class VirtualCursorOverlay(QWidget):
             self._paint_action_label(p, cx, cy, now)
 
         p.end()
+
+    def _paint_app_glow(self, p: QPainter, g: "_AppGlow", now_ms: int) -> None:
+        """Draw a soft, breathing brand-colour border hugging the app window's
+        edges, with a status label tag at the top."""
+        if now_ms < g.armed_until:
+            a = min(1.0, (now_ms - g.t0) / 200.0)      # ease in
+        else:
+            a = max(0.0, 1.0 - (now_ms - g.armed_until) / g.fade_ms)
+        if a <= 0.01:
+            return
+        pulse = (1 + math.sin(now_ms / 430.0)) / 2      # 0..1 gentle breathing
+        # Sit the ring a hair inside the window outline.
+        rect = QRectF(g.x + 1.5, g.y + 1.5, g.w - 3, g.h - 3)
+        rad = 11.0
+        # wide soft glow passes (outer → inner), breathing in intensity
+        for gw, ga in ((26.0, 22), (16.0, 44), (8.0, 78)):
+            c = QColor(RIPPLE_COLOR)
+            c.setAlpha(int(ga * a * (0.62 + 0.38 * pulse)))
+            p.setPen(QPen(c, gw)); p.setBrush(Qt.NoBrush)
+            p.drawRoundedRect(rect, rad, rad)
+        # crisp inner line
+        c = QColor(RIPPLE_COLOR); c.setAlpha(int(248 * a))
+        p.setPen(QPen(c, 2.4)); p.setBrush(Qt.NoBrush)
+        p.drawRoundedRect(rect, rad, rad)
+        # status tag near the top edge of the window
+        if g.label:
+            self._draw_label_pill(p, int(g.x + g.w / 2), int(g.y + 14),
+                                  g.label, a)
 
     def _paint_spotlight(self, p: QPainter, s: "_Spotlight", now_ms: int) -> None:
         """Draw a snapping focus ring + glow around a UIA control's bounds, with

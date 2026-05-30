@@ -2179,25 +2179,30 @@ def main(port: int = 8000) -> int:
             output text carries real coordinates like
             'Clicked left 1 times at 656, 525'."""
             lname = (name or "").lower()
-            # ── UIA actions: draw a precise focus ring on the real control ──
+            # ── UIA actions: glow the edges of the whole app being worked in ──
             if lname in ("uia_click", "uia_type", "uia_find"):
                 try:
                     import re as _re
-                    m = _re.search(r"\[uia:(-?\d+),(-?\d+),(\d+),(\d+)\]", output)
-                    if m:
-                        l, t, w, h = (int(m.group(i)) for i in range(1, 5))
-                        tgt_m = _re.search(r"'([^']+)'", output)
-                        tgt = (tgt_m.group(1) if tgt_m else "").strip()
-                        if lname == "uia_click":
-                            label = f"Clicking {tgt}" if tgt else "Clicking"
-                            kind = "click"
-                        elif lname == "uia_type":
-                            label = f"Typing into {tgt}" if tgt else "Typing"
-                            kind = "type"
-                        else:
-                            label = f"Found {tgt}" if tgt else "Located"
-                            kind = "find"
-                        self._vcursor.show_uia(l, t, w, h, label=label, kind=kind)
+                    tgt_m = _re.search(r"'([^']+)'", output)
+                    tgt = (tgt_m.group(1) if tgt_m else "").strip()
+                    if lname == "uia_click":
+                        label = f"Clicking {tgt}" if tgt else "Clicking"
+                    elif lname == "uia_type":
+                        label = f"Typing into {tgt}" if tgt else "Typing"
+                    else:
+                        label = f"Found {tgt}" if tgt else "Located"
+                    am = _re.search(r"\[app:(-?\d+),(-?\d+),(\d+),(\d+)\]", output)
+                    if am:
+                        l, t, w, h = (int(am.group(i)) for i in range(1, 5))
+                        self._vcursor.show_app_focus(l, t, w, h, label=label)
+                    else:
+                        # no window rect — fall back to a control focus ring
+                        cm = _re.search(r"\[uia:(-?\d+),(-?\d+),(\d+),(\d+)\]", output)
+                        if cm:
+                            l, t, w, h = (int(cm.group(i)) for i in range(1, 5))
+                            kind = ("type" if lname == "uia_type"
+                                    else "find" if lname == "uia_find" else "click")
+                            self._vcursor.show_uia(l, t, w, h, label=label, kind=kind)
                 except Exception as exc:
                     print(f"[capsule] uia overlay error: {exc}", flush=True)
                 return

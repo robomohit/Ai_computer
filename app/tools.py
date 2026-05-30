@@ -1954,12 +1954,27 @@ class ToolExecutor:
     @staticmethod
     def _uia_rect_token(rect: dict) -> str:
         """Encode a control's on-screen bounds so the capsule's overlay can
-        draw a focus ring there. Parsed by the widget; harmless to the model."""
+        position its label there. Parsed by the widget; harmless to the model."""
         try:
             l, t = int(rect["left"]), int(rect["top"])
             w, h = int(rect["width"]), int(rect["height"])
             if w > 0 and h > 0:
                 return f" [uia:{l},{t},{w},{h}]"
+        except Exception:
+            pass
+        return ""
+
+    @staticmethod
+    def _app_rect_token(app: str) -> str:
+        """Encode the target app WINDOW bounds so the overlay can draw a glowing
+        edge around the whole app the agent is working in."""
+        try:
+            from .widget.desktop_features import app_window_rect
+            r = app_window_rect(app or "")
+            l, t = int(r["left"]), int(r["top"])
+            w, h = int(r["width"]), int(r["height"])
+            if w > 0 and h > 0:
+                return f" [app:{l},{t},{w},{h}]"
         except Exception:
             pass
         return ""
@@ -1982,14 +1997,14 @@ class ToolExecutor:
                 tok = self._uia_rect_token({
                     "left": int(c0["x"]) - ww // 2, "top": int(c0["y"]) - hh // 2,
                     "width": ww, "height": hh})
-        return ToolResult(ok=True, output="UIA matches:\n" + "\n".join(lines) + tok, data=res)
+        return ToolResult(ok=True, output="UIA matches:\n" + "\n".join(lines) + tok + self._app_rect_token(app), data=res)
 
     def uia_click(self, query: str, app: str = ""):
         from .widget.desktop_features import invoke_ui_element
         res = invoke_ui_element(query, app)
         if not res.get("ok"):
             return ToolResult(ok=False, output=res.get("error", "click failed"), data=res)
-        tok = self._uia_rect_token(res.get("rect", {}))
+        tok = self._uia_rect_token(res.get("rect", {})) + self._app_rect_token(app)
         return ToolResult(ok=True, output=f"Activated '{res.get('target')}' via {res.get('method')}.{tok}", data=res)
 
     def uia_type(self, query: str, text: str, app: str = "", clear_first: bool = False, submit: bool = False):
@@ -1997,7 +2012,7 @@ class ToolExecutor:
         res = type_into_ui_element(query, text, app, clear_first, submit)
         if not res.get("ok"):
             return ToolResult(ok=False, output=res.get("error", "type failed"), data=res)
-        tok = self._uia_rect_token(res.get("rect", {}))
+        tok = self._uia_rect_token(res.get("rect", {})) + self._app_rect_token(app)
         return ToolResult(ok=True, output=f"Typed into '{res.get('target')}' via {res.get('method')}.{tok}", data=res)
 
     def uia_wait(self, query: str, app: str = "", timeout: float = 6.0):

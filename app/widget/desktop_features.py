@@ -714,6 +714,33 @@ def _find_uia_control(query: str, app_hint: str = ""):
         return None, {"ok": False, "error": str(exc)}
 
 
+def app_window_rect(app_hint: str) -> dict:
+    """On-screen bounds of the top-level window matching app_hint (its title
+    substring). Used to draw a glowing edge around the whole app the agent is
+    working in. Falls back to the foreground window. Zeros if unavailable."""
+    try:
+        import uiautomation as uia  # noqa: F401
+    except ImportError:
+        return {"left": 0, "top": 0, "width": 0, "height": 0}
+    _ensure_uia_config(uia)
+    try:
+        top = None
+        hint = (app_hint or "").lower()
+        if hint:
+            for w in uia.GetRootControl().GetChildren():
+                try:
+                    if hint in (w.Name or "").lower():
+                        top = w
+                        break
+                except Exception:
+                    continue
+        if top is None:
+            return {"left": 0, "top": 0, "width": 0, "height": 0}
+        return _onscreen_rect(top)
+    except Exception:
+        return {"left": 0, "top": 0, "width": 0, "height": 0}
+
+
 def _onscreen_rect(ctrl) -> dict:
     """Current on-screen bounds of a live control as {left, top, width, height}.
     Read AFTER ScrollIntoView so virtualized/offscreen controls report real
