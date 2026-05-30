@@ -226,6 +226,14 @@ CONNECTOR_SKILLS: dict[str, dict] = {
 }
 
 
+def skill_menu() -> list[tuple[str, str]]:
+    """L1 (always-on) routing metadata, à la Claude / OpenClaw skills: for every
+    LINKED connector, (label, when-to-use). Shown to the agent on every task so
+    it knows what surfaces exist and WHEN to reach for them — the full manual is
+    only loaded (L2) for the one the task actually needs (relevant_briefs)."""
+    return [(c["label"], c.get("tip") or "") for c in linked_only()]
+
+
 def relevant_briefs(goal: str) -> list[tuple[str, str]]:
     """For a goal, return (label, manual) for each LINKED connector whose
     keywords appear in the goal — i.e. hand the agent the manual for the tool

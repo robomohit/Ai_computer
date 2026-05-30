@@ -730,17 +730,29 @@ class AgentService:
                 skill = skill_manager.get_skill(skill_id)
                 if skill:
                     skill_instructions += f"\n{skill.manual}\n"
-        # Connector manuals — a connector is a TOOL, its skill is the MANUAL.
-        # For any LINKED connector relevant to this goal, hand the agent its
-        # how-to so it knows exactly how to drive that surface (and the safety
-        # rails). Works for every entry point (capsule, dashboard, API).
+        # Skills + connectors, Claude/OpenClaw-style PROGRESSIVE DISCLOSURE:
+        #   L1 (always): a compact menu of what's available + WHEN to use it, so
+        #       the agent knows the surfaces/skills exist (cheap, ~1 line each).
+        #   L2 (on match): the FULL manual, but only for the connector(s) this
+        #       goal actually needs — a connector is the tool, its skill the
+        #       manual. Works for every entry point (capsule, dashboard, API).
         try:
             from . import connectors as _connectors
+            _menu = _connectors.skill_menu()
+            _all_skills = skill_manager.get_all_skills()
+            _lines = [f"- {label}: {when}" for label, when in _menu if when]
+            _lines += [f"- {sk.name}: {sk.description}"
+                       for sk in (_all_skills or []) if sk.description]
+            if _lines:
+                skill_instructions += (
+                    "\n\n### AVAILABLE SKILLS & CONNECTORS "
+                    "(reach for these when the task calls for them)\n"
+                    + "\n".join(_lines) + "\n")
             _briefs = _connectors.relevant_briefs(goal)
             if _briefs:
                 skill_instructions += (
-                    "\n\n### CONNECTOR MANUALS (how to use the linked services "
-                    "this task needs)\n")
+                    "\n\n### CONNECTOR MANUALS (how to use the services this "
+                    "task needs)\n")
                 for _label, _manual in _briefs:
                     skill_instructions += f"\n**{_label}**\n{_manual}\n"
         except Exception:
