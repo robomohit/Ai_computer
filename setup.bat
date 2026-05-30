@@ -46,11 +46,12 @@ echo.
 echo  ============================================
 echo    Setup complete!
 echo.
-echo    Next steps:
-echo      1. Edit .env and add your API key
-echo         (free option: get OPENROUTER_API_KEY at openrouter.ai)
-echo      2. Double-click start.bat to launch the floating capsule
-echo         (or start_web.bat for the dashboard in your browser)
+echo    Next step:
+echo      Double-click start.bat to launch the floating capsule.
+echo      On first run it will ask you to paste a free OpenRouter key
+echo      (get one in ~30s at openrouter.ai/keys) - no .env editing needed.
+echo.
+echo      (Prefer the browser dashboard? Run start_web.bat instead.)
 echo  ============================================
 echo.
 pause
