@@ -79,6 +79,62 @@ CONNECTORS: list[dict] = [
          "Open the YouTube URL below, fetch the transcript, produce a "
          "5-bullet summary with timestamps for key claims. URL: "),
      "default_mode": "computer_use"},
+    {"id": "spotify",  "label": "Spotify",       "icon": "music",
+     "tint": "#1DB954", "auth_kind": "browser",
+     "tip": "Control playback + find music on Spotify web",
+     "task_template": (
+         "Open https://open.spotify.com. Do what I ask next — e.g. play a "
+         "playlist, search an artist, or queue a song. Request: "),
+     "default_mode": "computer_use"},
+    {"id": "teams",    "label": "Microsoft Teams","icon": "video",
+     "tint": "#6264A7", "auth_kind": "browser",
+     "tip": "Triage Teams chats + channels",
+     "task_template": (
+         "Open https://teams.microsoft.com. Summarize unread chats and the "
+         "channels I follow. Don't post anything."),
+     "default_mode": "computer_use"},
+    {"id": "whatsapp", "label": "WhatsApp",      "icon": "message",
+     "tint": "#25D366", "auth_kind": "browser",
+     "tip": "Read recent WhatsApp chats (WhatsApp Web)",
+     "task_template": (
+         "Open https://web.whatsapp.com. Summarize my unread conversations. "
+         "Do NOT send any message unless I explicitly ask."),
+     "default_mode": "computer_use"},
+    {"id": "telegram", "label": "Telegram",      "icon": "message",
+     "tint": "#26A5E4", "auth_kind": "browser",
+     "tip": "Read recent Telegram chats (Telegram Web)",
+     "task_template": (
+         "Open https://web.telegram.org. Summarize my unread chats. Do NOT "
+         "send anything unless I explicitly ask."),
+     "default_mode": "computer_use"},
+    {"id": "discord",  "label": "Discord",       "icon": "message",
+     "tint": "#5865F2", "auth_kind": "browser",
+     "tip": "Navigate Discord servers + channels",
+     "task_template": (
+         "Open the Discord app (or https://discord.com/app). Go to the server "
+         "and channel I name, then summarize recent messages. Server/channel: "),
+     "default_mode": "computer"},
+    {"id": "linear",   "label": "Linear",        "icon": "ticket",
+     "tint": "#5E6AD2", "auth_kind": "browser",
+     "tip": "Review my Linear issues",
+     "task_template": (
+         "Open https://linear.app. List issues assigned to me, grouped by "
+         "status. Flag anything overdue."),
+     "default_mode": "computer_use"},
+    {"id": "jira",     "label": "Jira",          "icon": "ticket",
+     "tint": "#0052CC", "auth_kind": "browser",
+     "tip": "Review my Jira tickets",
+     "task_template": (
+         "Open my Jira board. List tickets assigned to me, grouped by status. "
+         "Summarize what's in progress."),
+     "default_mode": "computer_use"},
+    {"id": "trello",   "label": "Trello",        "icon": "ticket",
+     "tint": "#0079BF", "auth_kind": "browser",
+     "tip": "Review my Trello boards",
+     "task_template": (
+         "Open https://trello.com. Summarize the cards on the board I name, "
+         "by list. Board: "),
+     "default_mode": "computer_use"},
     {"id": "filesystem","label": "Local Files",  "icon": "folder",
      "tint": "#4B5563", "auth_kind": "local",
      "tip": "Read / write local files (always available)",
