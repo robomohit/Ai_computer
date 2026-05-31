@@ -11,10 +11,10 @@ that the agent treats as permission to drive the corresponding browser surface.
 """
 from __future__ import annotations
 
-import json
-import os
 from pathlib import Path
 from typing import Any, Optional
+
+from .state_store import read_json, workspace_state_path, write_json
 
 # The full registry. `auth_kind` describes how a connector links:
 #   browser  — agent drives the web UI; "link" just marks consent
@@ -252,24 +252,16 @@ def relevant_briefs(goal: str) -> list[tuple[str, str]]:
 
 def store_path() -> Path:
     """workspace/connectors.json"""
-    base = Path(os.environ.get("AI_COMPUTER_WORKSPACE", ".")).resolve()
-    return base / "connectors.json"
+    return workspace_state_path("connectors.json")
 
 
 def _load_state() -> dict[str, Any]:
-    p = store_path()
-    if not p.exists():
-        return {}
-    try:
-        return json.loads(p.read_text(encoding="utf-8"))
-    except Exception:
-        return {}
+    data = read_json(store_path(), {})
+    return data if isinstance(data, dict) else {}
 
 
 def _save_state(state: dict[str, Any]) -> None:
-    p = store_path()
-    p.parent.mkdir(parents=True, exist_ok=True)
-    p.write_text(json.dumps(state, indent=2), encoding="utf-8")
+    write_json(store_path(), state)
 
 
 def list_with_state() -> list[dict]:

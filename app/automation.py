@@ -8,33 +8,27 @@ Provides:
 from __future__ import annotations
 
 import asyncio
-import json
 import logging
-import os
 import time
 import uuid
 from abc import ABC, abstractmethod
 from typing import Awaitable, Callable, Optional
 
+from .state_store import read_json, workspace_state_path, write_json
+
 _log = logging.getLogger(__name__)
-_REGISTRY_PATH = "automation.json"
+_REGISTRY_FILE = "automation.json"
 
 
 # ── persistence ──────────────────────────────────────────────────────────────
 
 def _load_file() -> list[dict]:
-    if os.path.exists(_REGISTRY_PATH):
-        try:
-            with open(_REGISTRY_PATH, encoding="utf-8") as f:
-                return json.load(f)
-        except (json.JSONDecodeError, OSError):
-            pass
-    return []
+    data = read_json(workspace_state_path(_REGISTRY_FILE), [])
+    return data if isinstance(data, list) else []
 
 
 def _save_file(data: list[dict]) -> None:
-    with open(_REGISTRY_PATH, "w", encoding="utf-8") as f:
-        json.dump(data, f, indent=2)
+    write_json(workspace_state_path(_REGISTRY_FILE), data)
 
 
 # ── Trigger ABC ───────────────────────────────────────────────────────────────

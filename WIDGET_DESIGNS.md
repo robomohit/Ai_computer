@@ -54,3 +54,13 @@ the full dashboard.
 Earlier iterations (corner orb, expandable panel, Spotlight pill) are
 superseded — the capsule is the single canonical design. Do not re-introduce a
 separate `static/widget-spotlight/` copy; there is one widget.
+
+## Capsule V2: Adaptive Command Surface
+
+The capsule is now treated as a tiny stateful control surface, not just a glass input. Both the web capsule and native Qt capsule expose:
+
+- **Scope** - the active computer surface, selected app/window, folder, image, clipboard, or attachment.
+- **Perception** - whether the agent is ready, using attached context, taking voice input, seeing the screen, or paused for approval.
+- **Phase** - idle, focused, context-ready, submitting, planning, acting, waiting for approval, paused, done, or error.
+- **Controls** - Pause, Stop, and Details live on the capsule while work is active.
+- **Context actions** - the web capsule suggests quick actions based on mode and scope: browser page actions, workspace/test actions, folder cleanup, or desktop screen actions.

@@ -19,10 +19,21 @@ def test_dynamic_lists_do_not_render_untrusted_api_data_with_innerhtml():
 
     assert "grid.innerHTML = allSkills.map" not in html
     assert "grid.innerHTML = allMCPServers.map" not in html
+    assert "tile.innerHTML =" not in html
     assert "toolsContainer.innerHTML = server.tools.map" not in html
+    assert "container.innerHTML = Object.entries(providers).map" not in html
     assert "addEventListener('click', () => toggleSkill(s.id))" in html
     assert "name.textContent = s.name" in html
+    assert "name.textContent = c.label || c.id || 'Connector'" in html
+    assert "tip.textContent = c.tip || ''" in html
+    assert "chip.title = `${name}: ${status}`" in html
     assert "pre.textContent = JSON.stringify(props, null, 2)" in html
+
+
+def test_app_js_has_no_literal_nul_sentinels():
+    js = (_STATIC / "app.js").read_bytes()
+    assert b"\x00" not in js
+    assert b"@@AIC@B" in js
 
 
 def test_terminal_and_subtask_dynamic_values_use_textcontent():
@@ -109,6 +120,56 @@ def test_settings_modal_surfaces_coding_backends():
     assert "renderCodingBackends" in html
 
 
+def test_settings_modal_surfaces_readiness_preflight():
+    html = STATIC_HTML.read_text(encoding="utf-8")
+    js = (_STATIC / "app.js").read_text(encoding="utf-8")
+    css = (_STATIC / "style.css").read_text(encoding="utf-8")
+
+    assert 'id="readiness-section"' in html
+    assert 'id="readiness-grid"' in html
+    assert 'id="readiness-score"' in html
+    assert "loadReadiness" in js
+    assert "renderReadiness" in js
+    assert "/api/readiness" in js
+    assert "await keyReady;\n      readinessState = await api('/api/readiness')" in js
+    assert "detail.textContent = check.detail || check.fix || ''" in js
+    assert ".readiness-grid" in css
+    assert ".readiness-item" in css
+    assert "#readiness-score[data-status='ready']" in css
+
+
+def test_task_start_is_gated_by_readiness_preflight():
+    html = STATIC_HTML.read_text(encoding="utf-8")
+    js = (_STATIC / "app.js").read_text(encoding="utf-8")
+    css = (_STATIC / "style.css").read_text(encoding="utf-8")
+
+    for dom_id in (
+        'id="readiness-preflight"',
+        'id="readiness-preflight-list"',
+        'id="readiness-preflight-settings"',
+        'id="readiness-preflight-cancel"',
+        'id="readiness-preflight-continue"',
+    ):
+        assert dom_id in html
+
+    assert "const requestReadinessPreflight" in js
+    assert "const ensureTaskReadiness" in js
+    assert "const taskReadinessIssues" not in js
+    assert "/api/tasks/preflight" in js
+    assert "const readinessDecision = await ensureTaskReadiness({" in js
+    assert "const effectiveMode = readinessDecision.preflight?.effective_mode || requestedMode" in js
+    assert "const effectiveIsolatedApp = requestedIsolatedApp || readinessDecision.preflight?.isolated_app || ''" in js
+    assert js.index("ensureTaskReadiness({") < js.index("requestDesktopAccess({ mode: effectiveMode")
+    assert "if (isDesktopMode(effectiveMode))" in js
+    assert "setDesktopSessionActive(true, effectiveMode, effectiveIsolatedApp || '')" in js
+    assert "readiness_override: !!readinessDecision.override" in js
+    assert "btnContinue.hidden = blocked" in js
+    assert "name.textContent = issue.label" in js
+    assert "detail.textContent = issue.detail" in js
+    assert ".readiness-preflight-row.blocked" in css
+    assert ".readiness-preflight-row.warning" in css
+
+
 def test_mermaid_is_self_hosted():
     html = _read_all_static()
 
@@ -152,11 +213,37 @@ def test_phase_c2_step_timeline_present():
     assert "stepData" in js
     assert "turn.steps.push(stepData)" in js
     assert "_STEP_ICONS" in js
+    assert "traceEl" in js
+    assert "turn-step-trace" in js
     # CSS: timeline layout classes
     assert ".turn-timeline" in css
     assert ".turn-step-icon" in css
+    assert ".turn-step-trace" in css
     assert ".turn-step-output" in css
     assert "max-height: 260px" in css
+
+
+def test_control_trace_surface_present():
+    html = STATIC_HTML.read_text(encoding="utf-8")
+    js = (_STATIC / "app.js").read_text(encoding="utf-8")
+    css = (_STATIC / "style.css").read_text(encoding="utf-8")
+
+    assert "overlayTraceParts" in js
+    assert "renderControlTrace" in js
+    assert "overlayRectText" in js
+    assert "overlayPointText" in js
+    assert "control_layer" in js
+    assert "control_reason" in js
+    assert "fallback_reason" in js
+    assert "app_rect" in js
+    assert "control-trace-chip" in css
+    assert ".control-trace-chip.layer" in css
+    assert "demoUiaOverlayStart" in js
+    assert "demoUiaOverlayResult" in js
+    assert 'id="btn-control-report"' in html
+    assert "showControlReport" in js
+    assert "/control-trace" in js
+    assert "control-report-grid" in css
 
 
 def test_liquid_glass_capsule_widget_present():
@@ -170,13 +257,25 @@ def test_liquid_glass_capsule_widget_present():
     assert 'id="vcap-wave"' in html          # dot-matrix waveform canvas
     assert 'id="vpanel-text"' in html        # composer input (funnels to pipeline)
     assert 'id="vcap-reply"' in html         # reply grows the capsule
+    assert 'id="vcap-context"' in html       # adaptive scope / state surface
+    assert 'id="vcap-actions"' in html       # app-aware quick actions
+    assert 'id="vcap-stop"' in html          # hard stop always lives on capsule
+    assert 'rel="icon"' in html              # browser/native shell avoids favicon 404 noise
     # widget-shell mode + behaviours in JS
     assert "widgetShell" in js
     assert "params.get('widget') === '1'" in js
     assert "ai-computer.vorb-position.v2" in js
     assert "e.ctrlKey && e.shiftKey && e.code === 'Space'" in js
+    assert "CAPSULE_CONTEXT_ACTIONS" in js
+    assert "deriveCapsuleState" in js
+    assert "renderCapsuleState({ state: capState" in js
+    assert "capsuleControlLayer" in js
+    assert "overlayControlLayer" in js
+    assert "control_layer" in js
     # capsule CSS + widget-shell overrides
     assert ".vcap {" in css
+    assert ".vcap-context" in css
+    assert ".vcap-action" in css
     assert "body.widget-shell #vorb-root" in css
 
 
@@ -259,8 +358,20 @@ def test_desktop_launcher_has_frameless_widget_mode():
     assert "/api/tasks" in qt_shell
     assert "FramelessWindowHint" in qt_shell
     assert "WindowStaysOnTopHint" in qt_shell
+    assert "/api/tasks/preflight" in qt_shell
+    assert "payload[\"readiness_override\"] = True" in qt_shell
+    assert "Capability fallback" in qt_shell
+    assert "Setup needed before this task can run." in qt_shell
+    assert "AI_COMPUTER_TOPMOST" in qt_shell
+    assert "AI_COMPUTER_TOOL_WINDOW" in qt_shell
     assert "WA_TranslucentBackground" in qt_shell
     assert "_apply_pill_glass" in qt_shell
+    assert "context_bar" in qt_shell
+    assert "_set_capsule_state" in qt_shell
+    assert "_capsule_scope" in qt_shell
+    assert "_last_control_layer" in qt_shell
+    assert "_last_control_reason" in qt_shell
+    assert "_pause_or_resume" in qt_shell
 
 
 def test_live_reasoning_not_filtered_by_step_announcement(monkeypatch):
@@ -298,7 +409,8 @@ def test_ai15_voice_widget_v2_drag_strip_hotkey():
     assert "vcap-strip" in css, "vcap-strip styles missing from style.css"
     assert "vcap-step" in css, "vcap-step styles missing from style.css"
     assert "stripLines" in js, "strip line buffer missing from app.js"
-    assert "stripEl.hidden = false" in js, "strip show logic missing"
+    assert "renderStrip" in js, "strip render helper missing"
+    assert "stripEl.hidden = stripLines.length === 0" in js, "strip show logic missing"
 
     # hotkey toggles visibility (summon/dismiss), not just focus
     assert "root.hidden = !root.hidden" in js, "hotkey must toggle root.hidden"

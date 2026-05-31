@@ -54,11 +54,130 @@ def test_healthz_cache(monkeypatch):
     assert resp.json() == cached
 
 
+def test_readiness_endpoint_reports_local_capabilities(monkeypatch):
+    monkeypatch.setenv("OPENROUTER_API_KEY", "sk-test")
+    client = _client(monkeypatch)
+    resp = client.get("/api/readiness", headers={"Authorization": "Bearer testtoken"})
+    assert resp.status_code == 200
+    data = resp.json()
+    assert data["overall"] in {"ready", "warning", "blocked"}
+    assert 0 <= data["score"] <= 100
+    assert data["providers"]["openrouter"] is True
+    checks = {item["key"]: item for item in data["checks"]}
+    for key in ("provider_keys", "uia", "screenshot", "electron_unlock", "logs", "privacy"):
+        assert key in checks
+        assert checks[key]["label"]
+        assert checks[key]["status"] in {"ready", "warning", "blocked", "unavailable"}
+    assert data["summary"]["ready"] >= 1
+
+
+def test_task_preflight_detects_auto_desktop_warnings(monkeypatch):
+    monkeypatch.setenv("OPENROUTER_API_KEY", "sk-test")
+    fake_readiness = {
+        "overall": "warning",
+        "score": 80,
+        "summary": {"ready": 4, "warning": 2, "blocked": 1, "unavailable": 0},
+        "checks": [
+            {"key": "provider_keys", "label": "Model providers", "status": "ready", "detail": "Provider ready.", "category": "core"},
+            {"key": "uia", "label": "UIA exact control", "status": "blocked", "detail": "UIA missing.", "category": "desktop"},
+            {"key": "screenshot", "label": "Screenshot fallback", "status": "ready", "detail": "Capture ready.", "category": "desktop"},
+            {"key": "input", "label": "Desktop input", "status": "ready", "detail": "Input ready.", "category": "desktop"},
+            {"key": "electron_unlock", "label": "Electron unlock", "status": "blocked", "detail": "UIA needed.", "category": "desktop"},
+            {"key": "logs", "label": "Flight recorder", "status": "ready", "detail": "Logs ready.", "category": "trust"},
+        ],
+    }
+    monkeypatch.setattr(_m, "_build_readiness_payload", lambda: fake_readiness)
+    client = _client(monkeypatch)
+
+    resp = client.post(
+        "/api/tasks/preflight",
+        headers={"Authorization": "Bearer testtoken"},
+        json={"goal": "Open Notepad and write hello", "mode": "auto"},
+    )
+
+    assert resp.status_code == 200
+    data = resp.json()
+    assert data["effective_mode"] == "computer_isolated"
+    assert data["isolated_app"] == "Notepad"
+    assert data["blocked"] is False
+    assert data["can_override"] is True
+    assert [issue["severity"] for issue in data["issues"]] == ["warning", "warning"]
+    assert data["issues"][0]["key"] == "uia"
+
+
+def test_create_task_blocks_when_preflight_has_blockers(monkeypatch):
+    monkeypatch.setenv("OPENROUTER_API_KEY", "sk-test")
+    monkeypatch.setattr(_m, "_tasks", {})
+    monkeypatch.setattr(_m, "_queued_task_specs", [])
+    monkeypatch.setattr(_m, "_MAX_ACTIVE_TASKS", 0)
+    fake_preflight = {
+        "ok": False,
+        "blocked": True,
+        "can_override": False,
+        "issues": [{"key": "uia", "label": "UIA exact control", "severity": "blocked", "status": "blocked", "detail": "No control path."}],
+        "effective_mode": "computer",
+    }
+    monkeypatch.setattr(_m, "_build_task_preflight_payload", lambda **kwargs: fake_preflight)
+    client = _client(monkeypatch)
+
+    resp = client.post(
+        "/api/tasks",
+        headers={"Authorization": "Bearer testtoken"},
+        json={"task_id": "blocked-preflight-task", "goal": "Open Settings", "mode": "computer"},
+    )
+
+    assert resp.status_code == 409
+    detail = resp.json()["detail"]
+    assert detail["code"] == "readiness_preflight_blocked"
+    assert detail["preflight"]["issues"][0]["key"] == "uia"
+
+
+def test_create_task_requires_override_for_preflight_warnings(monkeypatch):
+    monkeypatch.setenv("OPENROUTER_API_KEY", "sk-test")
+    monkeypatch.setattr(_m, "_tasks", {})
+    monkeypatch.setattr(_m, "_queued_task_specs", [])
+    monkeypatch.setattr(_m, "_MAX_ACTIVE_TASKS", 0)
+    monkeypatch.setattr(_m, "_save_task_record", lambda record: None)
+    warning_preflight = {
+        "ok": False,
+        "blocked": False,
+        "can_override": True,
+        "issues": [{"key": "uia", "label": "UIA exact control", "severity": "warning", "status": "blocked", "detail": "Using screenshot fallback."}],
+        "effective_mode": "computer_isolated",
+        "isolated_app": "Notepad",
+    }
+    monkeypatch.setattr(_m, "_build_task_preflight_payload", lambda **kwargs: warning_preflight)
+    client = _client(monkeypatch)
+
+    blocked = client.post(
+        "/api/tasks",
+        headers={"Authorization": "Bearer testtoken"},
+        json={"task_id": "warning-preflight-task", "goal": "Open Notepad", "mode": "auto"},
+    )
+    assert blocked.status_code == 409
+    assert blocked.json()["detail"]["code"] == "readiness_preflight_warning"
+    assert "warning-preflight-task" not in _m._tasks
+
+    allowed = client.post(
+        "/api/tasks",
+        headers={"Authorization": "Bearer testtoken"},
+        json={
+            "task_id": "warning-preflight-task",
+            "goal": "Open Notepad",
+            "mode": "auto",
+            "readiness_override": True,
+        },
+    )
+    assert allowed.status_code == 200
+    assert allowed.json()["preflight"]["can_override"] is True
+    assert _m._tasks["warning-preflight-task"].status == "queued"
+
+
 def test_get_mcp_not_ready_returns_initializing(monkeypatch):
     from app.mcp_manager import mcp_manager
     monkeypatch.setattr(mcp_manager, "_is_ready", False)
     client = _client(monkeypatch)
-    resp = client.get("/api/mcp")
+    resp = client.get("/api/mcp", headers={"Authorization": "Bearer testtoken"})
     assert resp.status_code == 200
     data = resp.json()
     assert data["servers"] == []
@@ -72,7 +191,7 @@ def test_get_mcp_ready_no_reinit(monkeypatch):
     reinit_called = []
     monkeypatch.setattr(mcp_manager, "initialize_default_servers", lambda *a, **kw: reinit_called.append(1))
     client = _client(monkeypatch)
-    resp = client.get("/api/mcp")
+    resp = client.get("/api/mcp", headers={"Authorization": "Bearer testtoken"})
     assert resp.status_code == 200
     assert resp.json() == {"servers": []}
     assert reinit_called == []
@@ -241,6 +360,40 @@ def test_create_task_queues_when_active_limit_reached(monkeypatch):
     assert _m._tasks["queued-task"].status == "cancelled"
 
 
+def test_create_task_auto_desktop_uses_uia_tier(monkeypatch):
+    monkeypatch.setenv("OPENROUTER_API_KEY", "sk-test")
+    monkeypatch.setattr(_m, "_tasks", {})
+    monkeypatch.setattr(_m, "_queued_task_specs", [])
+    monkeypatch.setattr(_m, "_MAX_ACTIVE_TASKS", 0)
+    monkeypatch.setattr(_m, "_save_task_record", lambda record: None)
+    monkeypatch.setattr(_m, "_build_task_preflight_payload", lambda **kwargs: {
+        "ok": True,
+        "blocked": False,
+        "can_override": False,
+        "issues": [],
+        "effective_mode": "computer_isolated",
+        "isolated_app": "Notepad",
+    })
+    client = _client(monkeypatch)
+
+    resp = client.post(
+        "/api/tasks",
+        headers={"Authorization": "Bearer testtoken"},
+        json={
+            "task_id": "auto-desktop-task",
+            "goal": "Open Notepad and write hello",
+            "mode": "auto",
+        },
+    )
+
+    assert resp.status_code == 200
+    body = resp.json()
+    assert body["preflight"]["effective_mode"] == "computer_isolated"
+    assert body["preflight"]["isolated_app"] == "Notepad"
+    assert _m._tasks["auto-desktop-task"].model == "tier:uia"
+    assert _m._queued_task_specs[0]["model"] == "tier:uia"
+
+
 def test_task_feedback_endpoint_persists_feedback(monkeypatch, tmp_path):
     from app.models import AgentContext, TaskRecord
 
@@ -259,3 +412,57 @@ def test_task_feedback_endpoint_persists_feedback(monkeypatch, tmp_path):
 
     assert resp.status_code == 200
     assert rec.metadata["feedback"][0]["rating"] == "up"
+
+
+def test_task_control_trace_report_summarizes_overlays(monkeypatch, tmp_path):
+    from app.models import AgentContext, TaskRecord
+
+    rec = TaskRecord(id="trace-task", status="done", context=AgentContext(goal="trace"), goal="trace")
+    monkeypatch.setattr(_m, "_tasks", {"trace-task": rec})
+    monkeypatch.setattr(_m.log_emitter, "log_dir", tmp_path)
+    _m.log_emitter._seqs.pop("trace-task", None)
+    _m.log_emitter._offsets.pop("trace-task", None)
+    _m.log_emitter.emit("trace-task", "action_start", {
+        "action_id": "a1",
+        "action_type": "uia_find",
+        "args_summary": "Text editor",
+        "overlay": {
+            "type": "status",
+            "tool": "uia_find",
+            "kind": "find",
+            "phase": "start",
+            "label": "Locating Text editor",
+            "target": "Text editor",
+            "control_layer": "UIA exact",
+            "control_reason": "querying Windows accessibility tree",
+        },
+    })
+    _m.log_emitter.emit("trace-task", "action_result", {
+        "action_id": "a1",
+        "action_type": "uia_find",
+        "ok": True,
+        "args_summary": "Text editor",
+        "overlay": {
+            "type": "uia_control",
+            "tool": "uia_find",
+            "kind": "find",
+            "phase": "result",
+            "label": "Found Text editor",
+            "target": "Text editor",
+            "rect": {"left": 10, "top": 20, "width": 300, "height": 40},
+            "app_rect": {"left": 0, "top": 0, "width": 800, "height": 600},
+            "control_layer": "UIA exact",
+            "control_reason": "Windows accessibility tree",
+        },
+    })
+    _m.log_emitter.flush()
+    client = _client(monkeypatch)
+
+    resp = client.get("/api/tasks/trace-task/control-trace", headers={"Authorization": "Bearer testtoken"})
+
+    assert resp.status_code == 200
+    body = resp.json()
+    assert body["summary"]["primary_layer"] == "UIA exact"
+    assert body["summary"]["used_uia"] is True
+    assert body["summary"]["trace_events"] == 2
+    assert body["entries"][1]["rect"] == {"left": 10, "top": 20, "width": 300, "height": 40}

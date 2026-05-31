@@ -85,6 +85,28 @@ _DESKTOP_POST_ACTION_TYPES = {
     ActionType.force_close_window,
 }
 
+_UIA_ACTION_TYPES = {
+    ActionType.uia_find,
+    ActionType.uia_click,
+    ActionType.uia_type,
+    ActionType.uia_wait,
+}
+
+_VISUAL_DESKTOP_ACTION_TYPES = {
+    ActionType.screenshot,
+    ActionType.mouse_click,
+    ActionType.double_click,
+    ActionType.right_click,
+    ActionType.middle_click,
+    ActionType.mouse_move,
+    ActionType.left_click_drag,
+    ActionType.keyboard_type,
+    ActionType.type_with_delay,
+    ActionType.scroll,
+    ActionType.find_on_screen,
+    ActionType.computer,
+}
+
 _POINT_TAG_RE = re.compile(r"\[POINT:(?P<body>[^\]]+)\]", re.IGNORECASE)
 _ORIGINAL_PLANNER_PROVIDER = PlannerProvider
 
@@ -174,6 +196,139 @@ def _git_commit_file(file_path: str, workspace: Path, action_type: str) -> Optio
         return rev.stdout.strip() or None
     except Exception:
         return None
+
+
+def _overlay_for_action_start(action: Action, *, visual_fallback: bool = False) -> Optional[Dict[str, Any]]:
+    """Structured live overlay hint for the capsule before a tool returns."""
+    tool = action.type.value
+    args = action.args if isinstance(action.args, dict) else {}
+    if action.type in _UIA_ACTION_TYPES:
+        query = str(args.get("query") or "").strip()
+        if action.type == ActionType.uia_click:
+            label = f"Locating {query} to click" if query else "Locating control to click"
+            kind = "click"
+        elif action.type == ActionType.uia_type:
+            label = f"Locating {query} to type" if query else "Locating field to type"
+            kind = "type"
+        elif action.type == ActionType.uia_wait:
+            label = f"Waiting for {query}" if query else "Waiting for control"
+            kind = "wait"
+        else:
+            label = f"Locating {query}" if query else "Locating control"
+            kind = "find"
+        return {
+            "type": "status",
+            "tool": tool,
+            "kind": kind,
+            "phase": "start",
+            "label": label,
+            "target": query,
+            "app": str(args.get("app") or ""),
+            "control_layer": "UIA exact",
+            "control_reason": "querying Windows accessibility tree",
+        }
+
+    if action.type == ActionType.electron_check:
+        return {
+            "type": "status",
+            "tool": tool,
+            "kind": "inspect",
+            "phase": "start",
+            "label": "Checking Electron accessibility",
+            "target": str(args.get("exe") or ""),
+            "control_layer": "Electron probe",
+            "control_reason": "detecting Chromium/Electron app shell",
+        }
+
+    if action.type == ActionType.electron_unlock:
+        return {
+            "type": "status",
+            "tool": tool,
+            "kind": "unlock",
+            "phase": "start",
+            "label": "Unlocking Electron accessibility",
+            "target": str(args.get("exe") or ""),
+            "control_layer": "Electron unlock",
+            "control_reason": "enabling UIA for Electron controls",
+        }
+
+    point = None
+    point_kind = "click"
+    point_label = "Clicking"
+    if action.type in {
+        ActionType.mouse_click,
+        ActionType.double_click,
+        ActionType.right_click,
+        ActionType.middle_click,
+        ActionType.mouse_move,
+        ActionType.left_click_drag,
+    }:
+        try:
+            point = {"x": int(args["x"]), "y": int(args["y"])}
+        except Exception:
+            point = None
+        if action.type == ActionType.double_click:
+            point_kind, point_label = "double_click", "Double-clicking"
+        elif action.type == ActionType.right_click:
+            point_kind, point_label = "click", "Right-clicking"
+        elif action.type == ActionType.middle_click:
+            point_kind, point_label = "click", "Middle-clicking"
+        elif action.type == ActionType.mouse_move:
+            point_kind, point_label = "move", "Moving cursor"
+        elif action.type == ActionType.left_click_drag:
+            point_kind, point_label = "drag", "Dragging"
+    elif action.type == ActionType.computer:
+        try:
+            if "x" in args and "y" in args:
+                point = {"x": int(args["x"]), "y": int(args["y"])}
+        except Exception:
+            point = None
+        computer_action = str(args.get("action") or "").strip().lower()
+        if computer_action == "double_click":
+            point_kind, point_label = "double_click", "Double-clicking"
+        elif computer_action == "right_click":
+            point_kind, point_label = "click", "Right-clicking"
+        elif computer_action == "middle_click":
+            point_kind, point_label = "click", "Middle-clicking"
+        elif computer_action == "mouse_move":
+            point_kind, point_label = "move", "Moving cursor"
+        elif computer_action == "left_click_drag":
+            point_kind, point_label = "drag", "Dragging"
+
+    if visual_fallback:
+        label = "No accessible control found; using visual fallback"
+        return {
+            "type": "point" if point else "status",
+            "tool": tool,
+            "kind": "fallback",
+            "phase": "start",
+            "label": label,
+            "point": point,
+            "fallback_reason": "uia_no_match",
+            "control_layer": "Screenshot fallback",
+            "control_reason": "previous UIA target failed",
+        }
+
+    if point:
+        return {
+            "type": "point",
+            "tool": tool,
+            "kind": point_kind,
+            "phase": "start",
+            "label": point_label,
+            "point": point,
+            "control_layer": "Screenshot fallback",
+            "control_reason": "desktop pixel coordinate action",
+        }
+
+    return None
+
+
+def _overlay_from_result(result: ToolResult) -> Optional[Dict[str, Any]]:
+    data = getattr(result, "data", None)
+    if isinstance(data, dict) and isinstance(data.get("overlay"), dict):
+        return data["overlay"]
+    return None
 
 
 def _extract_point_tag(text: str) -> tuple[str, Optional[Dict[str, Any]]]:
@@ -280,17 +435,20 @@ class SubTaskWorker:
                 action = Action(**action_data.model_dump())
                 decision = self.agent_service.safety.evaluate(action, safe_mode=not (is_coding or self.auto_approve))
 
+                _start_overlay = _overlay_for_action_start(action)
                 await self._emit("intent", {
                     "action_id": action.id,
                     "action_type": action.type.value,
                     "explanation": action.explanation,
                     "args_preview": _summarize_args(action.type.value, action.args),
+                    **({"overlay": _start_overlay} if _start_overlay else {}),
                 })
                 await self._emit("action_start", {
                     "action_id": action.id,
                     "action_type": action.type.value,
                     "explanation": action.explanation,
                     "args_summary": _summarize_args(action.type.value, action.args),
+                    **({"overlay": _start_overlay} if _start_overlay else {}),
                 })
 
                 # Permission & Approval logic (reusing AgentService helpers)
@@ -347,12 +505,14 @@ class SubTaskWorker:
                 await asyncio.to_thread(self.agent_service.memory.add_action_result, self.task_id, action.id, res.output)
                 history.append(f"[{self.worker_id}] Action: {action.type.value} -> {res.output}")
 
+                _result_overlay = _overlay_from_result(res)
                 await self._emit("action_result", {
                     "action_id": action.id,
                     "ok": res.ok,
                     "output": res.output,
                     "action_type": action.type.value,
                     "args_summary": _summarize_args(action.type.value, action.args),
+                    **({"overlay": _result_overlay} if _result_overlay else {}),
                 })
 
                 if action.type == ActionType.finish:
@@ -1294,6 +1454,7 @@ class AgentService:
                 # ── Anti-waste tracking: detect duplicate calls and cache writes ──
                 _recent_calls: list[tuple[str, str]] = []  # (action_type, args_key) last 3 calls
                 _write_cache: dict[str, str] = {}  # path → content of recently written files
+                _last_uia_failed = False
                 xml_fallback_steps = 0
                 max_steps = BROWSER_MAX_STEPS if _is_browser_use else AGENT_MAX_STEPS
 
@@ -1318,9 +1479,9 @@ class AgentService:
                     def _step_elapsed() -> int:
                         return int(asyncio.get_event_loop().time() - step_start)
 
-                    # ── Refresh screenshot each step for computer/desktop mode ──
-                    # The model needs to see the CURRENT state, not a stale snapshot
-                    if _is_computer_desktop and step > 0:
+                    # ── Refresh screenshot each step for vision desktop mode ──
+                    # UIA-tier text models drive controls by name and cannot use pixels.
+                    if _is_computer_desktop and _model_sees and step > 0:
                         isolated_hwnd = tools.resolve_isolated_hwnd() if is_isolated else None
                         if isolated_hwnd:
                             # Isolated mode: crop to just the target window
@@ -1657,11 +1818,20 @@ class AgentService:
                     # reasoning before the action so the UI can render
                     # "about to: X — because Y" in real time.
                     _arg_summary = _summarize_args(act.type.value, args)
+                    _start_overlay = _overlay_for_action_start(
+                        act,
+                        visual_fallback=(
+                            _last_uia_failed
+                            and _is_computer_desktop
+                            and act.type in _VISUAL_DESKTOP_ACTION_TYPES
+                        ),
+                    )
                     await self._emit(task_id, "intent", {
                         "action_id": act.id,
                         "action_type": act.type.value,
                         "explanation": act.explanation,
                         "args_preview": _arg_summary,
+                        **({"overlay": _start_overlay} if _start_overlay else {}),
                     })
                     await self._emit(task_id, "status", {"message": f"Executing {act.type.value}: {_arg_summary}"})
                     await self._emit(task_id, "action_start", {
@@ -1669,6 +1839,7 @@ class AgentService:
                         "action_type": act.type.value,
                         "explanation": act.explanation,
                         "args_summary": _arg_summary,
+                        **({"overlay": _start_overlay} if _start_overlay else {}),
                     })
 
                     pre_action_screenshot = screenshot_b64
@@ -1710,13 +1881,19 @@ class AgentService:
                             # `messages` not in scope here for some code paths; ignore.
                             pass
                         
+                    _result_overlay = _overlay_from_result(res)
                     await self._emit(task_id, "action_result", {
                         "action_id": act.id,
                         "ok": res.ok,
                         "output": res.output,
                         "action_type": act.type.value,
                         "args_summary": _arg_summary,
+                        **({"overlay": _result_overlay} if _result_overlay else {}),
                     })
+                    if act.type in _UIA_ACTION_TYPES:
+                        _last_uia_failed = not res.ok
+                    elif act.type in _VISUAL_DESKTOP_ACTION_TYPES:
+                        _last_uia_failed = False
                     
                     # ── Populate write cache so subsequent reads are free ──
                     if act.type == AT.write_file and res.ok:
@@ -1751,13 +1928,14 @@ class AgentService:
                         or (act.type == AT.computer and (act.args.get("action", "").strip().lower() == "screenshot"))
                     )
                     if _is_computer_desktop and explicit_screenshot and res.base64_image:
-                        screenshot_b64 = res.base64_image
+                        if _model_sees:
+                            screenshot_b64 = res.base64_image
                         await self._emit(task_id, "screenshot", {
                             "data": res.base64_image,
                             "isolated": bool(is_isolated and tools.resolve_isolated_hwnd()),
                             "worker_id": "planner",
                         })
-                    elif _should_capture_post_action(act, res, _is_computer_desktop):
+                    elif _model_sees and _should_capture_post_action(act, res, _is_computer_desktop):
                         await asyncio.sleep(0.35)
                         isolated_hwnd = tools.resolve_isolated_hwnd() if is_isolated else None
                         if isolated_hwnd:
@@ -2035,4 +2213,3 @@ def _workspace_tree(root: Path, depth: int = 2) -> str:
     except Exception as e:
         _log.warning(f"Failed to generate workspace tree: {e}")
     return "\n".join(lines)
-

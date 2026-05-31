@@ -42,3 +42,19 @@ Thumbs.db
 .vscode/
 .idea/
 *.swp
+
+# Runtime state (written by the app at runtime; not source)
+connectors.json
+clipboard_history.json
+form_profiles.json
+scheduled_recipes.json
+screen_watches.json
+trust_policies.json
+
+# Local screenshot/debug artifacts
+aero_test_app.png
+aero_tuned.png
+final_capsule.png
+premium_glass.png
+premium_glass_final.png
+pywinstyles_transparency.png

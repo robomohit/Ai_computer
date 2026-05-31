@@ -90,6 +90,109 @@ def _is_hung_app_window(hwnd: int) -> bool:
     except Exception:
         return False
 
+
+def _rect_payload(rect: Optional[Dict[str, Any]]) -> Optional[Dict[str, int]]:
+    """Normalize a screen rectangle to the structured overlay shape."""
+    if not isinstance(rect, dict):
+        return None
+    try:
+        left = int(rect.get("left", 0))
+        top = int(rect.get("top", 0))
+        width = int(rect.get("width", 0))
+        height = int(rect.get("height", 0))
+    except Exception:
+        return None
+    if width <= 0 or height <= 0:
+        return None
+    return {"left": left, "top": top, "width": width, "height": height}
+
+
+def _rect_from_match(item: Dict[str, Any]) -> Optional[Dict[str, int]]:
+    """Build an exact rect from a UIA match, preserving left/top when known."""
+    try:
+        width = int(item.get("width", 0))
+        height = int(item.get("height", 0))
+        if width <= 0 or height <= 0:
+            return None
+        if "left" in item and "top" in item:
+            left = int(item.get("left", 0))
+            top = int(item.get("top", 0))
+        else:
+            left = int(item["x"]) - width // 2
+            top = int(item["y"]) - height // 2
+        return {"left": left, "top": top, "width": width, "height": height}
+    except Exception:
+        return None
+
+
+def _overlay_payload(
+    overlay_type: str,
+    tool: str,
+    kind: str,
+    label: str,
+    *,
+    target: str = "",
+    rect: Optional[Dict[str, Any]] = None,
+    app_rect: Optional[Dict[str, Any]] = None,
+    point: Optional[Dict[str, Any]] = None,
+    phase: str = "result",
+    fallback_reason: str = "",
+    control_layer: str = "",
+    control_reason: str = "",
+) -> Dict[str, Any]:
+    payload: Dict[str, Any] = {
+        "type": overlay_type,
+        "tool": tool,
+        "kind": kind,
+        "phase": phase,
+        "label": (label or "").strip(),
+    }
+    if target:
+        payload["target"] = target
+    norm_rect = _rect_payload(rect)
+    if norm_rect:
+        payload["rect"] = norm_rect
+    norm_app = _rect_payload(app_rect)
+    if norm_app:
+        payload["app_rect"] = norm_app
+    if isinstance(point, dict):
+        try:
+            payload["point"] = {"x": int(point["x"]), "y": int(point["y"])}
+        except Exception:
+            pass
+    if fallback_reason:
+        payload["fallback_reason"] = fallback_reason
+    if control_layer:
+        payload["control_layer"] = control_layer
+    if control_reason:
+        payload["control_reason"] = control_reason
+    return payload
+
+
+def _uia_result_data(
+    raw: Dict[str, Any],
+    *,
+    tool: str,
+    kind: str,
+    label: str,
+    target: str = "",
+    rect: Optional[Dict[str, Any]] = None,
+    app_rect: Optional[Dict[str, Any]] = None,
+) -> Dict[str, Any]:
+    data = dict(raw or {})
+    data["overlay"] = _overlay_payload(
+        "uia_control" if _rect_payload(rect) else "app_focus",
+        tool,
+        kind,
+        label,
+        target=target,
+        rect=rect,
+        app_rect=app_rect,
+        control_layer="UIA exact" if _rect_payload(rect) else "UIA app",
+        control_reason="Windows accessibility tree",
+    )
+    return data
+
 # Opus Audit Fix: Enable DPI awareness for precise mouse/keyboard isolation
 try:
     ctypes.windll.shcore.SetProcessDpiAwareness(1) # PROCESS_SYSTEM_DPI_AWARE
@@ -382,18 +485,40 @@ class ToolExecutor:
 
     async def _mouse_move_bg(self, x: int, y: int, sw=1280, sh=800):
         await self._bg_browser.mouse_move(x, y)
-        return ToolResult(ok=True, output=f"Moved mouse to {x}, {y} (background)")
+        return ToolResult(
+            ok=True,
+            output=f"Moved mouse to {x}, {y} (background)",
+            data={"overlay": _overlay_payload(
+                "point", "mouse_move", "move", "Moving cursor", point={"x": x, "y": y},
+                control_layer="Browser visual", control_reason="background browser coordinate action",
+            )},
+        )
 
     def mouse_move(self, x: int, y: int, sw=1280, sh=800):
         import pyautogui
         rx, ry = self._scale(x, y, sw, sh)
         # Smooth, human-like movement
         pyautogui.moveTo(rx, ry, duration=0.6, tween=pyautogui.easeInOutQuad)
-        return ToolResult(ok=True, output=f"Moved mouse to {rx}, {ry}")
+        return ToolResult(
+            ok=True,
+            output=f"Moved mouse to {rx}, {ry}",
+            data={"overlay": _overlay_payload(
+                "point", "mouse_move", "move", "Moving cursor", point={"x": rx, "y": ry},
+                control_layer="Screenshot fallback", control_reason="desktop pixel coordinate action",
+            )},
+        )
 
     async def _mouse_click_bg(self, x: int, y: int, button: str = "left", clicks=1, sw=1280, sh=800):
         await self._bg_browser.mouse_click(x, y, button=button, click_count=clicks)
-        return ToolResult(ok=True, output=f"Clicked {button} {clicks} times at {x}, {y} (background)")
+        label = "Double-clicking" if clicks > 1 else "Clicking"
+        return ToolResult(
+            ok=True,
+            output=f"Clicked {button} {clicks} times at {x}, {y} (background)",
+            data={"overlay": _overlay_payload(
+                "point", "mouse_click", "click", label, point={"x": x, "y": y},
+                control_layer="Browser visual", control_reason="background browser coordinate action",
+            )},
+        )
 
     def mouse_click(self, x: int, y: int, button: str = "left", clicks=1, sw=1280, sh=800):
         if self.has_isolated_target():
@@ -416,7 +541,15 @@ class ToolExecutor:
             # Screen locked, fail-safe triggered, no display, etc. — report it
             # so the agent can react instead of believing the click landed.
             return ToolResult(ok=False, output=f"Click at {rx},{ry} failed: {e}")
-        return ToolResult(ok=True, output=f"Clicked {button} {clicks} times at {rx}, {ry}")
+        label = "Double-clicking" if clicks > 1 else "Clicking"
+        return ToolResult(
+            ok=True,
+            output=f"Clicked {button} {clicks} times at {rx}, {ry}",
+            data={"overlay": _overlay_payload(
+                "point", "mouse_click", "click", label, point={"x": rx, "y": ry},
+                control_layer="Screenshot fallback", control_reason="desktop pixel coordinate action",
+            )},
+        )
 
 
     def _mouse_click_isolated(self, x: int, y: int, button: str, clicks: int, sw: int, sh: int):
@@ -451,7 +584,15 @@ class ToolExecutor:
                 time.sleep(0.05)
                 win32gui.PostMessage(hwnd, msg_up, 0, lparam)
                 time.sleep(0.1)
-            return ToolResult(ok=True, output=f'Sent {button} click to window (Isolated)')
+            label = "Double-clicking" if clicks > 1 else "Clicking"
+            return ToolResult(
+                ok=True,
+                output=f'Sent {button} click to window (Isolated)',
+                data={"overlay": _overlay_payload(
+                    "point", "mouse_click", "click", label, point={"x": abs_x, "y": abs_y},
+                    control_layer="Window pixel", control_reason="isolated app window message",
+                )},
+            )
         except Exception as e:
             return ToolResult(ok=False, output=f'Isolated click failed: {str(e)}')
 
@@ -486,14 +627,28 @@ class ToolExecutor:
     async def _left_click_drag_bg(self, x: int, y: int, sw=1280, sh=800):
         # Drag from current position to target
         await self._bg_browser.mouse_drag(0, 0, x, y)
-        return ToolResult(ok=True, output=f"Dragged to {x}, {y} (background)")
+        return ToolResult(
+            ok=True,
+            output=f"Dragged to {x}, {y} (background)",
+            data={"overlay": _overlay_payload(
+                "point", "left_click_drag", "drag", "Dragging", point={"x": x, "y": y},
+                control_layer="Browser visual", control_reason="background browser coordinate action",
+            )},
+        )
 
     def left_click_drag(self, x: int, y: int, sw=1280, sh=800):
         import pyautogui
         rx, ry = self._scale(x, y, sw, sh)
         # Smooth drag
         pyautogui.dragTo(rx, ry, duration=0.8, tween=pyautogui.easeInOutQuad, button="left")
-        return ToolResult(ok=True, output=f"Dragged to {rx}, {ry}")
+        return ToolResult(
+            ok=True,
+            output=f"Dragged to {rx}, {ry}",
+            data={"overlay": _overlay_payload(
+                "point", "left_click_drag", "drag", "Dragging", point={"x": rx, "y": ry},
+                control_layer="Screenshot fallback", control_reason="desktop pixel coordinate action",
+            )},
+        )
 
     # ── keyboard actions ─────────────────────────────────────────────────
 
@@ -1968,65 +2123,197 @@ class ToolExecutor:
     def _app_rect_token(app: str) -> str:
         """Encode the target app WINDOW bounds so the overlay can draw a glowing
         edge around the whole app the agent is working in."""
+        r = ToolExecutor._app_rect_payload(app)
+        if r:
+            return f" [app:{r['left']},{r['top']},{r['width']},{r['height']}]"
+        return ""
+
+    @staticmethod
+    def _app_rect_payload(app: str) -> Optional[Dict[str, int]]:
+        """Structured top-level app bounds for the capsule overlay."""
         try:
             from .widget.desktop_features import app_window_rect
             r = app_window_rect(app or "")
-            l, t = int(r["left"]), int(r["top"])
-            w, h = int(r["width"]), int(r["height"])
-            if w > 0 and h > 0:
-                return f" [app:{l},{t},{w},{h}]"
+            return _rect_payload(r)
         except Exception:
             pass
-        return ""
+        return None
 
     def uia_find(self, query: str, app: str = "", limit: int = 5):
         from .widget.desktop_features import find_ui_elements
         res = find_ui_elements(query, app, limit)
         if not res.get("ok"):
-            return ToolResult(ok=False, output=res.get("error", "no match"), data=res)
+            app_rect = self._app_rect_payload(app)
+            data = dict(res)
+            data["overlay"] = _overlay_payload(
+                "app_focus" if app_rect else "status",
+                "uia_find",
+                "find",
+                f"No accessible control named {query}" if query else "No accessible control found",
+                target=query,
+                app_rect=app_rect,
+                phase="error",
+                fallback_reason="uia_no_match",
+                control_layer="UIA miss",
+                control_reason="accessible control not found",
+            )
+            return ToolResult(ok=False, output=res.get("error", "no match"), data=data)
         lines = [f"{i+1}. {c.get('name') or c.get('automation_id') or '(unnamed)'} "
                  f"[{c.get('control_type')}] @ ({c['x']},{c['y']}) score={c.get('score')}"
                  for i, c in enumerate(res.get("items", []))]
         # focus-ring token for the top match (center x,y + w,h -> left,top,w,h)
         tok = ""
         items = res.get("items", [])
+        top_item = items[0] if items else {}
+        rect = _rect_from_match(top_item) if top_item else None
+        target = str(top_item.get("name") or top_item.get("automation_id") or query or "").strip()
         if items:
             c0 = items[0]
             ww, hh = int(c0.get("width", 0)), int(c0.get("height", 0))
             if ww > 0 and hh > 0:
                 tok = self._uia_rect_token({
-                    "left": int(c0["x"]) - ww // 2, "top": int(c0["y"]) - hh // 2,
+                    "left": int(c0.get("left", int(c0["x"]) - ww // 2)),
+                    "top": int(c0.get("top", int(c0["y"]) - hh // 2)),
                     "width": ww, "height": hh})
-        return ToolResult(ok=True, output="UIA matches:\n" + "\n".join(lines) + tok + self._app_rect_token(app), data=res)
+        app_rect = self._app_rect_payload(app)
+        data = _uia_result_data(
+            res,
+            tool="uia_find",
+            kind="find",
+            label=f"Found {target}" if target else "Found control",
+            target=target,
+            rect=rect,
+            app_rect=app_rect,
+        )
+        return ToolResult(ok=True, output="UIA matches:\n" + "\n".join(lines) + tok + self._app_rect_token(app), data=data)
 
     def uia_click(self, query: str, app: str = ""):
         from .widget.desktop_features import invoke_ui_element
         res = invoke_ui_element(query, app)
         if not res.get("ok"):
-            return ToolResult(ok=False, output=res.get("error", "click failed"), data=res)
+            app_rect = self._app_rect_payload(app)
+            data = dict(res)
+            data["overlay"] = _overlay_payload(
+                "app_focus" if app_rect else "status",
+                "uia_click",
+                "click",
+                f"Could not click {query}" if query else "Could not click control",
+                target=query,
+                app_rect=app_rect,
+                phase="error",
+                fallback_reason="uia_no_match",
+                control_layer="UIA miss",
+                control_reason="accessible control not found",
+            )
+            return ToolResult(ok=False, output=res.get("error", "click failed"), data=data)
+        app_rect = self._app_rect_payload(app)
+        target = str(res.get("target") or query or "").strip()
         tok = self._uia_rect_token(res.get("rect", {})) + self._app_rect_token(app)
-        return ToolResult(ok=True, output=f"Activated '{res.get('target')}' via {res.get('method')}.{tok}", data=res)
+        data = _uia_result_data(
+            res,
+            tool="uia_click",
+            kind="click",
+            label=f"Clicking {target}" if target else "Clicking",
+            target=target,
+            rect=res.get("rect", {}),
+            app_rect=app_rect,
+        )
+        return ToolResult(ok=True, output=f"Activated '{res.get('target')}' via {res.get('method')}.{tok}", data=data)
 
     def uia_type(self, query: str, text: str, app: str = "", clear_first: bool = False, submit: bool = False):
         from .widget.desktop_features import type_into_ui_element
         res = type_into_ui_element(query, text, app, clear_first, submit)
         if not res.get("ok"):
-            return ToolResult(ok=False, output=res.get("error", "type failed"), data=res)
+            app_rect = self._app_rect_payload(app)
+            data = dict(res)
+            data["overlay"] = _overlay_payload(
+                "app_focus" if app_rect else "status",
+                "uia_type",
+                "type",
+                f"Could not type into {query}" if query else "Could not type into control",
+                target=query,
+                app_rect=app_rect,
+                phase="error",
+                fallback_reason="uia_no_match",
+                control_layer="UIA miss",
+                control_reason="accessible control not found",
+            )
+            return ToolResult(ok=False, output=res.get("error", "type failed"), data=data)
+        app_rect = self._app_rect_payload(app)
+        target = str(res.get("target") or query or "").strip()
         tok = self._uia_rect_token(res.get("rect", {})) + self._app_rect_token(app)
-        return ToolResult(ok=True, output=f"Typed into '{res.get('target')}' via {res.get('method')}.{tok}", data=res)
+        data = _uia_result_data(
+            res,
+            tool="uia_type",
+            kind="type",
+            label=f"Typing into {target}" if target else "Typing",
+            target=target,
+            rect=res.get("rect", {}),
+            app_rect=app_rect,
+        )
+        return ToolResult(ok=True, output=f"Typed into '{res.get('target')}' via {res.get('method')}.{tok}", data=data)
 
     def uia_wait(self, query: str, app: str = "", timeout: float = 6.0):
         from .widget.desktop_features import wait_for_ui_element
         res = wait_for_ui_element(query, app, timeout)
         if not res.get("ok"):
-            return ToolResult(ok=False, output=res.get("error", "wait timed out"), data=res)
-        return ToolResult(ok=True, output=f"'{res.get('name') or query}' ready after {res.get('waited_s','?')}s @ ({res.get('x')},{res.get('y')}).", data=res)
+            app_rect = self._app_rect_payload(app)
+            data = dict(res)
+            data["overlay"] = _overlay_payload(
+                "app_focus" if app_rect else "status",
+                "uia_wait",
+                "wait",
+                f"Still waiting for {query}" if query else "Still waiting for control",
+                target=query,
+                app_rect=app_rect,
+                phase="error",
+                fallback_reason="uia_wait_timeout",
+                control_layer="UIA miss",
+                control_reason="accessible control did not appear",
+            )
+            return ToolResult(ok=False, output=res.get("error", "wait timed out"), data=data)
+        app_rect = self._app_rect_payload(app)
+        target = str(res.get("name") or query or "").strip()
+        tok = self._uia_rect_token({
+            "left": int(res.get("left", 0)),
+            "top": int(res.get("top", 0)),
+            "width": int(res.get("width", 0)),
+            "height": int(res.get("height", 0)),
+        }) + self._app_rect_token(app)
+        data = _uia_result_data(
+            res,
+            tool="uia_wait",
+            kind="wait",
+            label=f"Ready: {target}" if target else "Ready",
+            target=target,
+            rect={
+                "left": int(res.get("left", 0)),
+                "top": int(res.get("top", 0)),
+                "width": int(res.get("width", 0)),
+                "height": int(res.get("height", 0)),
+            },
+            app_rect=app_rect,
+        )
+        return ToolResult(ok=True, output=f"'{res.get('name') or query}' ready after {res.get('waited_s','?')}s @ ({res.get('x')},{res.get('y')}).{tok}", data=data)
 
     def electron_check(self, exe: str):
         from .widget.desktop_features import is_electron_app, resolve_app_exe
         resolved = resolve_app_exe(exe)
         is_e = is_electron_app(resolved)
-        return ToolResult(ok=True, output=f"is_electron={is_e} (exe={resolved})", data={"exe": resolved, "is_electron": is_e})
+        data = {
+            "exe": resolved,
+            "is_electron": is_e,
+            "overlay": _overlay_payload(
+                "status",
+                "electron_check",
+                "inspect",
+                "Checking Electron accessibility",
+                target=resolved,
+                control_layer="Electron probe",
+                control_reason="detecting Chromium/Electron app shell",
+            ),
+        }
+        return ToolResult(ok=True, output=f"is_electron={is_e} (exe={resolved})", data=data)
 
     def electron_unlock(self, exe: str, args: list = None):
         from .widget.desktop_features import (
@@ -2038,17 +2325,51 @@ class ToolExecutor:
         # Discord grind wasted ~15s relaunching an already-accessible app.
         app_name = _os.path.splitext(_os.path.basename(resolved))[0]
         if count_app_controls(app_name, cap=60) >= 40:
+            data = {
+                "exe": resolved,
+                "already_accessible": True,
+                "overlay": _overlay_payload(
+                    "status",
+                    "electron_unlock",
+                    "unlock",
+                    "Electron UIA already unlocked",
+                    target=app_name,
+                    control_layer="UIA exact",
+                    control_reason="Electron app already exposes controls",
+                ),
+            }
             return ToolResult(ok=True, output=(
                 f"{app_name} already exposes a rich UIA tree (no relaunch needed). "
                 f"Use uia_find/uia_click/uia_type directly."),
-                data={"exe": resolved, "already_accessible": True})
+                data=data)
         res = relaunch_with_accessibility(resolved, args or [], False)
         if not res.get("ok"):
-            return ToolResult(ok=False, output=res.get("error", "relaunch failed"), data=res)
+            data = dict(res)
+            data["overlay"] = _overlay_payload(
+                "status",
+                "electron_unlock",
+                "unlock",
+                "Electron accessibility unlock failed",
+                target=app_name,
+                phase="error",
+                control_layer="Electron unlock failed",
+                control_reason="relaunch with renderer accessibility failed",
+            )
+            return ToolResult(ok=False, output=res.get("error", "relaunch failed"), data=data)
+        data = dict(res)
+        data["overlay"] = _overlay_payload(
+            "status",
+            "electron_unlock",
+            "unlock",
+            "Unlocking Electron accessibility",
+            target=app_name,
+            control_layer="Electron unlock",
+            control_reason="relaunching with --force-renderer-accessibility",
+        )
         return ToolResult(ok=True, output=(
             f"Relaunched {exe} (pid {res.get('pid')}) with --force-renderer-accessibility. "
             f"Its DOM is now exposed to UIA — retry uia_find/uia_click/uia_type. "
-            f"{res.get('note','')}"), data=res)
+            f"{res.get('note','')}"), data=data)
 
     def api_call(self, method: str, url: str, headers: dict = None, body: dict = None):
         try:

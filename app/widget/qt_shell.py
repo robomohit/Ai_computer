@@ -713,8 +713,8 @@ def main(port: int = 8000) -> int:
         runningChanged = Signal(bool)
         widgetRequested = Signal(dict)
         agentDelta = Signal(str)      # incremental agent text (typewriter)
-        toolUsed = Signal(str, str)   # (tool_name, args_summary)
-        toolResult = Signal(str, str) # (tool_name, output_text) — has real coords
+        toolUsed = Signal(str, str, dict)   # tool_name, args_summary, overlay hint
+        toolResult = Signal(str, str, dict) # tool_name, output_text, overlay result
 
         # Exposed so the UI can target /cancel for the current run
         current_task_id: str = ""
@@ -852,6 +852,65 @@ def main(port: int = 8000) -> int:
 
             return payload
 
+        def _preflight_payload(self, payload: dict) -> dict:
+            return {
+                "goal": payload.get("goal", ""),
+                "mode": payload.get("mode", "auto"),
+                "model": payload.get("model"),
+                "isolated_app": payload.get("isolated_app"),
+            }
+
+        def _summarize_preflight_issues(self, issues: list[dict]) -> str:
+            lines: list[str] = []
+            for issue in issues[:4]:
+                label = str(issue.get("label") or issue.get("key") or "Capability")
+                detail = str(issue.get("detail") or issue.get("fix") or "").strip()
+                if detail:
+                    lines.append(f"- {label}: {detail}")
+                else:
+                    lines.append(f"- {label}")
+            if len(issues) > 4:
+                lines.append(f"- {len(issues) - 4} more setup item(s)")
+            return "\n".join(lines)
+
+        def _run_preflight(self, client, payload: dict) -> bool:
+            try:
+                r = client.post(f"{BASE}/api/tasks/preflight",
+                                json=self._preflight_payload(payload))
+                if r.status_code >= 400:
+                    self.statusChanged.emit("Preflight unavailable - starting cautiously...")
+                    return True
+                preflight = r.json()
+            except Exception as exc:
+                print(f"[capsule] preflight failed: {exc}", flush=True)
+                self.statusChanged.emit("Preflight unavailable - starting cautiously...")
+                return True
+
+            issues = preflight.get("issues", [])
+            if not isinstance(issues, list) or not issues:
+                return True
+
+            blocked = bool(preflight.get("blocked"))
+            summary = self._summarize_preflight_issues(issues)
+            if blocked:
+                self.widgetRequested.emit({
+                    "title": "Setup needed",
+                    "icon": "alert",
+                    "text": summary or "This task cannot start until setup is fixed.",
+                })
+                self.finished.emit("Setup needed before this task can run.", [])
+                self.runningChanged.emit(False)
+                return False
+
+            payload["readiness_override"] = True
+            self.statusChanged.emit("Capability fallback - running with safeguards...")
+            self.widgetRequested.emit({
+                "title": "Capability fallback",
+                "icon": "alert",
+                "text": summary or "Running with degraded local capabilities.",
+            })
+            return True
+
         def _run(self, goal: str, attach: dict) -> None:
             try:
                 import httpx
@@ -865,6 +924,8 @@ def main(port: int = 8000) -> int:
             try:
                 with httpx.Client(timeout=30.0) as c:
                     c.post(f"{BASE}/api/session")
+                    if not self._run_preflight(c, payload):
+                        return
                     r = c.post(f"{BASE}/api/tasks", json=payload)
                     if r.status_code >= 400:
                         self.finished.emit(f"Couldn't start: {r.text[:200]}")
@@ -920,7 +981,8 @@ def main(port: int = 8000) -> int:
                                 aid = ev.get("action_id")
                                 if aid:
                                     action_type_by_id[aid] = name
-                                self.toolUsed.emit(name, args)
+                                overlay = ev.get("overlay") if isinstance(ev.get("overlay"), dict) else {}
+                                self.toolUsed.emit(name, args, overlay)
                                 for u in URL_RE.findall(args):
                                     if u not in source_urls:
                                         source_urls.append(u)
@@ -931,13 +993,14 @@ def main(port: int = 8000) -> int:
                                 # UIA focus-ring [uia:l,t,w,h]) survive — uia_find
                                 # appends it after a multi-line match list.
                                 out = str(ev.get("output", ""))[:600]
+                                overlay = ev.get("overlay") if isinstance(ev.get("overlay"), dict) else {}
                                 if name and out:
-                                    self.toolResult.emit(name, out)
+                                    self.toolResult.emit(name, out, overlay)
                             elif t == "tool":
                                 # Some flows may still emit the older `tool` event
                                 name = ev.get("name", "?")
                                 args = str(ev.get("args", ""))[:120]
-                                self.toolUsed.emit(name, args)
+                                self.toolUsed.emit(name, args, {})
                                 for u in URL_RE.findall(args):
                                     if u not in source_urls:
                                         source_urls.append(u)
@@ -1096,8 +1159,12 @@ def main(port: int = 8000) -> int:
         def __init__(self) -> None:
             super().__init__()
             self.setWindowTitle("AI Computer Sidekick")
-            self.setWindowFlags(Qt.FramelessWindowHint
-                                | Qt.WindowStaysOnTopHint | Qt.Tool)
+            flags = Qt.FramelessWindowHint
+            if os.getenv("AI_COMPUTER_TOOL_WINDOW", "1").lower() not in {"0", "false", "no"}:
+                flags |= Qt.Tool
+            if os.getenv("AI_COMPUTER_TOPMOST", "1").lower() not in {"0", "false", "no"}:
+                flags |= Qt.WindowStaysOnTopHint
+            self.setWindowFlags(flags)
             self.setAttribute(Qt.WA_TranslucentBackground, True)
             self.setAttribute(Qt.WA_NoSystemBackground, True)
             self.setFixedWidth(WIDTH)
@@ -1123,6 +1190,10 @@ def main(port: int = 8000) -> int:
             # a bright backdrop the whole capsule becomes a light glass with
             # dark content; over dark it's the dark glass. None = not yet set.
             self._light_mode = None
+            self._capsule_state = "idle"
+            self._last_action_phrase = ""
+            self._last_control_layer = ""
+            self._last_control_reason = ""
 
             # Virtual cursor overlay — frameless click-through window that
             # paints a smooth animated cursor + ripple wherever the agent
@@ -1181,6 +1252,9 @@ def main(port: int = 8000) -> int:
             input_font.setLetterSpacing(QFont.PercentageSpacing, 98)
             self.input.setFont(input_font)
             self.input.returnPressed.connect(self._submit)
+            self.input.textChanged.connect(
+                lambda text: None if self._busy else self._set_capsule_state(
+                    "focused" if text.strip() else "context_ready"))
             self.input.setStyleSheet(
                 "QLineEdit{"
                 "  background: transparent; border: none;"
@@ -1262,6 +1336,86 @@ def main(port: int = 8000) -> int:
             )
             top_row.addWidget(self.close_btn)
             outer.addLayout(top_row)
+
+            # =========================================================
+            # ROW 1b — adaptive context surface
+            # Shows scope, perception mode, current phase, and hard controls.
+            # =========================================================
+            self.context_bar = QFrame()
+            self.context_bar.setObjectName("context_bar")
+            self.context_bar.setStyleSheet(
+                "#context_bar{"
+                "  background: rgba(255,255,255,28);"
+                "  border: 1px solid rgba(255,255,255,55);"
+                "  border-radius: 15px;"
+                "}"
+            )
+            ctx = QHBoxLayout(self.context_bar)
+            ctx.setContentsMargins(10, 3, 7, 3)
+            ctx.setSpacing(6)
+
+            chip_qss = (
+                "QLabel{"
+                "  color: rgba(240,242,248,230);"
+                "  background: rgba(255,255,255,30);"
+                "  border-radius: 10px;"
+                "  padding: 3px 8px;"
+                "  font-size: 10px;"
+                "  font-weight: 650;"
+                "}"
+            )
+            self.scope_chip = QLabel("Computer")
+            self.scope_chip.setStyleSheet(chip_qss + "QLabel{color:%s;}" % ACCENT)
+            self.vision_chip = QLabel("Ready")
+            self.vision_chip.setStyleSheet(chip_qss)
+            self.phase_chip = QLabel("Idle")
+            self.phase_chip.setStyleSheet(chip_qss)
+            ctx.addWidget(self.scope_chip)
+            ctx.addWidget(self.vision_chip)
+            ctx.addWidget(self.phase_chip)
+            ctx.addStretch()
+
+            mini_qss = (
+                "QPushButton{"
+                "  color: rgba(240,242,248,235);"
+                "  background: rgba(255,255,255,28);"
+                "  border: 1px solid rgba(255,255,255,55);"
+                "  border-radius: 11px;"
+                "  padding: 3px 9px;"
+                "  font-size: 10px;"
+                "  font-weight: 700;"
+                "}"
+                "QPushButton:hover{ background: rgba(255,255,255,48); }"
+            )
+            danger_qss = (
+                "QPushButton{"
+                "  color: #FFDADA;"
+                "  background: rgba(220,70,70,72);"
+                "  border: 1px solid rgba(255,170,170,90);"
+                "  border-radius: 11px;"
+                "  padding: 3px 9px;"
+                "  font-size: 10px;"
+                "  font-weight: 700;"
+                "}"
+                "QPushButton:hover{ background: rgba(220,70,70,120); }"
+            )
+            self.context_pause_btn = QPushButton("Pause")
+            self.context_pause_btn.setCursor(Qt.PointingHandCursor)
+            self.context_pause_btn.setStyleSheet(mini_qss)
+            self.context_pause_btn.clicked.connect(self._pause_or_resume)
+            self.context_stop_btn = QPushButton("Stop")
+            self.context_stop_btn.setCursor(Qt.PointingHandCursor)
+            self.context_stop_btn.setStyleSheet(danger_qss)
+            self.context_stop_btn.clicked.connect(self._cancel_running)
+            self.context_details_btn = QPushButton("Details")
+            self.context_details_btn.setCursor(Qt.PointingHandCursor)
+            self.context_details_btn.setStyleSheet(mini_qss)
+            self.context_details_btn.clicked.connect(self._show_context_details)
+            ctx.addWidget(self.context_pause_btn)
+            ctx.addWidget(self.context_stop_btn)
+            ctx.addWidget(self.context_details_btn)
+            self.context_bar.hide()
+            outer.addWidget(self.context_bar)
 
             # =========================================================
             # ROW 2 — capability row (Apps / Folder / Image / Clipboard / Paperclip)
@@ -1977,6 +2131,8 @@ def main(port: int = 8000) -> int:
                 self.input.setPlaceholderText(f"Ask about file “{f}”…")
             else:
                 self.input.setPlaceholderText("Start a task…")
+            if not self._busy:
+                self._set_capsule_state("context_ready")
 
         # --- task flow ---
         # ── First-run onboarding ────────────────────────────────────────────
@@ -2184,6 +2340,97 @@ def main(port: int = 8000) -> int:
                     item.widget().deleteLater()
             self.widget_scroll.hide()
 
+        def _capsule_scope(self) -> str:
+            if self._scoped_window:
+                title = self._scoped_window.get("title") or "Selected app"
+                return title[:28]
+            if self._scoped_folder:
+                return os.path.basename(self._scoped_folder) or "Folder"
+            if self._scoped_image:
+                return "Image"
+            if self._clipboard_text:
+                return "Clipboard"
+            if self._attached_file:
+                return os.path.basename(self._attached_file.get("path", ""))[:28] or "Attachment"
+            return "Computer"
+
+        def _capsule_vision_label(self, state: str) -> str:
+            if self._last_control_layer and state in (
+                "acting", "planning", "waiting_approval", "paused", "done", "error"
+            ):
+                return self._last_control_layer
+            if state == "listening":
+                return "Voice input"
+            if state in ("acting", "planning"):
+                return "Seeing screen"
+            if state == "waiting_approval":
+                return "Approval paused"
+            if self._scoped_folder:
+                return "Folder context"
+            if self._clipboard_text or self._attached_file:
+                return "Attached context"
+            return "Ready"
+
+        def _set_capsule_state(self, state: str, action: str = "") -> None:
+            labels = {
+                "idle": "Idle",
+                "focused": "Ready",
+                "context_ready": "Context ready",
+                "submitting": "Starting",
+                "planning": "Planning",
+                "acting": "Acting",
+                "waiting_approval": "Needs approval",
+                "paused": "Paused",
+                "done": "Done",
+                "error": "Error",
+            }
+            self._capsule_state = state
+            if action:
+                self._last_action_phrase = action
+            elif state == "idle":
+                self._last_action_phrase = ""
+                self._last_control_layer = ""
+                self._last_control_reason = ""
+            self.scope_chip.setText(self._capsule_scope())
+            self.vision_chip.setText(self._capsule_vision_label(state))
+            if self._last_control_reason:
+                self.vision_chip.setToolTip(self._last_control_reason)
+            self.phase_chip.setText(labels.get(state, state.title()))
+            should_show = state != "idle" or bool(self._last_action_phrase)
+            self.context_bar.setVisible(should_show)
+            active = state in ("submitting", "planning", "acting", "waiting_approval", "paused")
+            self.context_pause_btn.setVisible(active)
+            self.context_stop_btn.setVisible(active)
+            if state in ("planning", "acting", "waiting_approval") and self._last_action_phrase:
+                self.status.setText(self._last_action_phrase[:90])
+            self._adjust()
+
+        def _show_context_details(self) -> None:
+            detail = self._last_action_phrase or self.status.text() or "Ready."
+            self._spawn_widget({
+                "title": f"{self._capsule_scope()} · {self.phase_chip.text()}",
+                "icon": "sparkles",
+                "text": detail,
+            })
+
+        def _pause_or_resume(self) -> None:
+            tid = getattr(self, "_current_task_id", None)
+            if not tid:
+                return
+            paused = self._capsule_state == "paused"
+            self.status.setText("Resuming..." if paused else "Pausing...")
+            def _post():
+                try:
+                    import httpx
+                    with httpx.Client(timeout=5.0) as c:
+                        c.post(f"{BASE}/api/session")
+                        c.post(f"{BASE}/api/tasks/{tid}/{'resume' if paused else 'pause'}")
+                except Exception as exc:
+                    print(f"[capsule] pause/resume failed: {exc}", flush=True)
+            threading.Thread(target=_post, daemon=True).start()
+            self._set_capsule_state("acting" if paused else "paused",
+                                    "Task resumed" if paused else "Task paused")
+
         def _on_running(self, running: bool) -> None:
             self._busy = running
             # Hide recipe chips while busy; show the action ticker.
@@ -2194,12 +2441,15 @@ def main(port: int = 8000) -> int:
             if running:
                 self.action_label.setText("Starting…")
                 self._current_task_id = self.runner.current_task_id
+                self._set_capsule_state("submitting", "Starting task...")
             self.input.setVisible(not running)
             self.status.setVisible(running)
             if not running:
                 self.status.hide()
                 self.input.show()
                 self._current_task_id = None
+                if self._capsule_state not in ("done", "error"):
+                    self._set_capsule_state("idle", "")
             self.update()
             QTimer.singleShot(0, self._adjust)
 
@@ -2221,20 +2471,27 @@ def main(port: int = 8000) -> int:
             # Surface OpenRouter rate-limits in plain English instead of JSON
             if "rate-limited" in lower or "429" in lower or "retry shortly" in lower:
                 self.status.setText("Free tier rate-limited — retrying…")
+                self._set_capsule_state("planning", "Rate-limited — retrying...")
                 return
             if "openrouter error" in lower:
                 # Many of these are transient; show a calm placeholder
                 self.status.setText("Switching models…")
+                self._set_capsule_state("planning", "Switching models...")
                 return
             for noise in self._NOISY_STATUS:
                 if noise.lower() in lower:
                     self.status.setText("Adjusting strategy…")
+                    self._set_capsule_state("planning", "Adjusting strategy...")
                     return
             # Trim and show clean status text
             clean = msg.strip()
             if "waiting on model" in lower:
                 return
             self.status.setText(clean[:90])
+            state = "planning" if any(k in lower for k in (
+                "planning", "thinking", "model", "initializing", "strategy"
+            )) else "acting"
+            self._set_capsule_state(state, clean[:90])
 
         def _on_agent_delta(self, delta: str) -> None:
             """Append a streaming text chunk to the live answer card."""
@@ -2254,14 +2511,90 @@ def main(port: int = 8000) -> int:
             else:
                 self._update_card_text(self._answer_card, self._answer_text_buf)
 
-        def _on_tool_result(self, name: str, output: str) -> None:
+        def _overlay_control_layer(self, overlay: dict | None) -> tuple[str, str]:
+            if not isinstance(overlay, dict):
+                return "", ""
+            layer = str(overlay.get("control_layer") or "").strip()
+            reason = str(overlay.get("control_reason") or overlay.get("fallback_reason") or "").strip()
+            return layer, reason
+
+        def _apply_overlay(self, overlay: dict | None, fallback_name: str = "") -> bool:
+            """Render structured overlay metadata from the backend.
+
+            Returns True when it drew something, so legacy text parsing can be
+            skipped. Status-only overlays still update the capsule ticker but do
+            not draw arbitrary screen markers.
+            """
+            if not isinstance(overlay, dict) or not overlay:
+                return False
+            label = str(overlay.get("label") or "").strip()
+            otype = str(overlay.get("type") or "").lower()
+            kind = str(overlay.get("kind") or fallback_name or "").lower()
+            layer, reason = self._overlay_control_layer(overlay)
+
+            def rect_from(key: str):
+                r = overlay.get(key)
+                if not isinstance(r, dict):
+                    return None
+                try:
+                    l = int(r.get("left", 0))
+                    t = int(r.get("top", 0))
+                    w = int(r.get("width", 0))
+                    h = int(r.get("height", 0))
+                    if w > 0 and h > 0:
+                        return l, t, w, h
+                except Exception:
+                    return None
+                return None
+
+            if label:
+                self.action_label.setText(label[:80])
+                self._pulse_action_dot()
+            if layer:
+                self._last_control_layer = layer[:28]
+                self._last_control_reason = reason
+                self.vision_chip.setText(layer[:28])
+                if reason:
+                    self.vision_chip.setToolTip(reason)
+
+            if otype == "uia_control":
+                rect = rect_from("rect")
+                if rect:
+                    self._vcursor.show_uia(*rect, label=label, kind=kind or "find")
+                    return True
+            if otype == "app_focus":
+                rect = rect_from("app_rect") or rect_from("rect")
+                if rect:
+                    self._vcursor.show_app_focus(*rect, label=label)
+                    return True
+            if otype == "point":
+                pt = overlay.get("point")
+                if isinstance(pt, dict):
+                    try:
+                        x, y = int(pt.get("x", 0)), int(pt.get("y", 0))
+                    except Exception:
+                        return bool(label)
+                    if kind in ("click", "double_click"):
+                        self._vcursor.show_click(x, y, label=label or "Clicking")
+                    elif kind == "drag":
+                        self._vcursor.show_click(x, y, label=label or "Dragging")
+                    elif kind == "type":
+                        self._vcursor.show_type(x, y, text=label or "Typing")
+                    else:
+                        self._vcursor.show_action(label or "Working", x, y)
+                    return True
+            return bool(label)
+
+        def _on_tool_result(self, name: str, output: str, overlay: dict | None = None) -> None:
             """Fire the cursor overlay from the RESULT event — args_summary
             on action_start is often template names ("x, y, button"); the
             output text carries real coordinates like
             'Clicked left 1 times at 656, 525'."""
             lname = (name or "").lower()
-            # ── UIA actions: glow the edges of the whole app being worked in ──
-            if lname in ("uia_click", "uia_type", "uia_find"):
+            if self._apply_overlay(overlay, lname):
+                return
+            # ── UIA actions: trace the exact control bounds when available ──
+            if lname in ("uia_click", "uia_type", "uia_find", "uia_wait"):
                 try:
                     import re as _re
                     tgt_m = _re.search(r"'([^']+)'", output)
@@ -2270,20 +2603,21 @@ def main(port: int = 8000) -> int:
                         label = f"Clicking {tgt}" if tgt else "Clicking"
                     elif lname == "uia_type":
                         label = f"Typing into {tgt}" if tgt else "Typing"
+                    elif lname == "uia_wait":
+                        label = f"Ready: {tgt}" if tgt else "Ready"
                     else:
                         label = f"Found {tgt}" if tgt else "Located"
-                    am = _re.search(r"\[app:(-?\d+),(-?\d+),(\d+),(\d+)\]", output)
-                    if am:
-                        l, t, w, h = (int(am.group(i)) for i in range(1, 5))
-                        self._vcursor.show_app_focus(l, t, w, h, label=label)
+                    cm = _re.search(r"\[uia:(-?\d+),(-?\d+),(\d+),(\d+)\]", output)
+                    if cm:
+                        l, t, w, h = (int(cm.group(i)) for i in range(1, 5))
+                        kind = ("type" if lname == "uia_type"
+                                else "find" if lname in ("uia_find", "uia_wait") else "click")
+                        self._vcursor.show_uia(l, t, w, h, label=label, kind=kind)
                     else:
-                        # no window rect — fall back to a control focus ring
-                        cm = _re.search(r"\[uia:(-?\d+),(-?\d+),(\d+),(\d+)\]", output)
-                        if cm:
-                            l, t, w, h = (int(cm.group(i)) for i in range(1, 5))
-                            kind = ("type" if lname == "uia_type"
-                                    else "find" if lname == "uia_find" else "click")
-                            self._vcursor.show_uia(l, t, w, h, label=label, kind=kind)
+                        am = _re.search(r"\[app:(-?\d+),(-?\d+),(\d+),(\d+)\]", output)
+                        if am:
+                            l, t, w, h = (int(am.group(i)) for i in range(1, 5))
+                            self._vcursor.show_app_focus(l, t, w, h, label=label)
                 except Exception as exc:
                     print(f"[capsule] uia overlay error: {exc}", flush=True)
                 return
@@ -2312,13 +2646,21 @@ def main(port: int = 8000) -> int:
             except Exception as exc:
                 print(f"[capsule] _on_tool_result error: {exc}", flush=True)
 
-        def _on_tool_used(self, name: str, args: str) -> None:
+        def _on_tool_used(self, name: str, args: str, overlay: dict | None = None) -> None:
             if name and name not in self._answer_tools_used:
                 self._answer_tools_used.append(name)
             # Update the live ticker so the user sees "what I'm doing now"
             phrase = _humanize_tool(name, args)
             self.action_label.setText(phrase[:80])
+            self._set_capsule_state("acting", phrase[:90])
             self._pulse_action_dot()
+            overlay_applied = self._apply_overlay(overlay, (name or "").lower())
+            if (
+                overlay_applied
+                and isinstance(overlay, dict)
+                and overlay.get("type") in ("point", "uia_control", "app_focus")
+            ):
+                return
 
             # Virtual cursor — paint an animated cursor with a smooth
             # bezier path + ripple + action label whenever the agent does
@@ -2397,15 +2739,17 @@ def main(port: int = 8000) -> int:
             if not tid:
                 # Try anyway — also pulse the status so user sees feedback
                 self.status.setText("Stopping…")
+                self._set_capsule_state("paused", "Stopping...")
                 return
             self.status.setText("Stopping…")
             self.status.show()
+            self._set_capsule_state("paused", "Stopping...")
             def _post():
                 try:
                     import httpx
                     with httpx.Client(timeout=5.0) as c:
                         c.post(f"{BASE}/api/session")
-                        c.post(f"{BASE}/api/tasks/{tid}/cancel")
+                        c.delete(f"{BASE}/api/tasks/{tid}")
                 except Exception as exc:
                     print(f"[capsule] cancel error: {exc}", flush=True)
             threading.Thread(target=_post, daemon=True).start()
@@ -2441,6 +2785,7 @@ def main(port: int = 8000) -> int:
                 "still working — taking longer than expected.",
             }:
                 self.status.setText("No response — try rephrasing")
+                self._set_capsule_state("error", "No response — try rephrasing")
                 self.status.show()
                 QTimer.singleShot(3000, self.status.hide)
                 self._answer_card = None
@@ -2512,6 +2857,7 @@ def main(port: int = 8000) -> int:
             self._answer_card = None
             self._answer_text_buf = ""
             self._answer_tools_used = []
+            self._set_capsule_state("done", "Done — result ready")
             self._adjust()
 
         def _append_sources_strip(self, card, sources: list) -> None:
@@ -2710,6 +3056,24 @@ def main(port: int = 8000) -> int:
             try:
                 self.action_label.setStyleSheet(
                     f"color:{ticker};background:transparent;")
+            except Exception:
+                pass
+            try:
+                self.context_bar.setStyleSheet(
+                    "#context_bar{"
+                    f"background: {chip_bg}; border: 1px solid {chip_bd};"
+                    "border-radius: 15px;}"
+                )
+                chip_label_qss = (
+                    "QLabel{"
+                    f"color:{chip_text}; background:{tb_chk};"
+                    "border-radius: 10px; padding: 3px 8px;"
+                    "font-size: 10px; font-weight: 650;}"
+                )
+                self.scope_chip.setStyleSheet(
+                    chip_label_qss + f"QLabel{{color:{ACCENT};}}")
+                self.vision_chip.setStyleSheet(chip_label_qss)
+                self.phase_chip.setStyleSheet(chip_label_qss)
             except Exception:
                 pass
             try:

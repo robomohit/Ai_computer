@@ -13,7 +13,6 @@ All Windows-native; no extra pip deps beyond what's already required.
 from __future__ import annotations
 
 import ctypes
-import json
 import os
 import sys
 import time
@@ -21,6 +20,8 @@ import winreg
 from ctypes import wintypes
 from pathlib import Path
 from typing import Optional
+
+from ..state_store import read_json, workspace_state_path, write_json
 
 
 # ─────────────────────────────────────────────────────────────────────────────
@@ -231,8 +232,7 @@ def set_autostart(enable: bool, launch_cmd: Optional[str] = None) -> bool:
 # CRASH RECOVERY — persist last in-flight goal so we can offer to resume
 # ─────────────────────────────────────────────────────────────────────────────
 def _state_path() -> Path:
-    base = Path(os.environ.get("AI_COMPUTER_WORKSPACE", ".")).resolve()
-    return base / "widget_state.json"
+    return workspace_state_path("widget_state.json")
 
 
 def save_pending_task(goal: str, mode: str, task_id: str = "") -> None:
@@ -243,9 +243,7 @@ def save_pending_task(goal: str, mode: str, task_id: str = "") -> None:
             "task_id": task_id,
             "ts": time.time(),
         }
-        _state_path().parent.mkdir(parents=True, exist_ok=True)
-        _state_path().write_text(json.dumps(payload, indent=2),
-                                 encoding="utf-8")
+        write_json(_state_path(), payload)
     except Exception:
         pass
 
@@ -261,9 +259,9 @@ def clear_pending_task() -> None:
 def load_pending_task() -> Optional[dict]:
     """Return the previously-pending task if it's recent (<24h) and unfinished."""
     try:
-        if not _state_path().exists():
+        data = read_json(_state_path(), None)
+        if not isinstance(data, dict):
             return None
-        data = json.loads(_state_path().read_text(encoding="utf-8"))
         # Stale > 24h → drop
         if time.time() - data.get("ts", 0) > 24 * 3600:
             clear_pending_task()
@@ -382,6 +380,8 @@ def find_ui_elements(query: str, app_hint: str = "",
                         "name": name,
                         "automation_id": aid,
                         "control_type": role,
+                        "left": rect.left if has_rect else 0,
+                        "top": rect.top if has_rect else 0,
                         "x": (rect.left + rect.right) // 2 if has_rect else 0,
                         "y": (rect.top + rect.bottom) // 2 if has_rect else 0,
                         "width": max(0, rect.right - rect.left),
@@ -946,25 +946,21 @@ _clip_thread_started = False
 
 
 def _clip_path() -> Path:
-    base = Path(os.environ.get("AI_COMPUTER_WORKSPACE", ".")).resolve()
-    return base / "clipboard_history.json"
+    return workspace_state_path("clipboard_history.json")
 
 
 def _load_clip_history() -> None:
     global _clip_history
     try:
-        if _clip_path().exists():
-            _clip_history = json.loads(_clip_path().read_text(encoding="utf-8"))
+        data = read_json(_clip_path(), [])
+        _clip_history = data if isinstance(data, list) else []
     except Exception:
         _clip_history = []
 
 
 def _save_clip_history() -> None:
     try:
-        _clip_path().parent.mkdir(parents=True, exist_ok=True)
-        _clip_path().write_text(
-            json.dumps(_clip_history[:_CLIP_HISTORY_MAX], indent=2),
-            encoding="utf-8")
+        write_json(_clip_path(), _clip_history[:_CLIP_HISTORY_MAX])
     except Exception:
         pass
 
@@ -1026,14 +1022,13 @@ def search_clipboard_history(query: str, limit: int = 10) -> list[dict]:
 # SCHEDULED RECIPES — JSON-persisted cron list, daemon checks every minute
 # ─────────────────────────────────────────────────────────────────────────────
 def _sched_path() -> Path:
-    base = Path(os.environ.get("AI_COMPUTER_WORKSPACE", ".")).resolve()
-    return base / "scheduled_recipes.json"
+    return workspace_state_path("scheduled_recipes.json")
 
 
 def list_scheduled() -> list[dict]:
     try:
-        if _sched_path().exists():
-            return json.loads(_sched_path().read_text(encoding="utf-8"))
+        data = read_json(_sched_path(), [])
+        return data if isinstance(data, list) else []
     except Exception:
         pass
     return []
@@ -1049,14 +1044,13 @@ def add_scheduled(name: str, when: str, goal: str, mode: str = "auto") -> dict:
     }
     items = list_scheduled()
     items.append(item)
-    _sched_path().parent.mkdir(parents=True, exist_ok=True)
-    _sched_path().write_text(json.dumps(items, indent=2), encoding="utf-8")
+    write_json(_sched_path(), items)
     return item
 
 
 def remove_scheduled(sid: str) -> bool:
     items = [i for i in list_scheduled() if i["id"] != sid]
-    _sched_path().write_text(json.dumps(items, indent=2), encoding="utf-8")
+    write_json(_sched_path(), items)
     return True
 
 
@@ -1112,8 +1106,7 @@ def start_scheduler_daemon(submit_fn) -> None:
                         except Exception:
                             pass
                         it["last_run"] = time.time()
-                        _sched_path().write_text(
-                            json.dumps(items, indent=2), encoding="utf-8")
+                        write_json(_sched_path(), items)
             except Exception:
                 pass
             time.sleep(30)
@@ -1125,14 +1118,13 @@ def start_scheduler_daemon(submit_fn) -> None:
 # FORM-PROFILE AUTOFILL — store named profiles, fill matching labels via UIA
 # ─────────────────────────────────────────────────────────────────────────────
 def _profile_path() -> Path:
-    base = Path(os.environ.get("AI_COMPUTER_WORKSPACE", ".")).resolve()
-    return base / "form_profiles.json"
+    return workspace_state_path("form_profiles.json")
 
 
 def list_profiles() -> dict:
     try:
-        if _profile_path().exists():
-            return json.loads(_profile_path().read_text(encoding="utf-8"))
+        data = read_json(_profile_path(), {})
+        return data if isinstance(data, dict) else {}
     except Exception:
         pass
     return {}
@@ -1141,15 +1133,14 @@ def list_profiles() -> dict:
 def save_profile(name: str, fields: dict) -> dict:
     profiles = list_profiles()
     profiles[name] = fields
-    _profile_path().parent.mkdir(parents=True, exist_ok=True)
-    _profile_path().write_text(json.dumps(profiles, indent=2), encoding="utf-8")
+    write_json(_profile_path(), profiles)
     return profiles[name]
 
 
 def delete_profile(name: str) -> None:
     profiles = list_profiles()
     profiles.pop(name, None)
-    _profile_path().write_text(json.dumps(profiles, indent=2), encoding="utf-8")
+    write_json(_profile_path(), profiles)
 
 
 def autofill_active_form(profile_name: str) -> dict:
@@ -1207,14 +1198,13 @@ def autofill_active_form(profile_name: str) -> dict:
 # SCREEN-REGION WATCH & NOTIFY
 # ─────────────────────────────────────────────────────────────────────────────
 def _watches_path() -> Path:
-    base = Path(os.environ.get("AI_COMPUTER_WORKSPACE", ".")).resolve()
-    return base / "screen_watches.json"
+    return workspace_state_path("screen_watches.json")
 
 
 def list_watches() -> list[dict]:
     try:
-        if _watches_path().exists():
-            return json.loads(_watches_path().read_text(encoding="utf-8"))
+        data = read_json(_watches_path(), [])
+        return data if isinstance(data, list) else []
     except Exception:
         pass
     return []
@@ -1229,14 +1219,13 @@ def add_watch(name: str, x: int, y: int, w: int, h: int,
             "last_check": 0, "last_hash": ""}
     items = list_watches()
     items.append(item)
-    _watches_path().parent.mkdir(parents=True, exist_ok=True)
-    _watches_path().write_text(json.dumps(items, indent=2), encoding="utf-8")
+    write_json(_watches_path(), items)
     return item
 
 
 def remove_watch(wid: str) -> bool:
     items = [i for i in list_watches() if i["id"] != wid]
-    _watches_path().write_text(json.dumps(items, indent=2), encoding="utf-8")
+    write_json(_watches_path(), items)
     return True
 
 
@@ -1283,8 +1272,7 @@ def start_watch_daemon(notify_fn) -> None:
                     w["last_check"] = time.time()
                     changed = True
                 if changed:
-                    _watches_path().write_text(
-                        json.dumps(items, indent=2), encoding="utf-8")
+                    write_json(_watches_path(), items)
             except Exception:
                 pass
             time.sleep(5)
@@ -1424,14 +1412,13 @@ def rag_query(name: str, query: str, top_k: int = 5) -> dict:
 # PER-APP TRUST POLICIES
 # ─────────────────────────────────────────────────────────────────────────────
 def _trust_path() -> Path:
-    base = Path(os.environ.get("AI_COMPUTER_WORKSPACE", ".")).resolve()
-    return base / "trust_policies.json"
+    return workspace_state_path("trust_policies.json")
 
 
 def list_trust() -> dict:
     try:
-        if _trust_path().exists():
-            return json.loads(_trust_path().read_text(encoding="utf-8"))
+        data = read_json(_trust_path(), {})
+        return data if isinstance(data, dict) else {}
     except Exception:
         pass
     return {}
@@ -1443,8 +1430,7 @@ def set_trust(exe_name: str, level: str) -> dict:
         return {"ok": False, "error": f"bad level '{level}'"}
     pol = list_trust()
     pol[exe_name.lower()] = level
-    _trust_path().parent.mkdir(parents=True, exist_ok=True)
-    _trust_path().write_text(json.dumps(pol, indent=2), encoding="utf-8")
+    write_json(_trust_path(), pol)
     return {"ok": True, "exe": exe_name.lower(), "level": level}
 
 

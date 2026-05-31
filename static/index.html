@@ -4,6 +4,7 @@
 <meta charset="UTF-8">
 <meta name="viewport" content="width=device-width, initial-scale=1.0">
 <title>AI Computer · Stream</title>
+<link rel="icon" href="data:image/svg+xml,%3Csvg xmlns='http://www.w3.org/2000/svg' viewBox='0 0 64 64'%3E%3Crect width='64' height='64' rx='18' fill='%230A0F12'/%3E%3Crect x='14' y='15' width='36' height='27' rx='6' fill='none' stroke='%235BE0D0' stroke-width='5'/%3E%3Ccircle cx='32' cy='28.5' r='5' fill='%235BE0D0'/%3E%3Cpath d='M24 49h16M32 42v7' stroke='%235BE0D0' stroke-width='5' stroke-linecap='round'/%3E%3C/svg%3E">
 <link rel="preconnect" href="https://fonts.googleapis.com">
 <link rel="preconnect" href="https://fonts.gstatic.com" crossorigin>
 <link href="https://fonts.googleapis.com/css2?family=Inter:wght@400;450;500;600;700&family=JetBrains+Mono:wght@400;450;500;600&family=Outfit:wght@500;600;700&display=swap" rel="stylesheet">
@@ -110,6 +111,14 @@
           <input id="isolated-app-id" type="text" placeholder="e.g. Chrome, Notepad…">
           <p style="font-size:var(--fs-label);color:var(--muted-2);margin-top:6px;line-height:1.4">The agent will only see and control this app.</p>
         </div>
+        <div class="skills-section" id="readiness-section">
+          <div class="history-header">
+            <span>Readiness</span><span id="readiness-score">--</span>
+          </div>
+          <div class="readiness-grid" id="readiness-grid">
+            <!-- Rendered via JS -->
+          </div>
+        </div>
         <div class="skills-section" id="connectors-section">
           <div class="history-header">
             <span>Connectors</span><span id="connector-count">0</span>
@@ -162,6 +171,7 @@
           <button class="control-btn hidden" id="btn-pause" type="button">Pause</button>
           <button class="control-btn hidden" id="btn-cancel" type="button">Cancel</button>
           <button class="control-btn hidden" id="btn-retry" type="button">Retry</button>
+          <button class="control-btn hidden" id="btn-control-report" type="button">Control report</button>
           <button class="control-btn hidden" id="btn-copy-log" type="button">Copy log</button>
           <button class="control-btn hidden" id="btn-download-log" type="button">Download</button>
           <button class="control-btn" id="btn-tweaks" type="button" aria-label="Tweaks">
@@ -288,6 +298,16 @@
         <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2.4" stroke-linecap="round" stroke-linejoin="round"><path d="M6 6l12 12"/><path d="M18 6L6 18"/></svg>
       </button>
     </div>
+    <div class="vcap-context" id="vcap-context" hidden>
+      <span class="vcap-chip vcap-scope" id="vcap-scope">Computer</span>
+      <span class="vcap-chip vcap-vision" id="vcap-vision">Ready</span>
+      <span class="vcap-chip vcap-phase" id="vcap-phase">Idle</span>
+      <span class="vcap-context-spacer" aria-hidden="true"></span>
+      <button class="vcap-mini" id="vcap-pause" type="button">Pause</button>
+      <button class="vcap-mini danger" id="vcap-stop" type="button">Stop</button>
+      <button class="vcap-mini" id="vcap-details" type="button">Details</button>
+    </div>
+    <div class="vcap-actions" id="vcap-actions" hidden aria-label="Context actions"></div>
     <div class="vcap-reply" id="vcap-reply" hidden>
       <span class="vcap-reply-dot" aria-hidden="true"></span>
       <span class="vcap-reply-text" id="vcap-reply-text"></span>
@@ -361,6 +381,20 @@
     <div class="modal-actions">
       <button class="modal-btn" id="desktop-access-deny" type="button">Deny</button>
       <button class="modal-btn primary" id="desktop-access-allow" type="button">Allow for this session</button>
+    </div>
+  </div>
+</div>
+
+<div class="overlay" id="readiness-preflight">
+  <div class="modal">
+    <div class="eyebrow" id="readiness-preflight-eyebrow" style="color: var(--warn); font-size: var(--fs-label); font-weight: 600; letter-spacing: var(--track-cap); text-transform: uppercase;">Preflight</div>
+    <h3 id="readiness-preflight-title">Check setup before running</h3>
+    <p id="readiness-preflight-reason">AI Computer found setup items that may affect this task.</p>
+    <div class="desktop-access-list readiness-preflight-list" id="readiness-preflight-list"></div>
+    <div class="modal-actions">
+      <button class="modal-btn" id="readiness-preflight-settings" type="button">Open Settings</button>
+      <button class="modal-btn" id="readiness-preflight-cancel" type="button">Cancel</button>
+      <button class="modal-btn primary" id="readiness-preflight-continue" type="button">Run Anyway</button>
     </div>
   </div>
 </div>

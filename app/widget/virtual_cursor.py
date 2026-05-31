@@ -6,8 +6,8 @@ glides along a gentle bezier curve, leaves a fading dotted trail, sits
 inside a soft accent glow halo, and gives a satisfying scale-pulse on
 click. No abrupt jumps, no clipped straight lines.
 
-  • Frameless always-on-top fully-transparent overlay spanning the primary
-    monitor. WA_TransparentForMouseEvents so it never blocks input.
+  • Frameless always-on-top fully-transparent overlay spanning the virtual
+    desktop. WA_TransparentForMouseEvents so it never blocks input.
   • show_click(x, y) animates the cursor along a quadratic bezier to the
     target, then plays a click pulse + ripple.
   • show_type(x, y, text) flashes a typewriter caret at the location with
@@ -138,10 +138,9 @@ class VirtualCursorOverlay(QWidget):
         self.setAttribute(Qt.WA_NoSystemBackground, True)
         self.setFocusPolicy(Qt.NoFocus)
 
-        screen = QGuiApplication.primaryScreen()
-        if screen is not None:
-            geo = screen.geometry()
-            self.setGeometry(geo)
+        self._origin_x = 0
+        self._origin_y = 0
+        self._sync_virtual_geometry()
 
         self._ripples: list[_Ripple] = []
         self._carets: list[_Caret] = []
@@ -179,6 +178,7 @@ class VirtualCursorOverlay(QWidget):
 
     # ── public API ──────────────────────────────────────────────────────
     def show_click(self, x: int, y: int, label: str = "Clicking") -> None:
+        x, y = self._to_local_point(x, y)
         self._move_cursor_to(x, y)
         self._ripples.append(_Ripple(x, y))
         self._click_pulse_start_ms = self._now_ms()
@@ -187,6 +187,7 @@ class VirtualCursorOverlay(QWidget):
         self._ensure_visible()
 
     def show_type(self, x: int, y: int, text: str = "") -> None:
+        x, y = self._to_local_point(x, y)
         self._move_cursor_to(x, y)
         self._carets.append(_Caret(x, y, text))
         if text:
@@ -202,6 +203,7 @@ class VirtualCursorOverlay(QWidget):
         bounds and show what's happening. No cursor travel — UIA acts directly
         on the control, so we highlight precisely instead of faking a click.
         Keep only the latest spotlight so the view stays clean."""
+        x, y, w, h = self._to_local_rect(x, y, w, h)
         self._spotlights = [s for s in self._spotlights if s.progress() < 0.7]
         self._spotlights.append(_Spotlight(x, y, w, h, label, kind))
         self._bump_cursor_visibility()
@@ -212,6 +214,7 @@ class VirtualCursorOverlay(QWidget):
         """Glow the edges of the whole app window the agent is operating in
         (brand colour), with a status label. Re-armed on every action so the
         glow stays up while the agent works, then fades once it's idle."""
+        x, y, w, h = self._to_local_rect(x, y, w, h)
         now = self._now_ms()
         if self._app_glow is None:
             self._app_glow = _AppGlow(x, y, w, h, label, now)
@@ -225,6 +228,7 @@ class VirtualCursorOverlay(QWidget):
         """Show a label without firing a click/type — for actions like
         scrolling, focusing a window, taking a screenshot, etc."""
         if x is not None and y is not None:
+            x, y = self._to_local_point(x, y)
             self._move_cursor_to(x, y)
         self._set_action_label(label)
         self._bump_cursor_visibility()
@@ -241,9 +245,37 @@ class VirtualCursorOverlay(QWidget):
         return QDateTime.currentMSecsSinceEpoch()
 
     def _ensure_visible(self) -> None:
+        self._sync_virtual_geometry()
         if not self.isVisible():
             self.show()
             self.raise_()
+
+    def _sync_virtual_geometry(self) -> None:
+        """Cover all monitors and remember the global-to-local offset."""
+        try:
+            screens = QGuiApplication.screens()
+            if not screens:
+                screen = QGuiApplication.primaryScreen()
+                screens = [screen] if screen is not None else []
+            if not screens:
+                return
+            geo = screens[0].geometry()
+            for screen in screens[1:]:
+                geo = geo.united(screen.geometry())
+            self._origin_x = int(geo.x())
+            self._origin_y = int(geo.y())
+            if self.geometry() != geo:
+                self.setGeometry(geo)
+        except Exception:
+            pass
+
+    def _to_local_point(self, x: int, y: int) -> tuple[int, int]:
+        self._sync_virtual_geometry()
+        return int(x) - self._origin_x, int(y) - self._origin_y
+
+    def _to_local_rect(self, x: int, y: int, w: int, h: int) -> tuple[int, int, int, int]:
+        lx, ly = self._to_local_point(x, y)
+        return lx, ly, int(w), int(h)
 
     def _bump_cursor_visibility(self) -> None:
         self._cursor_visible_until = self._now_ms() + self.CURSOR_DECAY_MS
@@ -491,34 +523,55 @@ class VirtualCursorOverlay(QWidget):
         if a <= 0.01:
             return
 
-        # intro: ring starts a touch larger and snaps inward
-        grow = (1 - min(1.0, prog / intro)) * 9 if prog < intro else 0.0
-        # 'type' keeps a gentle breathing pulse while it holds
+        # Intro starts slightly outside the exact UIA bounds and settles onto
+        # the true rectangle. Keep this tight so the outline feels precise.
+        grow = (1 - min(1.0, prog / intro)) * 3 if prog < intro else 0.0
+        # 'type' keeps a very gentle breathing pulse while it holds.
         if s.kind == "type" and intro <= prog <= 1 - outro:
-            grow += 1.2 * (1 + math.sin(s.t / 130.0)) / 2
+            grow += 0.75 * (1 + math.sin(s.t / 130.0)) / 2
 
         x = s.x - grow
         y = s.y - grow
         w = s.w + 2 * grow
         h = s.h + 2 * grow
-        rad = min(14.0, h / 2)
-        rect = QRectF(x, y, w, h)
+        rad = min(7.0, max(2.0, min(w, h) / 5))
+        rect = QRectF(x + 0.5, y + 0.5, max(1.0, w - 1), max(1.0, h - 1))
 
-        # faint interior tint
-        fc = QColor(RIPPLE_COLOR); fc.setAlpha(int(24 * a))
+        # Faint interior tint.
+        fc = QColor(RIPPLE_COLOR); fc.setAlpha(int(12 * a))
         p.setPen(Qt.NoPen); p.setBrush(QBrush(fc))
         p.drawRoundedRect(rect, rad, rad)
 
-        # soft outer glow (two passes)
-        for gw, ga in ((9.0, 16), (5.0, 30)):
+        # Tight glow, then an exact hairline. Big glows made small controls feel
+        # approximate; this keeps the user's eye on the actual UIA rectangle.
+        for gw, ga in ((6.0, 20), (3.0, 46)):
             gc = QColor(RIPPLE_COLOR); gc.setAlpha(int(ga * a))
             p.setPen(QPen(gc, gw)); p.setBrush(Qt.NoBrush)
             p.drawRoundedRect(rect, rad, rad)
 
-        # crisp ring
-        rc = QColor(RIPPLE_COLOR); rc.setAlpha(int(235 * a))
-        p.setPen(QPen(rc, 2.0)); p.setBrush(Qt.NoBrush)
+        # Crisp exact ring with a faint outer contrast line for light UIs.
+        oc = QColor(0, 0, 0, int(72 * a))
+        p.setPen(QPen(oc, 3.2)); p.setBrush(Qt.NoBrush)
         p.drawRoundedRect(rect, rad, rad)
+        rc = QColor(RIPPLE_COLOR); rc.setAlpha(int(235 * a))
+        p.setPen(QPen(rc, 1.8)); p.setBrush(Qt.NoBrush)
+        p.drawRoundedRect(rect, rad, rad)
+
+        # Corner brackets make the exact bounds legible without flooding the
+        # whole control. Draw them inside the rectangle so they never drift.
+        corner = max(8, min(22, int(min(w, h) * 0.35)))
+        bx0, by0 = int(rect.left()), int(rect.top())
+        bx1, by1 = int(rect.right()), int(rect.bottom())
+        bc = QColor(255, 255, 255, int(235 * a))
+        p.setPen(QPen(bc, 1.4))
+        p.drawLine(bx0 + 1, by0 + 1, bx0 + corner, by0 + 1)
+        p.drawLine(bx0 + 1, by0 + 1, bx0 + 1, by0 + corner)
+        p.drawLine(bx1 - corner, by0 + 1, bx1 - 1, by0 + 1)
+        p.drawLine(bx1 - 1, by0 + 1, bx1 - 1, by0 + corner)
+        p.drawLine(bx0 + 1, by1 - 1, bx0 + corner, by1 - 1)
+        p.drawLine(bx0 + 1, by1 - corner, bx0 + 1, by1 - 1)
+        p.drawLine(bx1 - corner, by1 - 1, bx1 - 1, by1 - 1)
+        p.drawLine(bx1 - 1, by1 - corner, bx1 - 1, by1 - 1)
 
         # label pill, centred below the control (flips above if no room)
         if s.label:

@@ -102,6 +102,7 @@
     if (!overlay || !openBtn) return;
     const open = () => {
       overlay.classList.add('show');
+      loadReadiness();
       loadCodingBackends();
     };
     const close = () => overlay.classList.remove('show');
@@ -234,6 +235,7 @@
   let activePlanCard = null;
   let liveStatusCard = null;
   let liveStatusMessage = '';
+  let capsuleControlLayer = '';
   let planSubtasks = [];
   let currentSubtaskIdx = 0;
   let subtaskEls = {};
@@ -304,6 +306,13 @@
         subEl.className = 'turn-step-sub';
         subEl.textContent = sub;
         content.appendChild(subEl);
+      }
+      const trace = s.traceEl ? (s.traceEl.dataset.traceSummary || s.traceEl.textContent.trim()) : '';
+      if (trace) {
+        const traceEl = document.createElement('span');
+        traceEl.className = 'turn-step-trace';
+        traceEl.textContent = trace;
+        content.appendChild(traceEl);
       }
       const rawOutput = s.outputEl ? s.outputEl.textContent.trim() : '';
       if (rawOutput) {
@@ -587,7 +596,7 @@
     // 1. fenced code blocks ```lang\n…\n``` — pull out, escape, stash
     text = text.replace(/```[^\n]*\n?([\s\S]*?)```/g, (_, code) => {
       blocks.push('<pre class="md-pre"><code>' + esc(code.replace(/\n$/, '')) + '</code></pre>');
-      return ' B' + (blocks.length - 1) + ' ';
+      return '@@AIC@B' + (blocks.length - 1) + '@@AIC@';
     });
     // 2. escape everything else
     text = esc(text);
@@ -599,17 +608,17 @@
     // 5. bullet lists — group consecutive "- "/"* " lines
     text = text.replace(/(?:^|\n)((?:[-*] .+(?:\n|$))+)/g, (_, list) => {
       const items = list.trim().split(/\n/).map((l) => '<li>' + l.replace(/^[-*] /, '') + '</li>').join('');
-      return '\n U' + (blocks.push('<ul class="md-ul">' + items + '</ul>') - 1) + ' ';
+      return '\n@@AIC@U' + (blocks.push('<ul class="md-ul">' + items + '</ul>') - 1) + '@@AIC@';
     });
     // 6. paragraphs + line breaks
     text = text.split(/\n{2,}/).map((p) => {
       const t = p.trim();
       if (!t) return '';
-      if (/^ [BU]\d+ $/.test(t)) return t;
+      if (/^@@AIC@[BU]\d+@@AIC@$/.test(t)) return t;
       return '<p>' + t.replace(/\n/g, '<br>') + '</p>';
     }).join('');
     // 7. restore stashed blocks/lists
-    text = text.replace(/ [BU](\d+) /g, (_, i) => blocks[+i]);
+    text = text.replace(/@@AIC@[BU](\d+)@@AIC@/g, (_, i) => blocks[+i]);
     return text;
   };
 
@@ -698,6 +707,91 @@
     desktopAccessResolver = resolve;
     overlay.classList.add('show');
   });
+
+  const openSettingsFromPreflight = () => {
+    $('readiness-preflight')?.classList.remove('show');
+    $('settings-overlay')?.classList.add('show');
+    loadReadiness();
+  };
+
+  const requestReadinessPreflight = (preflight) => new Promise((resolve) => {
+    const overlay = $('readiness-preflight');
+    const list = $('readiness-preflight-list');
+    const issues = Array.isArray(preflight) ? preflight : (preflight?.issues || []);
+    if (!overlay || !list || !issues.length) { resolve(true); return; }
+    const blocked = typeof preflight?.blocked === 'boolean'
+      ? preflight.blocked
+      : issues.some((issue) => issue.severity === 'blocked');
+    $('readiness-preflight-title').textContent = blocked ? 'Setup needed before running' : 'Run with degraded capabilities?';
+    $('readiness-preflight-reason').textContent = blocked
+      ? 'This task is likely to fail until the blocked setup items are fixed.'
+      : 'The task can start, but one or more fallback paths are degraded.';
+    $('readiness-preflight-eyebrow').textContent = blocked ? 'Blocked preflight' : 'Capability warning';
+    list.innerHTML = '';
+    issues.forEach((issue) => {
+      const row = document.createElement('div');
+      row.className = `desktop-access-row readiness-preflight-row ${issue.severity}`;
+      const copy = document.createElement('div');
+      const name = document.createElement('strong');
+      name.textContent = issue.label;
+      const detail = document.createElement('span');
+      detail.textContent = issue.detail;
+      copy.append(name, detail);
+      const badge = document.createElement('div');
+      badge.className = 'desktop-access-badge';
+      badge.textContent = issue.severity === 'blocked' ? 'Fix first' : 'Degraded';
+      row.append(copy, badge);
+      list.appendChild(row);
+    });
+    const btnSettings = $('readiness-preflight-settings');
+    const btnCancel = $('readiness-preflight-cancel');
+    const btnContinue = $('readiness-preflight-continue');
+    btnContinue.hidden = blocked;
+    const cleanup = (result) => {
+      overlay.classList.remove('show');
+      btnSettings.onclick = null;
+      btnCancel.onclick = null;
+      btnContinue.onclick = null;
+      resolve(result);
+    };
+    btnSettings.onclick = () => { openSettingsFromPreflight(); cleanup(false); };
+    btnCancel.onclick = () => cleanup(false);
+    btnContinue.onclick = () => cleanup(true);
+    overlay.classList.add('show');
+  });
+
+  const ensureTaskReadiness = async ({ goal, mode, model, isolatedApp }) => {
+    await keyReady;
+    let preflight;
+    try {
+      preflight = await api('/api/tasks/preflight', 'POST', {
+        goal,
+        mode,
+        model: model || null,
+        isolated_app: isolatedApp || null,
+      });
+    } catch (_) {
+      preflight = {
+        blocked: false,
+        can_override: true,
+        issues: [{
+          key: 'readiness_error',
+          label: 'Readiness',
+          severity: 'warning',
+          status: 'warning',
+          detail: 'Could not run local task preflight. The task may still fail to start.',
+        }],
+      };
+    }
+    const issues = Array.isArray(preflight.issues) ? preflight.issues : [];
+    if (!issues.length) return { ok: true, override: false, preflight };
+    const allowed = await requestReadinessPreflight(preflight);
+    return {
+      ok: allowed,
+      override: !!allowed && !!preflight.can_override,
+      preflight,
+    };
+  };
 
   const setMode = (mode, isolated = false, isolatedApp = '') => {
     currentMode = mode || 'coding';
@@ -1094,7 +1188,15 @@
     turn.types.push(_actionTypeLabel(actionType));
     turn.textSpan.textContent = _turnSummaryText(turn.types, true);
     // Phase C2: record step data for timeline; refs filled after parts are created
-    const stepData = { label: humanize(actionType || 'action'), actionType: actionType || '', summary: summary || '', stateEl: null, subtitleEl: null, outputEl: null };
+    const stepData = {
+      label: humanize(actionType || 'action'),
+      actionType: actionType || '',
+      summary: summary || '',
+      stateEl: null,
+      subtitleEl: null,
+      outputEl: null,
+      traceEl: null,
+    };
     turn.steps.push(stepData);
 
     removeWelcome();
@@ -1124,9 +1226,12 @@
 
     const output = document.createElement('pre');
     output.className = 'tool-output hidden';
+    const trace = document.createElement('div');
+    trace.className = 'control-trace hidden';
     const details = document.createElement('div');
     details.className = 'detail-list';
 
+    inner.appendChild(trace);
     inner.appendChild(output);
     inner.appendChild(details);
     card.appendChild(body);
@@ -1141,9 +1246,10 @@
     stepData.stateEl = parts.stateEl;
     stepData.subtitleEl = parts.subtitleEl;
     stepData.outputEl = output;
+    stepData.traceEl = trace;
 
     const entry = {
-      card, output, details,
+      card, output, traceEl: trace, details,
       titleEl: parts.titleEl,
       subtitleEl: parts.subtitleEl,
       stateEl: parts.stateEl,
@@ -1187,6 +1293,69 @@
     wrap.appendChild(summary);
     wrap.appendChild(code);
     container.appendChild(wrap);
+  };
+
+  const overlayRectText = (label, rect) => {
+    if (!rect || typeof rect !== 'object') return '';
+    const left = Number(rect.left);
+    const top = Number(rect.top);
+    const width = Number(rect.width);
+    const height = Number(rect.height);
+    if (![left, top, width, height].every(Number.isFinite) || width <= 0 || height <= 0) return '';
+    return `${label} ${Math.round(left)},${Math.round(top)} ${Math.round(width)}x${Math.round(height)}`;
+  };
+
+  const overlayPointText = (point) => {
+    if (!point || typeof point !== 'object') return '';
+    const x = Number(point.x);
+    const y = Number(point.y);
+    if (![x, y].every(Number.isFinite)) return '';
+    return `point ${Math.round(x)},${Math.round(y)}`;
+  };
+
+  const overlayTraceParts = (overlay, phase = '') => {
+    if (!overlay || typeof overlay !== 'object') return [];
+    const parts = [];
+    const add = (label, value) => {
+      const text = String(value || '').trim();
+      if (text) parts.push([label, text]);
+    };
+    add('Layer', overlay.control_layer);
+    add('Reason', overlay.control_reason || overlay.fallback_reason);
+    add('Target', overlay.target || overlay.label);
+    add('Phase', phase || overlay.phase);
+    add('Rect', overlayRectText('control', overlay.rect));
+    add('App', overlayRectText('app', overlay.app_rect));
+    add('Point', overlayPointText(overlay.point));
+    return parts;
+  };
+
+  const renderControlTrace = (entry, overlay, phase = '') => {
+    if (!entry || !entry.traceEl) return;
+    const parts = overlayTraceParts(overlay, phase);
+    entry.traceEl.replaceChildren();
+    if (!parts.length) {
+      entry.traceEl.classList.add('hidden');
+      entry.traceEl.dataset.traceSummary = '';
+      return;
+    }
+    entry.traceEl.classList.remove('hidden');
+    const summaryParts = [];
+    parts.forEach(([label, value], index) => {
+      const chip = document.createElement('span');
+      chip.className = `control-trace-chip ${label.toLowerCase()}`;
+      const key = document.createElement('span');
+      key.className = 'control-trace-key';
+      key.textContent = label;
+      const val = document.createElement('span');
+      val.className = 'control-trace-value';
+      val.textContent = value;
+      chip.appendChild(key);
+      chip.appendChild(val);
+      entry.traceEl.appendChild(chip);
+      if (index < 4) summaryParts.push(value);
+    });
+    entry.traceEl.dataset.traceSummary = summaryParts.join(' / ');
   };
 
   const appendDetailRow = (entry, eyebrow, title, copy = '', preview = '') => {
@@ -1750,7 +1919,7 @@
     if (sse) { sse.close(); sse = null; }
     streamClosedManually = replay;
     reconnectAttempts = 0; streamCursor = 0; startTime = 0; isPaused = false;
-    activePlanCard = null; liveStatusCard = null; liveStatusMessage = '';
+    activePlanCard = null; liveStatusCard = null; liveStatusMessage = ''; capsuleControlLayer = '';
     planSubtasks = []; currentSubtaskIdx = 0; subtaskEls = {};
     screenshotStore.clear(); lastActionId = null; terminalStateKey = null;
     Object.keys(actionCards).forEach((k) => delete actionCards[k]);
@@ -1763,6 +1932,7 @@
     $('btn-pause').classList.add('hidden');
     $('btn-cancel').classList.add('hidden');
     $('btn-retry').classList.add('hidden');
+    $('btn-control-report').classList.add('hidden');
     $('btn-copy-log').classList.add('hidden');
     $('btn-download-log').classList.add('hidden');
 
@@ -1790,6 +1960,7 @@
     $('btn-pause').classList.add('hidden');
     $('btn-cancel').classList.add('hidden');
     $('btn-retry').classList.remove('hidden');
+    $('btn-control-report').classList.remove('hidden');
     $('btn-copy-log').classList.remove('hidden');
     $('btn-download-log').classList.remove('hidden');
     $('send').classList.remove('hidden');
@@ -1808,6 +1979,11 @@
   };
 
   const shouldReuseLiveStatus = (m = '') => /thinking|planning|reflecting|evaluating|executing sub-task|initializing|re-planning|still|scanning|sending request|model responded/i.test(m);
+
+  const overlayControlLayer = (overlay) => {
+    if (!overlay || typeof overlay !== 'object') return '';
+    return String(overlay.control_layer || '').trim();
+  };
 
   const processTaskEvent = (event, { replay = false, taskId = task, suppressToasts = false } = {}) => {
     if (event.type === 'task_created') return;
@@ -1842,17 +2018,25 @@
 
     if (event.type === 'action_start') {
       finalizeLiveStatus();
+      const layer = overlayControlLayer(event.overlay);
+      if (layer) capsuleControlLayer = layer;
+      const detail = event.args_summary || event.explanation || 'Working...';
       const entry = ensureActionCard(event.action_id, event.action_type, event.args_summary || event.explanation || '');
       setActionState(entry, 'Running', 'running');
-      entry.subtitleEl.textContent = event.args_summary || event.explanation || 'Working…';
+      entry.subtitleEl.textContent = layer ? `${layer} - ${detail}` : detail;
+      renderControlTrace(entry, event.overlay, 'start');
+      liveStatusMessage = layer ? `${layer}: ${detail}` : detail;
       lastActionId = event.action_id || null;
       return;
     }
 
     if (event.type === 'action_result') {
+      const layer = overlayControlLayer(event.overlay);
+      if (layer) capsuleControlLayer = layer;
       const entry = ensureActionCard(event.action_id, event.action_type, event.args_summary || '');
       setActionState(entry, event.ok ? 'OK' : 'Fail', event.ok ? 'ok' : 'fail');
-      if (event.args_summary) entry.subtitleEl.textContent = event.args_summary;
+      if (event.args_summary) entry.subtitleEl.textContent = layer ? `${layer} - ${event.args_summary}` : event.args_summary;
+      renderControlTrace(entry, event.overlay, 'result');
       if (event.output && !event.action_type?.match(/run_command|bash/)) {
         // C1: load the output but keep it collapsed — the turn timeline stays
         // a clean list of one-line rows; click a row to reveal its output.
@@ -2185,8 +2369,18 @@
     if (task && sse) { toast('A task is already running. Cancel it before starting another.', 'warn'); return; }
     const requestedMode = $('mode-id').value;
     const requestedIsolatedApp = ($('isolated-app-id').value || '').trim();
-    if (isDesktopMode(requestedMode)) {
-      const allowed = await requestDesktopAccess({ mode: requestedMode, isolatedApp: requestedIsolatedApp });
+    const requestedModel = $('model-id').value || null;
+    const readinessDecision = await ensureTaskReadiness({
+      goal,
+      mode: requestedMode,
+      model: requestedModel,
+      isolatedApp: requestedIsolatedApp,
+    });
+    if (!readinessDecision.ok) return;
+    const effectiveMode = readinessDecision.preflight?.effective_mode || requestedMode;
+    const effectiveIsolatedApp = requestedIsolatedApp || readinessDecision.preflight?.isolated_app || '';
+    if (isDesktopMode(effectiveMode)) {
+      const allowed = await requestDesktopAccess({ mode: effectiveMode, isolatedApp: effectiveIsolatedApp });
       if (!allowed) return;
     }
 
@@ -2197,7 +2391,7 @@
     appendMessage(goal, 'user');
     $('input').value = ''; updateCharCount(); autoGrow();
 
-    setTaskTitle(goal, { mode: requestedMode, model: $('model-id').value, status: 'running' });
+    setTaskTitle(goal, { mode: effectiveMode, model: requestedModel, status: 'running' });
     setStatus('running');
     $('btn-pause').classList.remove('hidden');
     $('btn-cancel').classList.remove('hidden');
@@ -2215,10 +2409,10 @@
 
     try {
       await keyReady;
-      const model = $('model-id').value;
+      const model = requestedModel;
       const mode = requestedMode;
       const isolated_app = requestedIsolatedApp || null;
-      if (isDesktopMode(mode)) setDesktopSessionActive(true, mode, isolated_app || '');
+      if (isDesktopMode(effectiveMode)) setDesktopSessionActive(true, effectiveMode, effectiveIsolatedApp || '');
       streamClosedManually = false;
       openStream(task);
       await api('/api/tasks', 'POST', { 
@@ -2229,7 +2423,8 @@
         notify_on_completion: !!$('notify-toggle')?.checked,
         auto_commit: !!$('checkpoint-toggle')?.checked,
         autonomy_level: $('autonomy-level')?.value || 'balanced',
-        thinking_budget: $('thinking-budget')?.value || 'off'
+        thinking_budget: $('thinking-budget')?.value || 'off',
+        readiness_override: !!readinessDecision.override
       });
       if (window.innerWidth <= 1080) document.body.classList.remove('nav-open');
     } catch (err) {
@@ -2324,6 +2519,58 @@
     link.click(); link.remove();
   };
 
+  const showControlReport = async () => {
+    if (!currentViewedTask) { toast('No task selected.', 'warn'); return; }
+    try {
+      const report = await api(`/api/tasks/${currentViewedTask}/control-trace`);
+      const summary = report.summary || {};
+      const entries = Array.isArray(report.entries) ? report.entries : [];
+      const card = createFeedCard('control-report-card');
+      const parts = createCardHead({
+        eyebrow: 'Evidence',
+        title: 'Control report',
+        subtitle: `${summary.trace_events || 0} trace events · ${summary.primary_layer || 'No control layer'}`,
+        stateLabel: summary.failures ? `${summary.failures} Fail` : 'Verified',
+        stateClass: summary.failures ? 'fail' : 'ok',
+      });
+      card.appendChild(parts.head);
+      const body = document.createElement('div');
+      body.className = 'card-body';
+      const inner = document.createElement('div');
+      inner.className = 'card-body-inner';
+      const metrics = document.createElement('div');
+      metrics.className = 'control-report-grid';
+      [
+        ['Primary', summary.primary_layer || 'None'],
+        ['UIA', summary.used_uia ? 'Used' : 'No'],
+        ['Fallbacks', String(summary.fallbacks || 0)],
+        ['Misses', String(summary.misses || 0)],
+        ['Success', String(summary.successes || 0)],
+        ['Failures', String(summary.failures || 0)],
+      ].forEach(([label, value]) => {
+        const item = document.createElement('div');
+        item.className = 'control-report-metric';
+        const k = document.createElement('span');
+        k.textContent = label;
+        const v = document.createElement('b');
+        v.textContent = value;
+        item.appendChild(k);
+        item.appendChild(v);
+        metrics.appendChild(item);
+      });
+      inner.appendChild(metrics);
+      const detail = document.createElement('pre');
+      detail.className = 'detail-preview control-report-json';
+      detail.textContent = JSON.stringify({ summary, entries: entries.slice(0, 24) }, null, 2);
+      inner.appendChild(detail);
+      body.appendChild(inner);
+      card.appendChild(body);
+      toast('Control report loaded.', 'ok');
+    } catch (_) {
+      toast('Could not load control report.', 'err');
+    }
+  };
+
   const loadTaskLog = (taskId, events, sourceEl) => {
     currentViewedTask = taskId;
     resetTaskView({ replay: true });
@@ -2338,6 +2585,7 @@
     setTaskTitle(title, { mode: createdEvent?.mode, model: createdEvent?.model });
     appendMessage(title, 'user');
     $('btn-retry').classList.remove('hidden');
+    $('btn-control-report').classList.remove('hidden');
     $('btn-copy-log').classList.remove('hidden');
     $('btn-download-log').classList.remove('hidden');
 
@@ -2468,6 +2716,33 @@
     processTaskEvent({ type: 'subtask', subtask_id: 's1', status: 'running', worker_id: 'worker-1' });
     await delay(500);
     processTaskEvent({ type: 'reasoning', stage: 'Thinking', summary: 'Start from a minimal FastAPI layout', detail: 'Create app/main.py + router/ + schemas/. Avoid premature abstraction.', elapsed_seconds: 2, worker_id: 'worker-1' });
+
+    const demoUiaOverlayStart = {
+      type: 'status',
+      tool: 'uia_find',
+      kind: 'find',
+      phase: 'start',
+      label: 'Locating editor',
+      target: 'editor',
+      app: 'Workspace',
+      control_layer: 'UIA exact',
+      control_reason: 'querying Windows accessibility tree',
+    };
+    const demoUiaOverlayResult = {
+      type: 'uia_control',
+      tool: 'uia_find',
+      kind: 'find',
+      phase: 'result',
+      label: 'Found editor',
+      target: 'editor',
+      rect: { left: 420, top: 180, width: 640, height: 420 },
+      app_rect: { left: 300, top: 90, width: 900, height: 720 },
+      control_layer: 'UIA exact',
+      control_reason: 'Windows accessibility tree',
+    };
+    processTaskEvent({ type: 'action_start', action_id: 'a0', action_type: 'uia_find', args_summary: 'editor', overlay: demoUiaOverlayStart });
+    await delay(350);
+    processTaskEvent({ type: 'action_result', action_id: 'a0', action_type: 'uia_find', ok: true, args_summary: 'editor', overlay: demoUiaOverlayResult, output: 'Found editor by accessible name.' });
 
     await delay(500);
     processTaskEvent({ type: 'action_start', action_id: 'a1', action_type: 'write_file', args_summary: 'app/main.py · 42 lines' });
@@ -2612,6 +2887,7 @@
         refreshHistoryCount();
       }).catch(() => {});
       loadSkills();
+      loadReadiness();
       loadMCP();
       loadCodingBackends();
     } catch (_) {}
@@ -2623,9 +2899,18 @@
     try {
       const data = await api('/healthz');
       const providers = data.providers || {};
-      container.innerHTML = Object.entries(providers).map(([name, status]) =>
-        `<span class="provider-chip${status === 'ok' ? ' ok' : ''}" title="${name}: ${status}"><span class="chip-dot"></span>${name}</span>`
-      ).join('');
+      container.innerHTML = '';
+      Object.entries(providers).forEach(([name, status]) => {
+        const chip = document.createElement('span');
+        chip.className = `provider-chip${status === 'ok' ? ' ok' : ''}`;
+        chip.title = `${name}: ${status}`;
+        const dot = document.createElement('span');
+        dot.className = 'chip-dot';
+        const label = document.createElement('span');
+        label.textContent = name;
+        chip.append(dot, label);
+        container.appendChild(chip);
+      });
     } catch (_) {}
   };
   setInterval(refreshProviderChips, 60000);
@@ -2676,8 +2961,77 @@
     renderSkills();
   };
 
+  let readinessState = { checks: [], overall: 'unknown', score: 0, summary: {} };
   let allMCPServers = [];
   let codingBackendState = { backends: [], default: '' };
+
+  const READINESS_LABELS = {
+    ready: 'Ready',
+    warning: 'Check',
+    blocked: 'Blocked',
+    unavailable: 'N/A',
+  };
+
+  const loadReadiness = async () => {
+    try {
+      await keyReady;
+      readinessState = await api('/api/readiness');
+      renderReadiness();
+    } catch (e) {
+      readinessState = {
+        checks: [{
+          key: 'readiness_error',
+          label: 'Readiness',
+          status: 'warning',
+          detail: 'Could not load local capability checks.',
+          category: 'core',
+        }],
+        overall: 'warning',
+        score: 0,
+        summary: {},
+      };
+      renderReadiness();
+    }
+  };
+
+  const renderReadiness = () => {
+    const grid = $('readiness-grid');
+    const score = $('readiness-score');
+    if (!grid) return;
+    grid.innerHTML = '';
+    const checks = Array.isArray(readinessState.checks) ? readinessState.checks : [];
+    if (score) {
+      const value = Number.isFinite(readinessState.score) ? readinessState.score : 0;
+      score.textContent = `${value}%`;
+      score.dataset.status = readinessState.overall || 'unknown';
+    }
+    checks.forEach((check) => {
+      const item = document.createElement('div');
+      const status = check.status || 'warning';
+      item.className = `readiness-item ${status}`;
+      item.dataset.category = check.category || 'core';
+
+      const dot = document.createElement('span');
+      dot.className = 'readiness-dot';
+
+      const info = document.createElement('div');
+      info.className = 'readiness-info';
+      const name = document.createElement('div');
+      name.className = 'readiness-name';
+      name.textContent = check.label || check.key || 'Capability';
+      const detail = document.createElement('div');
+      detail.className = 'readiness-detail';
+      detail.textContent = check.detail || check.fix || '';
+      info.append(name, detail);
+
+      const badge = document.createElement('span');
+      badge.className = 'readiness-status';
+      badge.textContent = READINESS_LABELS[status] || status;
+
+      item.append(dot, info, badge);
+      grid.appendChild(item);
+    });
+  };
 
   const loadMCP = async () => {
     try {
@@ -2823,6 +3177,7 @@
   $('btn-cancel').onclick = () => { stopEverything(); cancelTask(); };
   $('btn-pause').onclick = togglePause;
   $('btn-retry').onclick = retryTask;
+  $('btn-control-report').onclick = showControlReport;
   $('btn-copy-log').onclick = copyCurrentLog;
   $('btn-download-log').onclick = downloadCurrentLog;
   $('new-session-btn').onclick = newSession;
@@ -3108,6 +3463,14 @@
     const reply = $('vcap-reply');
     const replyText = $('vcap-reply-text');
     const wave = $('vcap-wave');
+    const contextEl = $('vcap-context');
+    const scopeEl = $('vcap-scope');
+    const visionEl = $('vcap-vision');
+    const phaseEl = $('vcap-phase');
+    const actionsEl = $('vcap-actions');
+    const pauseBtn = $('vcap-pause');
+    const stopBtn = $('vcap-stop');
+    const detailsBtn = $('vcap-details');
     const SR = window.SpeechRecognition || window.webkitSpeechRecognition;
 
     if (closeShell) closeShell.onclick = () => {
@@ -3140,6 +3503,125 @@
     else window.addEventListener('qt-shell-ready', wireQtDrag);
 
     const setStatus = (t) => { if (statusEl) statusEl.textContent = t || ''; };
+    const CAPSULE_PHASE_LABELS = {
+      idle: 'Idle',
+      focused: 'Ready',
+      context_ready: 'Context ready',
+      listening: 'Listening',
+      submitting: 'Starting',
+      planning: 'Planning',
+      acting: 'Acting',
+      waiting_approval: 'Needs approval',
+      blocked: 'Blocked',
+      paused: 'Paused',
+      done: 'Done',
+      error: 'Error'
+    };
+    const CAPSULE_CONTEXT_ACTIONS = [
+      { key: /chrome|edge|browser|web/i, actions: [
+        ['Summarize page', 'Summarize the active browser page and list key actions.'],
+        ['Extract links', 'Extract the important links from the active browser page.'],
+        ['Fill form', 'Use the current browser page and help fill the visible form.']
+      ] },
+      { key: /code|workspace|repo|project|vs code|cursor/i, actions: [
+        ['Run tests', 'Run the project tests, diagnose failures, and propose the smallest fix.'],
+        ['Explain error', 'Explain the visible error or failing command in this project.'],
+        ['Fix failure', 'Find and fix the current failing test or runtime error.']
+      ] },
+      { key: /file|folder|downloads|explorer/i, actions: [
+        ['Clean folder', 'Scan the selected folder, group clutter, and ask before moving files.'],
+        ['Find file', 'Find the file I describe in the selected folder.'],
+        ['Summarize files', 'Summarize the important files in the selected folder.']
+      ] },
+      { key: /desktop|computer|screen|auto/i, actions: [
+        ['Explain screen', 'Look at my screen and explain what is open.'],
+        ['Open app', 'Open the app I name and get it ready for work.'],
+        ['Do visible task', 'Use the visible app to complete the task I describe.']
+      ] }
+    ];
+    let capsuleUiState = 'idle';
+    let capsuleLastAction = '';
+    let capsuleFocused = false;
+
+    const capsuleScope = () => {
+      const isolated = (typeof currentIsolatedApp !== 'undefined' && currentIsolatedApp) || '';
+      if (isolated) return isolated;
+      const mode = (typeof currentMode !== 'undefined' && currentMode) || 'auto';
+      if (/browser/.test(mode)) return 'Browser';
+      if (/computer/.test(mode)) return 'Desktop';
+      if (/coding/.test(mode)) return 'Workspace';
+      return 'Computer';
+    };
+
+    const capsuleSees = (state, scope) => {
+      const mode = (typeof currentMode !== 'undefined' && currentMode) || '';
+      const controlLayer = (typeof capsuleControlLayer !== 'undefined' && capsuleControlLayer) || '';
+      if (controlLayer && ['planning', 'acting', 'waiting_approval', 'done', 'error'].includes(state)) return controlLayer;
+      if (state === 'listening') return 'Voice input';
+      if (state === 'waiting_approval') return 'Approval paused';
+      if (state === 'blocked') return 'Needs help';
+      if (state === 'done') return 'Verified result';
+      if (state === 'error') return 'Recovery needed';
+      if (/computer|browser/.test(mode) || /desktop|browser/i.test(scope)) return 'Seeing screen';
+      if (/workspace/i.test(scope)) return 'Workspace context';
+      return 'Ready';
+    };
+
+    const capsuleActionsFor = (scope) => {
+      const hay = `${scope} ${(typeof currentMode !== 'undefined' && currentMode) || ''}`;
+      const found = CAPSULE_CONTEXT_ACTIONS.find((group) => group.key.test(hay));
+      return (found || CAPSULE_CONTEXT_ACTIONS[CAPSULE_CONTEXT_ACTIONS.length - 1]).actions;
+    };
+
+    const setCapsulePrompt = (prompt) => {
+      if (textIn) {
+        textIn.value = prompt;
+        textIn.focus();
+      }
+      capsuleFocused = true;
+      renderCapsuleState({ state: 'focused' });
+    };
+
+    const renderCapsuleActions = (items, visible) => {
+      if (!actionsEl) return;
+      actionsEl.replaceChildren();
+      if (!visible) {
+        actionsEl.hidden = true;
+        return;
+      }
+      items.forEach(([label, prompt]) => {
+        const btn = document.createElement('button');
+        btn.type = 'button';
+        btn.className = 'vcap-action';
+        btn.textContent = label;
+        btn.title = prompt;
+        btn.addEventListener('click', () => setCapsulePrompt(prompt));
+        actionsEl.appendChild(btn);
+      });
+      actionsEl.hidden = false;
+    };
+
+    const renderCapsuleState = ({ state = capsuleUiState, action = capsuleLastAction } = {}) => {
+      capsuleUiState = state;
+      capsuleLastAction = action || capsuleLastAction || '';
+      const scope = capsuleScope();
+      root.dataset.capState = state;
+      root.classList.toggle('busy', ['submitting', 'planning', 'acting', 'waiting_approval'].includes(state));
+      root.classList.toggle('listening', state === 'listening');
+      if (scopeEl) scopeEl.textContent = scope;
+      if (visionEl) visionEl.textContent = capsuleSees(state, scope);
+      if (phaseEl) phaseEl.textContent = CAPSULE_PHASE_LABELS[state] || state;
+      const showContext = state !== 'idle' || capsuleFocused || Boolean(capsuleLastAction);
+      if (contextEl) contextEl.hidden = !showContext;
+      const showActions = !['submitting', 'planning', 'acting', 'waiting_approval'].includes(state)
+        && state !== 'listening'
+        && (capsuleFocused || state === 'context_ready' || state === 'done' || state === 'error');
+      renderCapsuleActions(capsuleActionsFor(scope), showActions);
+      if (capsuleLastAction && ['acting', 'planning', 'waiting_approval'].includes(state)) {
+        setStatus(capsuleLastAction);
+      }
+      requestAnimationFrame(syncShellHeight);
+    };
 
     // In the desktop shell the OS window hugs the capsule — resize it to the
     // capsule's actual height so there is no empty window "cube" around it.
@@ -3186,10 +3668,41 @@
       if (sb) sb.click();
       if (textIn) textIn.value = '';
       hideReply();
+      renderCapsuleState({ state: 'submitting', action: 'Starting task...' });
     };
     if (sendBtn) sendBtn.onclick = () => submitGoal(textIn && textIn.value);
     if (textIn) textIn.addEventListener('keydown', (e) => {
       if (e.key === 'Enter') { e.preventDefault(); submitGoal(textIn.value); }
+    });
+    if (textIn) {
+      textIn.addEventListener('focus', () => {
+        capsuleFocused = true;
+        renderCapsuleState({ state: 'context_ready' });
+      });
+      textIn.addEventListener('blur', () => {
+        capsuleFocused = false;
+        if (!textIn.value && currentStatus === 'ready') renderCapsuleState({ state: 'idle', action: '' });
+      });
+      textIn.addEventListener('input', () => {
+        renderCapsuleState({ state: textIn.value.trim() ? 'focused' : 'context_ready' });
+      });
+    }
+    if (pauseBtn) pauseBtn.addEventListener('click', () => {
+      const b = $('btn-pause');
+      if (b) b.click();
+    });
+    if (stopBtn) stopBtn.addEventListener('click', () => {
+      const b = $('btn-cancel');
+      if (b) b.click();
+    });
+    if (detailsBtn) detailsBtn.addEventListener('click', () => {
+      if (widgetShell) {
+        const detail = [capsuleLastAction, ...stripLines].filter(Boolean).slice(-4).join('\n');
+        showReply(detail || 'No task details yet.');
+      } else {
+        const feed = $('feed');
+        if (feed) feed.scrollIntoView({ behavior: 'smooth', block: 'end' });
+      }
     });
 
     // --- voice: tap to talk, auto-submit on the final transcript ---
@@ -3201,7 +3714,7 @@
         rec = new SR();
         rec.lang = 'en-US'; rec.interimResults = true; rec.continuous = false;
         finalText = '';
-        rec.onstart = () => { listening = true; root.classList.add('listening'); setStatus('Listening…'); kickWave(); };
+        rec.onstart = () => { listening = true; renderCapsuleState({ state: 'listening', action: 'Listening...' }); kickWave(); };
         rec.onresult = (e) => {
           let t = ''; for (let i = 0; i < e.results.length; i++) t += e.results[i][0].transcript;
           finalText = t; if (textIn) textIn.value = t;
@@ -3211,6 +3724,7 @@
           listening = false; root.classList.remove('listening');
           if (finalText.trim()) submitGoal(finalText);
           else setStatus('Didn’t catch that — try again.');
+          if (!finalText.trim()) renderCapsuleState({ state: 'focused', action: '' });
         };
         try { rec.start(); } catch (_) { listening = false; root.classList.remove('listening'); }
       };
@@ -3254,10 +3768,37 @@
     let lastStatus = '', lastLive = '';
     const stripEl = document.getElementById('vcap-strip');
     const stripLines = [];
+    const renderStrip = () => {
+      if (!stripEl) return;
+      stripEl.replaceChildren();
+      stripLines.forEach((line) => {
+        const span = document.createElement('span');
+        span.className = 'vcap-step';
+        span.textContent = line;
+        stripEl.appendChild(span);
+      });
+      stripEl.hidden = stripLines.length === 0;
+    };
+    const deriveCapsuleState = (st, live) => {
+      const approvalOpen = $('approval')?.classList.contains('show') || $('permission')?.classList.contains('show');
+      if (approvalOpen) return 'waiting_approval';
+      if (st === 'running') {
+        if (/planning|thinking|drafting|model|initializing/i.test(live)) return 'planning';
+        return 'acting';
+      }
+      if (st === 'paused') return 'paused';
+      if (st === 'complete' || st === 'done') return 'done';
+      if (st === 'failed' || st === 'error') return 'error';
+      if (st === 'cancelled') return 'blocked';
+      if (capsuleFocused) return 'context_ready';
+      return 'idle';
+    };
     setInterval(() => {
       const st = (typeof currentStatus !== 'undefined' && currentStatus) || 'ready';
       const live = (typeof liveStatusMessage !== 'undefined' && liveStatusMessage) || '';
-      root.classList.toggle('busy', st === 'running');
+      const capState = deriveCapsuleState(st, live);
+      const actionText = live || (st === 'running' ? 'Working on it...' : '');
+      renderCapsuleState({ state: capState, action: actionText });
       kickWave();
       if (st !== lastStatus || live !== lastLive) {
         lastStatus = st; lastLive = live;
@@ -3269,20 +3810,15 @@
           if (st === 'running' && live) {
             stripLines.push(live);
             if (stripLines.length > 3) stripLines.shift();
-            stripEl.innerHTML = stripLines.map(l => {
-              const span = document.createElement('span');
-              span.className = 'vcap-step';
-              span.textContent = l;
-              return span.outerHTML;
-            }).join('');
-            stripEl.hidden = false;
+            renderStrip();
           } else if (st !== 'running') {
-            stripEl.hidden = true;
             stripLines.length = 0;
+            renderStrip();
           }
         }
       }
     }, 700);
+    renderCapsuleState({ state: 'idle', action: '' });
 
     // --- capture agent replies into the capsule (keeps read-aloud intact) ---
     const _speak = speakAgentReply;
@@ -3399,19 +3935,40 @@
     items.forEach((c) => {
       const tile = document.createElement('div');
       tile.className = 'conn-tile' + (c.linked ? ' linked' : '');
-      tile.innerHTML = `
-        <div class="conn-tile-head">
-          <span class="conn-tile-swatch" style="background:${c.tint}">
-            ${ICONS[c.icon] || ICONS.folder}
-          </span>
-          <span class="conn-tile-name">${c.label}</span>
-          <span class="conn-tile-status">${c.linked ? '✓ Linked' : c.auth_kind === 'local' ? 'Built-in' : 'Not linked'}</span>
-        </div>
-        <p class="conn-tile-tip">${c.tip || ''}</p>
-        ${c.auth_kind === 'local' ? '' :
-          `<button class="conn-tile-action" data-id="${c.id}" data-linked="${c.linked}">${c.linked ? 'Unlink' : 'Link'}</button>`}
-      `;
-      const btn = tile.querySelector('button.conn-tile-action');
+      const head = document.createElement('div');
+      head.className = 'conn-tile-head';
+
+      const swatch = document.createElement('span');
+      swatch.className = 'conn-tile-swatch';
+      const tint = String(c.tint || '');
+      swatch.style.background = /^#[0-9a-fA-F]{3,8}$/.test(tint) ? tint : 'var(--line)';
+      swatch.innerHTML = ICONS[c.icon] || ICONS.folder;
+
+      const name = document.createElement('span');
+      name.className = 'conn-tile-name';
+      name.textContent = c.label || c.id || 'Connector';
+
+      const status = document.createElement('span');
+      status.className = 'conn-tile-status';
+      status.textContent = c.linked ? 'Linked' : c.auth_kind === 'local' ? 'Built-in' : 'Not linked';
+
+      head.append(swatch, name, status);
+      tile.appendChild(head);
+
+      const tip = document.createElement('p');
+      tip.className = 'conn-tile-tip';
+      tip.textContent = c.tip || '';
+      tile.appendChild(tip);
+
+      let btn = null;
+      if (c.auth_kind !== 'local') {
+        btn = document.createElement('button');
+        btn.className = 'conn-tile-action';
+        btn.dataset.id = c.id || '';
+        btn.dataset.linked = String(Boolean(c.linked));
+        btn.textContent = c.linked ? 'Unlink' : 'Link';
+        tile.appendChild(btn);
+      }
       if (btn) {
         btn.addEventListener('click', async (e) => {
           const id = btn.dataset.id;

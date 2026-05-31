@@ -8,6 +8,7 @@ import pytest
 import httpx
 
 from app.agent import AgentService
+from app.agent import _overlay_for_action_start
 from app.log_emitter import LogEmitter
 from app.models import Action, ActionType, HierarchicalPlan, SubTask, ToolResult
 from app.providers import PlannerProvider, detect_task_mode, infer_isolated_app_name
@@ -115,6 +116,23 @@ def test_single_app_desktop_goal_auto_selects_isolated_mode():
     assert infer_isolated_app_name("Open Notepad and write hello") == "Notepad"
     assert detect_task_mode("Open Notepad and write hello") == "computer_isolated"
     assert detect_task_mode("Open the Start menu and click the Settings button") == "computer"
+
+
+def test_control_layer_is_declared_on_start_overlays():
+    uia_overlay = _overlay_for_action_start(
+        Action(id="a1", type=ActionType.uia_click, args={"query": "Send", "app": "Discord"})
+    )
+    assert uia_overlay["control_layer"] == "UIA exact"
+
+    pixel_overlay = _overlay_for_action_start(
+        Action(id="a2", type=ActionType.mouse_click, args={"x": 20, "y": 30})
+    )
+    assert pixel_overlay["control_layer"] == "Screenshot fallback"
+
+    electron_overlay = _overlay_for_action_start(
+        Action(id="a3", type=ActionType.electron_unlock, args={"exe": "Discord"})
+    )
+    assert electron_overlay["control_layer"] == "Electron unlock"
 
 
 @pytest.mark.asyncio
@@ -231,6 +249,67 @@ async def test_desktop_action_emits_post_screenshot_and_no_effect_hint(monkeypat
 
     assert any(event == "screenshot" and data["data"] == "after-shot" for event, data in events)
     assert "[no-effect hint] unchanged" in provider.last_observation
+
+
+@pytest.mark.asyncio
+async def test_text_only_desktop_model_skips_automatic_screenshots(monkeypatch, workspace):
+    service = AgentService(workspace, log_emitter=DummyLogEmitter())
+
+    monkeypatch.setattr("app.agent.classify_task_complexity", lambda goal: "atomic")
+    monkeypatch.setattr(service.memory, "search", lambda goal, limit=5: [])
+    monkeypatch.setattr(service.memory, "recall_sessions", lambda goal, limit=5: [])
+    monkeypatch.setattr("app.agent.is_vision_model", lambda model: False)
+
+    capture_calls = {"count": 0}
+
+    def fake_capture(sw, sh):
+        capture_calls["count"] += 1
+        return "unexpected-shot"
+
+    monkeypatch.setattr("app.agent._capture_screenshot_b64", fake_capture)
+
+    class FakeProvider:
+        total_tokens = 0
+
+        def __init__(self):
+            self.turn = 0
+            self.screenshots_seen = []
+            self._total_input_tokens = 0
+            self._total_output_tokens = 0
+
+        async def stream_chat_with_tools(self, system, messages, tools, screenshot_b64=None):
+            self.turn += 1
+            self.screenshots_seen.append(screenshot_b64)
+            if self.turn == 1:
+                yield {
+                    "type": "tool_call",
+                    "id": "call-1",
+                    "name": "mouse_click",
+                    "args": {"x": 50, "y": 60},
+                    "thought": "click it",
+                }
+                return
+            yield {"type": "tool_call", "id": "call-2", "name": "finish", "args": {"reason": "done"}, "thought": "done"}
+
+    provider = FakeProvider()
+    monkeypatch.setattr("app.agent.PlannerProvider", lambda model=None: provider)
+
+    async def fake_run_action(action, sw=1280, sh=800, on_stream=None):
+        return ToolResult(ok=True, output="ok", base64_image=None, data=None)
+
+    monkeypatch.setattr(service.tools, "run_action", fake_run_action)
+
+    async def noop_emit(*args, **kwargs):
+        return None
+
+    monkeypatch.setattr(service, "_emit", noop_emit)
+    monkeypatch.setattr(service, "_emit_reasoning", noop_emit)
+    monkeypatch.setattr(service, "_finalize", lambda *args, **kwargs: None)
+
+    await service.run_task("task-desktop-text-only", "Click and verify", mode="computer", model="tier:uia")
+
+    assert capture_calls["count"] == 0
+    assert provider.screenshots_seen == [None, None]
 
 
 @pytest.mark.asyncio

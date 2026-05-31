@@ -2,6 +2,7 @@ from __future__ import annotations
 from dotenv import load_dotenv
 load_dotenv(dotenv_path=".env", override=True)
 import asyncio
+import importlib.util
 import json
 import os
 import re
@@ -16,6 +17,7 @@ from fastapi.security import HTTPAuthorizationCredentials, HTTPBearer
 from .agent import AgentService
 from .log_emitter import log_emitter
 from .models import AgentContext, TaskRecord
+from .providers import detect_task_mode, infer_isolated_app_name
 from .premium_features import (
     append_feedback,
     create_git_checkpoint,
@@ -185,6 +187,7 @@ async def push_capsule_widget(request: Request):
 @app.post("/api/capsule/organize")
 async def organize_capsule_files(request: Request):
     """Organize files in a folder into category subfolders. REAL file moves."""
+    await verify_token(request, None)
     from .clutter_scanner import organize_files
     body = await request.json()
     folder_path = body.get("folder_path", "")
@@ -196,19 +199,34 @@ async def organize_capsule_files(request: Request):
 
 @app.post("/api/capsule/delete")
 async def delete_capsule_files(request: Request):
-    """Delete specific files. REAL file deletion."""
+    """Move selected files to AI Computer's local trash."""
+    await verify_token(request, None)
     from .clutter_scanner import delete_files
     body = await request.json()
     file_paths = body.get("file_paths", [])
     if not file_paths:
         raise HTTPException(400, "No file_paths provided")
-    result = await asyncio.to_thread(delete_files, file_paths)
+    result = await asyncio.to_thread(
+        delete_files, file_paths, permanent=bool(body.get("permanent", False)))
     return result
+
+
+@app.post("/api/capsule/restore-delete")
+async def restore_capsule_files(request: Request):
+    """Restore files that were moved to AI Computer's local trash."""
+    await verify_token(request, None)
+    from .clutter_scanner import restore_trashed
+    body = await request.json()
+    items = body.get("items", [])
+    if not items:
+        raise HTTPException(400, "No items provided")
+    return await asyncio.to_thread(restore_trashed, items)
 
 
 @app.post("/api/capsule/scan")
 async def scan_capsule_folder(request: Request):
     """Scan a folder and return real file listing."""
+    await verify_token(request, None)
     from .clutter_scanner import scan_folder
     body = await request.json()
     folder_path = body.get("folder_path", None)
@@ -245,6 +263,14 @@ def _is_authorized(request: Request, credentials: Optional[HTTPAuthorizationCred
 
 
 async def verify_token(request: Request, credentials: HTTPAuthorizationCredentials = Security(bearer)):
+    if credentials is None:
+        auth_header = request.headers.get("authorization", "")
+        scheme, _, token = auth_header.partition(" ")
+        if scheme.lower() == "bearer" and token:
+            credentials = HTTPAuthorizationCredentials(
+                scheme=scheme,
+                credentials=token,
+            )
     if not _is_authorized(request, credentials):
         raise HTTPException(status_code=401, detail="Unauthorized")
 
@@ -621,6 +647,14 @@ class TaskIn(BaseModel):
     auto_commit: bool = False
     autonomy_level: Literal["careful", "balanced", "fast"] = "balanced"
     thinking_budget: Literal["off", "standard", "extended"] = "off"
+    readiness_override: bool = False
+
+
+class TaskPreflightIn(BaseModel):
+    goal: str = Field(..., min_length=1, max_length=2000)
+    model: Optional[str] = None
+    mode: Literal["auto", "coding", "computer", "computer_use", "computer_isolated", "explain"] = "auto"
+    isolated_app: Optional[str] = None
 
 
 class AutomationIn(BaseModel):
@@ -708,6 +742,287 @@ _HEALTHZ_PROVIDERS = {
 }
 _healthz_cache: dict = {"ts": 0.0, "result": None}
 
+
+def _check_import(module_name: str) -> bool:
+    try:
+        return importlib.util.find_spec(module_name) is not None
+    except (ImportError, ValueError):
+        return False
+
+
+def _readiness_item(
+    key: str,
+    label: str,
+    status: str,
+    detail: str,
+    *,
+    category: str = "core",
+    fix: str = "",
+) -> Dict[str, str]:
+    return {
+        "key": key,
+        "label": label,
+        "status": status,
+        "detail": detail,
+        "category": category,
+        "fix": fix,
+    }
+
+
+def _build_readiness_payload() -> Dict[str, Any]:
+    provider_have = {name: bool(os.environ.get(env)) for name, env in _HEALTHZ_PROVIDERS.items()}
+    provider_have["ollama"] = bool(os.environ.get("OLLAMA_DEFAULT_MODEL"))
+    any_provider = any(provider_have.values())
+    is_windows = os.name == "nt"
+    uia_ready = is_windows and _check_import("uiautomation") and _check_import("comtypes")
+    screenshot_ready = _check_import("mss") and _check_import("PIL")
+    pyautogui_ready = _check_import("pyautogui")
+    playwright_ready = _check_import("playwright")
+    pyside_ready = _check_import("PySide6")
+    log_ready = False
+    try:
+        log_emitter.log_dir.mkdir(parents=True, exist_ok=True)
+        probe = log_emitter.log_dir / ".readiness_probe"
+        probe.write_text("ok", encoding="utf-8")
+        probe.unlink(missing_ok=True)
+        log_ready = True
+    except Exception:
+        log_ready = False
+    try:
+        memory_status = service.memory.health()
+        memory_ready = True
+        memory_detail = f"{memory_status.get('items', memory_status.get('total_items', 0))} memory items"
+    except Exception as exc:
+        memory_ready = False
+        memory_detail = str(exc)[:160]
+    try:
+        from .mcp_manager import mcp_manager
+        mcp_ready = bool(mcp_manager._is_ready)
+        mcp_detail = f"{len(mcp_manager.servers)} server(s)"
+    except Exception as exc:
+        mcp_ready = False
+        mcp_detail = str(exc)[:160]
+
+    checks = [
+        _readiness_item(
+            "provider_keys",
+            "Model providers",
+            "ready" if any_provider else "blocked",
+            "At least one provider key is configured." if any_provider else "No model provider key is configured.",
+            category="core",
+            fix="Add an API key in Settings or .env.",
+        ),
+        _readiness_item(
+            "uia",
+            "UIA exact control",
+            "ready" if uia_ready else ("blocked" if is_windows else "unavailable"),
+            "Windows UI Automation dependencies are available." if uia_ready else "UIA requires Windows plus uiautomation/comtypes.",
+            category="desktop",
+            fix="Install requirements-desktop.txt on Windows.",
+        ),
+        _readiness_item(
+            "screenshot",
+            "Screenshot fallback",
+            "ready" if screenshot_ready else "blocked",
+            "Screen capture dependencies are available." if screenshot_ready else "mss/Pillow capture dependencies are missing.",
+            category="desktop",
+            fix="Install requirements.txt.",
+        ),
+        _readiness_item(
+            "input",
+            "Desktop input",
+            "ready" if pyautogui_ready else "blocked",
+            "Mouse/keyboard fallback is available." if pyautogui_ready else "pyautogui is missing.",
+            category="desktop",
+            fix="Install requirements.txt.",
+        ),
+        _readiness_item(
+            "electron_unlock",
+            "Electron unlock",
+            "ready" if uia_ready else "blocked",
+            "Electron apps can be relaunched with renderer accessibility." if uia_ready else "Needs the UIA exact-control stack first.",
+            category="desktop",
+            fix="Install UIA dependencies.",
+        ),
+        _readiness_item(
+            "browser",
+            "Browser automation",
+            "ready" if playwright_ready else "blocked",
+            "Playwright Python package is available." if playwright_ready else "Playwright package is missing.",
+            category="browser",
+            fix="Install requirements.txt and Playwright browsers.",
+        ),
+        _readiness_item(
+            "native_capsule",
+            "Native capsule",
+            "ready" if pyside_ready else "blocked",
+            "PySide6 native capsule runtime is available." if pyside_ready else "PySide6 is missing.",
+            category="ui",
+            fix="Install requirements-desktop.txt.",
+        ),
+        _readiness_item(
+            "logs",
+            "Flight recorder",
+            "ready" if log_ready else "blocked",
+            "Task logs are writable." if log_ready else "Task log directory is not writable.",
+            category="trust",
+            fix="Check workspace/logs permissions.",
+        ),
+        _readiness_item(
+            "memory",
+            "Memory store",
+            "ready" if memory_ready else "warning",
+            memory_detail,
+            category="trust",
+        ),
+        _readiness_item(
+            "mcp",
+            "MCP tools",
+            "ready" if mcp_ready else "warning",
+            mcp_detail if mcp_ready else f"MCP is initializing or unavailable: {mcp_detail}",
+            category="tools",
+        ),
+        _readiness_item(
+            "privacy",
+            "Telemetry promise",
+            "ready",
+            "No analytics SDKs or usage telemetry are enabled.",
+            category="trust",
+        ),
+    ]
+    weights = {"ready": 1.0, "warning": 0.5, "blocked": 0.0, "unavailable": 0.0}
+    score = round(sum(weights.get(item["status"], 0.0) for item in checks) / max(len(checks), 1) * 100)
+    blocked = sum(1 for item in checks if item["status"] == "blocked")
+    warnings = sum(1 for item in checks if item["status"] == "warning")
+    overall = "ready" if blocked == 0 and warnings <= 1 else "warning" if blocked <= 1 else "blocked"
+    return {
+        "overall": overall,
+        "score": score,
+        "checks": checks,
+        "providers": provider_have,
+        "summary": {
+            "ready": sum(1 for item in checks if item["status"] == "ready"),
+            "warning": warnings,
+            "blocked": blocked,
+            "unavailable": sum(1 for item in checks if item["status"] == "unavailable"),
+        },
+    }
+
+
+def _readiness_checks_by_key(readiness: Dict[str, Any]) -> Dict[str, Dict[str, Any]]:
+    checks = readiness.get("checks") if isinstance(readiness, dict) else []
+    return {
+        str(item.get("key")): item
+        for item in checks
+        if isinstance(item, dict) and item.get("key")
+    }
+
+
+def _preflight_issue(check: Optional[Dict[str, Any]], severity: str, detail: str = "") -> Dict[str, str]:
+    check = check or {}
+    return {
+        "key": str(check.get("key") or severity),
+        "label": str(check.get("label") or "Capability"),
+        "status": str(check.get("status") or severity),
+        "severity": severity,
+        "detail": str(check.get("detail") or check.get("fix") or detail),
+        "category": str(check.get("category") or "core"),
+        "fix": str(check.get("fix") or ""),
+    }
+
+
+def _build_task_preflight_payload(
+    *,
+    goal: str,
+    mode: str = "auto",
+    model: Optional[str] = None,
+    isolated_app: Optional[str] = None,
+    readiness: Optional[Dict[str, Any]] = None,
+) -> Dict[str, Any]:
+    readiness = readiness or _build_readiness_payload()
+    checks = _readiness_checks_by_key(readiness)
+    requested_mode = mode or "auto"
+    effective_mode = detect_task_mode(goal, requested_mode if requested_mode != "auto" else None)
+    effective_isolated_app = isolated_app
+    if effective_mode == "computer_isolated" and not effective_isolated_app:
+        effective_isolated_app = infer_isolated_app_name(goal)
+    issues: List[Dict[str, str]] = []
+
+    if model:
+        required_key = _required_key_for_model(model)
+        if required_key and not os.environ.get(required_key):
+            provider_check = checks.get("provider_keys")
+            issues.append(_preflight_issue(
+                provider_check,
+                "blocked",
+                f"Model '{model}' requires {required_key} before this task can run.",
+            ))
+    else:
+        provider_check = checks.get("provider_keys")
+        if provider_check and provider_check.get("status") == "blocked":
+            issues.append(_preflight_issue(
+                provider_check,
+                "blocked",
+                "Add a model provider key before starting tasks.",
+            ))
+
+    if effective_mode == "computer_use":
+        browser = checks.get("browser")
+        if browser and browser.get("status") == "blocked":
+            issues.append(_preflight_issue(browser, "blocked"))
+
+    if effective_mode in {"computer", "computer_isolated"}:
+        uia = checks.get("uia")
+        screenshot = checks.get("screenshot")
+        input_check = checks.get("input")
+        electron = checks.get("electron_unlock")
+        uia_ready = bool(uia and uia.get("status") == "ready")
+        screenshot_ready = bool(screenshot and screenshot.get("status") == "ready")
+        if not uia_ready and not screenshot_ready:
+            issues.append(_preflight_issue(
+                uia or screenshot,
+                "blocked",
+                "Neither UIA exact control nor screenshot fallback is ready.",
+            ))
+        else:
+            if not uia_ready:
+                issues.append(_preflight_issue(
+                    uia,
+                    "warning",
+                    "Desktop control will fall back to screenshots and coordinates.",
+                ))
+            if not screenshot_ready:
+                issues.append(_preflight_issue(
+                    screenshot,
+                    "warning",
+                    "Vision verification fallback is unavailable.",
+                ))
+        if input_check and input_check.get("status") == "blocked":
+            issues.append(_preflight_issue(input_check, "warning"))
+        if electron and electron.get("status") == "blocked" and not uia_ready:
+            issues.append(_preflight_issue(electron, "warning"))
+
+    logs = checks.get("logs")
+    if logs and logs.get("status") == "blocked":
+        issues.append(_preflight_issue(logs, "warning"))
+
+    blocked = any(item.get("severity") == "blocked" for item in issues)
+    return {
+        "ok": not blocked and not issues,
+        "blocked": blocked,
+        "can_override": bool(issues) and not blocked,
+        "issues": issues,
+        "requested_mode": requested_mode,
+        "effective_mode": effective_mode,
+        "isolated_app": effective_isolated_app,
+        "model": model,
+        "readiness": {
+            "overall": readiness.get("overall"),
+            "score": readiness.get("score"),
+            "summary": readiness.get("summary"),
+        },
+    }
+
 @app.get("/healthz")
 async def healthz():
     """Provider key status check, cached 30s."""
@@ -723,6 +1038,21 @@ async def healthz():
     _healthz_cache["ts"] = time.time()
     _healthz_cache["result"] = result
     return result
+
+
+@app.get("/api/readiness", dependencies=[Depends(verify_token)])
+async def readiness():
+    return _build_readiness_payload()
+
+
+@app.post("/api/tasks/preflight", dependencies=[Depends(verify_token)])
+async def task_preflight(body: TaskPreflightIn):
+    return _build_task_preflight_payload(
+        goal=body.goal,
+        mode=body.mode,
+        model=body.model,
+        isolated_app=body.isolated_app,
+    )
 
 
 def _upsert_env_var(name: str, value: str) -> None:
@@ -778,11 +1108,11 @@ async def setup_status():
     return {"configured": any(have.values()), "providers": have}
 
 
-@app.get("/api/skills")
+@app.get("/api/skills", dependencies=[Depends(verify_token)])
 async def get_skills():
     return {"skills": skill_manager.get_all_skills()}
 
-@app.get("/api/coding-backends")
+@app.get("/api/coding-backends", dependencies=[Depends(verify_token)])
 async def get_coding_backends():
     """Declared coding-delegation backends + live availability detection.
     Powers the Settings connector list. Detection shells out to each CLI's
@@ -790,7 +1120,7 @@ async def get_coding_backends():
     from .coding_backends import registry
     return await asyncio.to_thread(registry.detect_all)
 
-@app.get("/api/mcp")
+@app.get("/api/mcp", dependencies=[Depends(verify_token)])
 async def get_mcp():
     from .mcp_manager import mcp_manager
     if not mcp_manager._is_ready:
@@ -803,13 +1133,13 @@ async def get_mcp():
         })
     return {"servers": servers}
 
-@app.get("/api/mcp/health")
+@app.get("/api/mcp/health", dependencies=[Depends(verify_token)])
 async def mcp_health():
     from .mcp_manager import mcp_manager
     return {"servers": mcp_manager.health(), "ready": mcp_manager._is_ready}
 
 
-@app.get("/api/memory/health")
+@app.get("/api/memory/health", dependencies=[Depends(verify_token)])
 async def memory_health():
     """Counts by kind, short-term session count, last consolidation timestamp."""
     return service.memory.health()
@@ -934,7 +1264,7 @@ def _required_key_for_model(model: str) -> Optional[str]:
     return "OPENROUTER_API_KEY"  # default fallback
 
 # ── Connectors API (additive — used by the dashboard sidebar)
-@app.get("/api/connectors")
+@app.get("/api/connectors", dependencies=[Depends(verify_token)])
 async def get_connectors():
     from .connectors import list_with_state
     return {"connectors": list_with_state()}
@@ -945,7 +1275,7 @@ class _LinkBody(_BM_Conn):
     notes: str = ""
 
 
-@app.post("/api/connectors/{connector_id}/link")
+@app.post("/api/connectors/{connector_id}/link", dependencies=[Depends(verify_token)])
 async def link_connector(connector_id: str, body: _LinkBody | None = None):
     from .connectors import link
     notes = body.notes if body else ""
@@ -955,7 +1285,7 @@ async def link_connector(connector_id: str, body: _LinkBody | None = None):
     return c
 
 
-@app.post("/api/connectors/{connector_id}/unlink")
+@app.post("/api/connectors/{connector_id}/unlink", dependencies=[Depends(verify_token)])
 async def unlink_connector(connector_id: str):
     from .connectors import unlink, get
     if get(connector_id) is None:
@@ -964,14 +1294,14 @@ async def unlink_connector(connector_id: str):
 
 
 # ── Desktop-features API (snap layouts, telemetry promise, autostart) ──
-@app.get("/api/desktop/telemetry")
+@app.get("/api/desktop/telemetry", dependencies=[Depends(verify_token)])
 async def telemetry_promise():
     """Single source of truth for the privacy panel — always telemetry-off."""
     from .widget.desktop_features import TELEMETRY_PROMISE
     return TELEMETRY_PROMISE
 
 
-@app.get("/api/desktop/layouts")
+@app.get("/api/desktop/layouts", dependencies=[Depends(verify_token)])
 async def list_snap_layouts():
     from .widget.desktop_features import LAYOUTS
     return {"layouts": [
@@ -980,13 +1310,13 @@ async def list_snap_layouts():
     ]}
 
 
-@app.post("/api/desktop/layouts/{layout_id}/apply")
+@app.post("/api/desktop/layouts/{layout_id}/apply", dependencies=[Depends(verify_token)])
 async def apply_snap_layout(layout_id: str):
     from .widget.desktop_features import apply_layout
     return apply_layout(layout_id)
 
 
-@app.get("/api/desktop/autostart")
+@app.get("/api/desktop/autostart", dependencies=[Depends(verify_token)])
 async def get_autostart():
     from .widget.desktop_features import is_autostart_enabled
     return {"enabled": is_autostart_enabled()}
@@ -996,7 +1326,7 @@ class _AutostartBody(BaseModel):
     enabled: bool
 
 
-@app.post("/api/desktop/autostart")
+@app.post("/api/desktop/autostart", dependencies=[Depends(verify_token)])
 async def set_autostart_endpoint(body: _AutostartBody):
     from .widget.desktop_features import set_autostart, is_autostart_enabled
     set_autostart(body.enabled)
@@ -1004,13 +1334,13 @@ async def set_autostart_endpoint(body: _AutostartBody):
 
 
 # ── UIA navigation
-@app.get("/api/desktop/uia/find")
+@app.get("/api/desktop/uia/find", dependencies=[Depends(verify_token)])
 async def uia_find(query: str, app: str = ""):
     from .widget.desktop_features import find_ui_element
     return find_ui_element(query, app)
 
 
-@app.get("/api/desktop/uia/candidates")
+@app.get("/api/desktop/uia/candidates", dependencies=[Depends(verify_token)])
 async def uia_candidates(query: str, app: str = "", limit: int = 5):
     """Return top-N ranked candidates for the query."""
     from .widget.desktop_features import find_ui_elements
@@ -1023,14 +1353,14 @@ class _UiaClickBody(BaseModel):
     button: str = "left"
 
 
-@app.post("/api/desktop/uia/click")
+@app.post("/api/desktop/uia/click", dependencies=[Depends(verify_token)])
 async def uia_click(body: _UiaClickBody):
     """Find a control by name + physically click it via pyautogui."""
     from .widget.desktop_features import click_ui_element
     return click_ui_element(body.query, body.app, body.button)
 
 
-@app.get("/api/desktop/uia/smart-find")
+@app.get("/api/desktop/uia/smart-find", dependencies=[Depends(verify_token)])
 async def uia_smart_find(query: str, app: str = ""):
     """UIA find that, for Electron apps, also returns a relaunch hint so
     the agent can unlock their accessibility tree."""
@@ -1044,7 +1374,7 @@ class _ElectronRelaunchBody(BaseModel):
     cdp: bool = False  # also tack on --remote-debugging-port=9222
 
 
-@app.post("/api/desktop/electron/relaunch")
+@app.post("/api/desktop/electron/relaunch", dependencies=[Depends(verify_token)])
 async def electron_relaunch(body: _ElectronRelaunchBody):
     """Relaunch an Electron app with --force-renderer-accessibility so its
     DOM exposes as a real UIA tree. Optional CDP flag for power users."""
@@ -1052,7 +1382,7 @@ async def electron_relaunch(body: _ElectronRelaunchBody):
     return relaunch_with_accessibility(body.exe, body.args, body.cdp)
 
 
-@app.get("/api/desktop/electron/check")
+@app.get("/api/desktop/electron/check", dependencies=[Depends(verify_token)])
 async def electron_check(exe: str):
     """Heuristic: is this exe path an Electron app?"""
     from .widget.desktop_features import is_electron_app
@@ -1060,20 +1390,20 @@ async def electron_check(exe: str):
 
 
 # ── Clipboard history
-@app.get("/api/desktop/clipboard/history")
+@app.get("/api/desktop/clipboard/history", dependencies=[Depends(verify_token)])
 async def clip_history(limit: int = 20):
     from .widget.desktop_features import list_clipboard_history
     return {"items": list_clipboard_history(limit)}
 
 
-@app.get("/api/desktop/clipboard/search")
+@app.get("/api/desktop/clipboard/search", dependencies=[Depends(verify_token)])
 async def clip_search(q: str, limit: int = 10):
     from .widget.desktop_features import search_clipboard_history
     return {"items": search_clipboard_history(q, limit)}
 
 
 # ── Scheduled recipes
-@app.get("/api/desktop/scheduled")
+@app.get("/api/desktop/scheduled", dependencies=[Depends(verify_token)])
 async def list_sched():
     from .widget.desktop_features import list_scheduled
     return {"items": list_scheduled()}
@@ -1086,20 +1416,20 @@ class _SchedBody(BaseModel):
     mode: str = "auto"
 
 
-@app.post("/api/desktop/scheduled")
+@app.post("/api/desktop/scheduled", dependencies=[Depends(verify_token)])
 async def add_sched(body: _SchedBody):
     from .widget.desktop_features import add_scheduled
     return add_scheduled(body.name, body.when, body.goal, body.mode)
 
 
-@app.delete("/api/desktop/scheduled/{sid}")
+@app.delete("/api/desktop/scheduled/{sid}", dependencies=[Depends(verify_token)])
 async def del_sched(sid: str):
     from .widget.desktop_features import remove_scheduled
     return {"ok": remove_scheduled(sid)}
 
 
 # ── Form profiles + autofill
-@app.get("/api/desktop/profiles")
+@app.get("/api/desktop/profiles", dependencies=[Depends(verify_token)])
 async def get_profiles():
     from .widget.desktop_features import list_profiles
     return list_profiles()
@@ -1110,27 +1440,27 @@ class _ProfileBody(BaseModel):
     fields: dict
 
 
-@app.post("/api/desktop/profiles")
+@app.post("/api/desktop/profiles", dependencies=[Depends(verify_token)])
 async def put_profile(body: _ProfileBody):
     from .widget.desktop_features import save_profile
     return save_profile(body.name, body.fields)
 
 
-@app.delete("/api/desktop/profiles/{name}")
+@app.delete("/api/desktop/profiles/{name}", dependencies=[Depends(verify_token)])
 async def del_profile(name: str):
     from .widget.desktop_features import delete_profile
     delete_profile(name)
     return {"ok": True}
 
 
-@app.post("/api/desktop/profiles/{name}/autofill")
+@app.post("/api/desktop/profiles/{name}/autofill", dependencies=[Depends(verify_token)])
 async def do_autofill(name: str):
     from .widget.desktop_features import autofill_active_form
     return autofill_active_form(name)
 
 
 # ── Screen-region watch
-@app.get("/api/desktop/watches")
+@app.get("/api/desktop/watches", dependencies=[Depends(verify_token)])
 async def get_watches():
     from .widget.desktop_features import list_watches
     return {"items": list_watches()}
@@ -1146,14 +1476,14 @@ class _WatchBody(BaseModel):
     prompt: str = ""
 
 
-@app.post("/api/desktop/watches")
+@app.post("/api/desktop/watches", dependencies=[Depends(verify_token)])
 async def add_watch_ep(body: _WatchBody):
     from .widget.desktop_features import add_watch
     return add_watch(body.name, body.x, body.y, body.w, body.h,
                      body.every_sec, body.prompt)
 
 
-@app.delete("/api/desktop/watches/{wid}")
+@app.delete("/api/desktop/watches/{wid}", dependencies=[Depends(verify_token)])
 async def del_watch(wid: str):
     from .widget.desktop_features import remove_watch
     return {"ok": remove_watch(wid)}
@@ -1165,7 +1495,7 @@ class _SendBody(BaseModel):
     text: str
 
 
-@app.post("/api/desktop/send-to")
+@app.post("/api/desktop/send-to", dependencies=[Depends(verify_token)])
 async def send_to_ep(body: _SendBody):
     from .widget.desktop_features import send_to
     return send_to(body.target, body.text)
@@ -1179,7 +1509,7 @@ class _OcrBody(BaseModel):
     h: int
 
 
-@app.post("/api/desktop/ocr")
+@app.post("/api/desktop/ocr", dependencies=[Depends(verify_token)])
 async def ocr_ep(body: _OcrBody):
     from .widget.desktop_features import ocr_region
     return ocr_region(body.x, body.y, body.w, body.h)
@@ -1191,20 +1521,20 @@ class _RagIndexBody(BaseModel):
     name: str = "default"
 
 
-@app.post("/api/desktop/rag/index")
+@app.post("/api/desktop/rag/index", dependencies=[Depends(verify_token)])
 async def rag_index_ep(body: _RagIndexBody):
     from .widget.desktop_features import rag_index_folder
     return rag_index_folder(body.folder, body.name)
 
 
-@app.get("/api/desktop/rag/query")
+@app.get("/api/desktop/rag/query", dependencies=[Depends(verify_token)])
 async def rag_query_ep(name: str, q: str, top_k: int = 5):
     from .widget.desktop_features import rag_query
     return rag_query(name, q, top_k)
 
 
 # ── Per-app trust policies
-@app.get("/api/desktop/trust")
+@app.get("/api/desktop/trust", dependencies=[Depends(verify_token)])
 async def list_trust_ep():
     from .widget.desktop_features import list_trust
     return list_trust()
@@ -1215,14 +1545,14 @@ class _TrustBody(BaseModel):
     level: str
 
 
-@app.post("/api/desktop/trust")
+@app.post("/api/desktop/trust", dependencies=[Depends(verify_token)])
 async def set_trust_ep(body: _TrustBody):
     from .widget.desktop_features import set_trust
     return set_trust(body.exe, body.level)
 
 
 # ── Undo stack
-@app.post("/api/desktop/undo")
+@app.post("/api/desktop/undo", dependencies=[Depends(verify_token)])
 async def undo_ep():
     from .widget.desktop_features import pop_and_execute_undo
     return pop_and_execute_undo()
@@ -1319,10 +1649,11 @@ async def create_task(body: TaskIn):
     if not body.model:
         if os.environ.get("OPENROUTER_API_KEY"):
             _mode = body.mode or "auto"
+            _detected_mode = detect_task_mode(body.goal, _mode if _mode != "auto" else None)
             # Qwen3-Coder is purpose-built for code; use it for coding mode
-            if _mode == "coding":
+            if _detected_mode == "coding":
                 selected_model = "openrouter/qwen/qwen3-coder:free"
-            elif _mode in ("computer", "computer_isolated"):
+            elif _detected_mode in ("computer", "computer_isolated"):
                 # Desktop control via UI Automation is text-only (no vision):
                 # use the fast, accurate tool-calling UIA tier. (When an image
                 # is attached the widget sends an explicit vision model, which
@@ -1360,6 +1691,31 @@ async def create_task(body: TaskIn):
                 status_code=400,
                 detail=f"Model '{selected_model}' requires {required_key} to be set in your .env file."
             )
+
+    preflight = _build_task_preflight_payload(
+        goal=body.goal,
+        mode=body.mode or "auto",
+        model=selected_model,
+        isolated_app=body.isolated_app,
+    )
+    if preflight["blocked"]:
+        raise HTTPException(
+            status_code=409,
+            detail={
+                "code": "readiness_preflight_blocked",
+                "message": "This task cannot start until blocked readiness checks are fixed.",
+                "preflight": preflight,
+            },
+        )
+    if preflight.get("can_override") and preflight.get("issues") and not body.readiness_override:
+        raise HTTPException(
+            status_code=409,
+            detail={
+                "code": "readiness_preflight_warning",
+                "message": "This task has degraded readiness checks. Re-submit with readiness_override=true to run anyway.",
+                "preflight": preflight,
+            },
+        )
 
     selected_project_folder = _resolve_project_folder(body.project_folder)
     effective_workspace = selected_project_folder or HOME_DIR
@@ -1416,6 +1772,9 @@ async def create_task(body: TaskIn):
                 "goal": body.goal,
                 "model": selected_model,
                 "mode": record.mode,
+                "effective_mode": preflight.get("effective_mode"),
+                "isolated_app": preflight.get("isolated_app"),
+                "preflight": preflight,
                 "created_at": record.created_at,
                 "project_folder": record.context.project_folder,
             })
@@ -1424,7 +1783,12 @@ async def create_task(body: TaskIn):
                 "position": len(_queued_task_specs),
                 "max_active_tasks": _MAX_ACTIVE_TASKS,
             })
-            return {"task_id": body.task_id, "status": "queued", "position": len(_queued_task_specs)}
+            return {
+                "task_id": body.task_id,
+                "status": "queued",
+                "position": len(_queued_task_specs),
+                "preflight": preflight,
+            }
 
         print(f"[API] Initializing task {body.task_id}...", flush=True)
         record = _start_task_from_spec(spec)
@@ -1433,6 +1797,9 @@ async def create_task(body: TaskIn):
             "goal": body.goal,
             "model": selected_model,
             "mode": record.mode,
+            "effective_mode": preflight.get("effective_mode"),
+            "isolated_app": preflight.get("isolated_app"),
+            "preflight": preflight,
             "created_at": record.created_at,
             "project_folder": record.context.project_folder,
             "plan_first": body.plan_first,
@@ -1441,7 +1808,7 @@ async def create_task(body: TaskIn):
             "autonomy_level": body.autonomy_level,
         })
         print(f"[API] Task {body.task_id} initialized successfully", flush=True)
-        return {"task_id": body.task_id, "status": "running"}
+        return {"task_id": body.task_id, "status": "running", "preflight": preflight}
     except HTTPException:
         raise
     except Exception as e:
@@ -1530,6 +1897,113 @@ async def get_task_log(task_id: str):
     if not log_path.exists():
         return {"log": []}  # task exists without log (old task or pre-emit); return empty replay
     return {"log": log_emitter.read_log(task_id)}
+
+
+def _control_trace_rect(rect: Any) -> Optional[Dict[str, int]]:
+    if not isinstance(rect, dict):
+        return None
+    try:
+        left = int(rect.get("left", 0))
+        top = int(rect.get("top", 0))
+        width = int(rect.get("width", 0))
+        height = int(rect.get("height", 0))
+    except (TypeError, ValueError):
+        return None
+    if width <= 0 or height <= 0:
+        return None
+    return {"left": left, "top": top, "width": width, "height": height}
+
+
+def _control_trace_point(point: Any) -> Optional[Dict[str, int]]:
+    if not isinstance(point, dict):
+        return None
+    try:
+        return {"x": int(point.get("x", 0)), "y": int(point.get("y", 0))}
+    except (TypeError, ValueError):
+        return None
+
+
+def _build_control_trace_report(task_id: str, events: List[Dict[str, Any]]) -> Dict[str, Any]:
+    entries: List[Dict[str, Any]] = []
+    layers: Dict[str, int] = {}
+    tools: Dict[str, int] = {}
+    fallbacks = 0
+    misses = 0
+    failures = 0
+    successes = 0
+
+    for event in events:
+        if event.get("type") not in {"intent", "action_start", "action_result"}:
+            continue
+        overlay = event.get("overlay")
+        if not isinstance(overlay, dict):
+            continue
+        layer = str(overlay.get("control_layer") or "").strip()
+        tool = str(overlay.get("tool") or event.get("action_type") or "").strip()
+        reason = str(overlay.get("control_reason") or overlay.get("fallback_reason") or "").strip()
+        fallback_reason = str(overlay.get("fallback_reason") or "").strip()
+        if layer:
+            layers[layer] = layers.get(layer, 0) + 1
+        if tool:
+            tools[tool] = tools.get(tool, 0) + 1
+        if fallback_reason or "fallback" in layer.lower():
+            fallbacks += 1
+        if "miss" in layer.lower() or "no_match" in fallback_reason or "timeout" in fallback_reason:
+            misses += 1
+        if event.get("type") == "action_result":
+            if event.get("ok") is False:
+                failures += 1
+            elif event.get("ok") is True:
+                successes += 1
+
+        entries.append({
+            "seq": event.get("seq"),
+            "ts": event.get("ts"),
+            "event_type": event.get("type"),
+            "action_id": event.get("action_id"),
+            "action_type": event.get("action_type") or tool,
+            "ok": event.get("ok"),
+            "phase": overlay.get("phase") or ("result" if event.get("type") == "action_result" else "start"),
+            "layer": layer,
+            "reason": reason,
+            "fallback_reason": fallback_reason,
+            "target": overlay.get("target") or overlay.get("label") or "",
+            "label": overlay.get("label") or "",
+            "tool": tool,
+            "kind": overlay.get("kind") or "",
+            "rect": _control_trace_rect(overlay.get("rect")),
+            "app_rect": _control_trace_rect(overlay.get("app_rect")),
+            "point": _control_trace_point(overlay.get("point")),
+        })
+
+    primary_layer = ""
+    if layers:
+        primary_layer = sorted(layers.items(), key=lambda item: (-item[1], item[0]))[0][0]
+    summary = {
+        "total_events": len(events),
+        "trace_events": len(entries),
+        "primary_layer": primary_layer,
+        "layers": layers,
+        "tools": tools,
+        "fallbacks": fallbacks,
+        "misses": misses,
+        "successes": successes,
+        "failures": failures,
+        "used_uia": any(layer.lower().startswith("uia") for layer in layers),
+        "used_screenshot_fallback": any("screenshot" in layer.lower() or "fallback" in layer.lower() for layer in layers),
+        "used_electron_unlock": any("electron unlock" in layer.lower() for layer in layers),
+    }
+    return {"task_id": task_id, "summary": summary, "entries": entries}
+
+
+@app.get("/api/tasks/{task_id}/control-trace", dependencies=[Depends(verify_token)])
+async def get_task_control_trace(task_id: str):
+    _validate_task_id(task_id)
+    record = _get_task_record(task_id)
+    log_path = log_emitter.log_path(task_id)
+    if not record and not log_path.exists():
+        raise HTTPException(status_code=404, detail="Task not found")
+    return _build_control_trace_report(task_id, log_emitter.read_log(task_id))
 
 
 @app.get("/api/tasks/{task_id}/log/download", dependencies=[Depends(verify_token)])
