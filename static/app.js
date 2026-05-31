@@ -236,6 +236,9 @@
   let liveStatusCard = null;
   let liveStatusMessage = '';
   let capsuleControlLayer = '';
+  let currentControlLayer = '';
+  let currentControlReason = '';
+  let currentControlTarget = '';
   let planSubtasks = [];
   let currentSubtaskIdx = 0;
   let subtaskEls = {};
@@ -244,6 +247,7 @@
   let currentBackgroundMode = true;
   let currentStatus = 'ready';
   let currentIsolatedApp = '';
+  let modelSelectionTouched = false;
   let desktopAccessResolver = null;
   let lastActionId = null;
   let terminalStateKey = null;
@@ -668,15 +672,49 @@
 
   const desktopModeLabel = (mode = currentMode) => mode === 'computer_isolated' ? 'Isolated App control' : 'Desktop control';
 
+  const controlLayerClass = (layer = '') => {
+    const text = String(layer || '').toLowerCase();
+    if (text.includes('uia')) return 'uia';
+    if (text.includes('screenshot') || text.includes('ocr') || text.includes('vision')) return 'vision';
+    if (text.includes('electron')) return 'electron';
+    if (text.includes('miss') || text.includes('fail')) return 'miss';
+    return '';
+  };
+
+  const renderDesktopControlDetail = (mode = currentMode, isolatedApp = currentIsolatedApp) => {
+    const detail = $('desktop-control-detail');
+    if (!detail) return;
+    const scope = mode === 'computer_isolated'
+      ? `${isolatedApp || 'Selected app'} only`
+      : 'Full desktop view and control';
+    const layer = currentControlLayer ? ` - ${currentControlLayer}` : '';
+    const reason = currentControlReason ? ` - ${currentControlReason}` : '';
+    detail.textContent = `${desktopModeLabel(mode)} - ${scope}${layer}${reason}`;
+  };
+
+  const setControlSurface = ({ layer = '', reason = '', target = '', phase = '' } = {}) => {
+    currentControlLayer = String(layer || '').trim();
+    currentControlReason = String(reason || '').trim();
+    currentControlTarget = String(target || '').trim();
+    capsuleControlLayer = currentControlLayer;
+    const pill = $('topbar-control');
+    const label = $('topbar-control-layer');
+    if (pill && label) {
+      const hasLayer = Boolean(currentControlLayer);
+      pill.hidden = !hasLayer;
+      pill.className = `topbar-control ${controlLayerClass(currentControlLayer)}`.trim();
+      label.textContent = currentControlLayer || 'Control';
+      pill.title = [currentControlTarget, currentControlReason, phase].filter(Boolean).join(' - ');
+    }
+    renderDesktopControlDetail();
+  };
+
   const setDesktopSessionActive = (active, mode = currentMode, isolatedApp = currentIsolatedApp) => {
     const banner = $('desktop-control-banner');
     if (!banner) return;
     banner.classList.toggle('show', !!active && isDesktopMode(mode));
     $('desktop-control-title').textContent = active ? 'AI Computer is using your computer' : 'Desktop control inactive';
-    const scope = mode === 'computer_isolated'
-      ? `${isolatedApp || 'Selected app'} only`
-      : 'Full desktop view and control';
-    $('desktop-control-detail').textContent = `${desktopModeLabel(mode)} · ${scope}`;
+    renderDesktopControlDetail(mode, isolatedApp);
   };
 
   const requestDesktopAccess = ({ mode, isolatedApp }) => new Promise((resolve) => {
@@ -793,6 +831,20 @@
     };
   };
 
+  const handleServerPreflightRejection = async (err, taskPayload) => {
+    const detail = err?.detail;
+    if (!detail || typeof detail !== 'object' || !detail.preflight) return 'unhandled';
+    const code = detail.code || '';
+    if (code !== 'readiness_preflight_warning' && code !== 'readiness_preflight_blocked') return 'unhandled';
+    const allowed = await requestReadinessPreflight(detail.preflight);
+    if (allowed && code === 'readiness_preflight_warning' && detail.preflight?.can_override) {
+      taskPayload.readiness_override = true;
+      await api('/api/tasks', 'POST', taskPayload);
+      return 'retried';
+    }
+    return 'cancelled';
+  };
+
   const setMode = (mode, isolated = false, isolatedApp = '') => {
     currentMode = mode || 'coding';
     currentIsolatedApp = isolatedApp || (currentMode === 'computer_isolated' ? ($('isolated-app-id')?.value || '').trim() : '');
@@ -822,6 +874,12 @@
     select.value = match;
     const sbm = $('sb-model-val');
     if (sbm) sbm.textContent = select.options[select.selectedIndex]?.textContent || '—';
+  };
+
+  const selectedModelForRequest = (mode) => {
+    const selected = $('model-id')?.value || null;
+    if ((mode || 'auto') === 'auto' && !modelSelectionTouched) return null;
+    return selected;
   };
 
   const setBackgroundMode = (background, message = '') => {
@@ -1919,7 +1977,8 @@
     if (sse) { sse.close(); sse = null; }
     streamClosedManually = replay;
     reconnectAttempts = 0; streamCursor = 0; startTime = 0; isPaused = false;
-    activePlanCard = null; liveStatusCard = null; liveStatusMessage = ''; capsuleControlLayer = '';
+    activePlanCard = null; liveStatusCard = null; liveStatusMessage = '';
+    setControlSurface();
     planSubtasks = []; currentSubtaskIdx = 0; subtaskEls = {};
     screenshotStore.clear(); lastActionId = null; terminalStateKey = null;
     Object.keys(actionCards).forEach((k) => delete actionCards[k]);
@@ -2019,8 +2078,13 @@
     if (event.type === 'action_start') {
       finalizeLiveStatus();
       const layer = overlayControlLayer(event.overlay);
-      if (layer) capsuleControlLayer = layer;
       const detail = event.args_summary || event.explanation || 'Working...';
+      if (layer) setControlSurface({
+        layer,
+        reason: event.overlay?.control_reason || event.overlay?.fallback_reason || '',
+        target: event.overlay?.target || event.overlay?.label || detail,
+        phase: 'Running',
+      });
       const entry = ensureActionCard(event.action_id, event.action_type, event.args_summary || event.explanation || '');
       setActionState(entry, 'Running', 'running');
       entry.subtitleEl.textContent = layer ? `${layer} - ${detail}` : detail;
@@ -2032,7 +2096,12 @@
 
     if (event.type === 'action_result') {
       const layer = overlayControlLayer(event.overlay);
-      if (layer) capsuleControlLayer = layer;
+      if (layer) setControlSurface({
+        layer,
+        reason: event.overlay?.control_reason || event.overlay?.fallback_reason || '',
+        target: event.overlay?.target || event.overlay?.label || event.args_summary || '',
+        phase: event.ok ? 'Complete' : 'Failed',
+      });
       const entry = ensureActionCard(event.action_id, event.action_type, event.args_summary || '');
       setActionState(entry, event.ok ? 'OK' : 'Fail', event.ok ? 'ok' : 'fail');
       if (event.args_summary) entry.subtitleEl.textContent = layer ? `${layer} - ${event.args_summary}` : event.args_summary;
@@ -2369,7 +2438,7 @@
     if (task && sse) { toast('A task is already running. Cancel it before starting another.', 'warn'); return; }
     const requestedMode = $('mode-id').value;
     const requestedIsolatedApp = ($('isolated-app-id').value || '').trim();
-    const requestedModel = $('model-id').value || null;
+    const requestedModel = selectedModelForRequest(requestedMode);
     const readinessDecision = await ensureTaskReadiness({
       goal,
       mode: requestedMode,
@@ -2379,6 +2448,7 @@
     if (!readinessDecision.ok) return;
     const effectiveMode = readinessDecision.preflight?.effective_mode || requestedMode;
     const effectiveIsolatedApp = requestedIsolatedApp || readinessDecision.preflight?.isolated_app || '';
+    const displayModel = requestedModel || readinessDecision.preflight?.selected_model || null;
     if (isDesktopMode(effectiveMode)) {
       const allowed = await requestDesktopAccess({ mode: effectiveMode, isolatedApp: effectiveIsolatedApp });
       if (!allowed) return;
@@ -2391,7 +2461,7 @@
     appendMessage(goal, 'user');
     $('input').value = ''; updateCharCount(); autoGrow();
 
-    setTaskTitle(goal, { mode: effectiveMode, model: requestedModel, status: 'running' });
+    setTaskTitle(goal, { mode: effectiveMode, model: displayModel, status: 'running' });
     setStatus('running');
     $('btn-pause').classList.remove('hidden');
     $('btn-cancel').classList.remove('hidden');
@@ -2406,28 +2476,47 @@
     timer = setInterval(updateClock, 1000);
     updateClock();
     setLiveStatus('Initializing', 'Starting task…');
+    const taskPayload = {
+      task_id: task,
+      goal,
+      model: requestedModel,
+      mode: requestedMode,
+      isolated_app: requestedIsolatedApp || null,
+      active_skills: Array.from(activeSkillIds),
+      project_folder: projectFolderState.selectedPath || null,
+      plan_first: !!$('plan-first-toggle')?.checked,
+      notify_on_completion: !!$('notify-toggle')?.checked,
+      auto_commit: !!$('checkpoint-toggle')?.checked,
+      autonomy_level: $('autonomy-level')?.value || 'balanced',
+      thinking_budget: $('thinking-budget')?.value || 'off',
+      readiness_override: !!readinessDecision.override
+    };
 
     try {
       await keyReady;
-      const model = requestedModel;
-      const mode = requestedMode;
-      const isolated_app = requestedIsolatedApp || null;
       if (isDesktopMode(effectiveMode)) setDesktopSessionActive(true, effectiveMode, effectiveIsolatedApp || '');
       streamClosedManually = false;
       openStream(task);
-      await api('/api/tasks', 'POST', { 
-        task_id: task, goal, model, mode, isolated_app,
-        active_skills: Array.from(activeSkillIds),
-        project_folder: projectFolderState.selectedPath || null,
-        plan_first: !!$('plan-first-toggle')?.checked,
-        notify_on_completion: !!$('notify-toggle')?.checked,
-        auto_commit: !!$('checkpoint-toggle')?.checked,
-        autonomy_level: $('autonomy-level')?.value || 'balanced',
-        thinking_budget: $('thinking-budget')?.value || 'off',
-        readiness_override: !!readinessDecision.override
-      });
+      await api('/api/tasks', 'POST', taskPayload);
       if (window.innerWidth <= 1080) document.body.classList.remove('nav-open');
     } catch (err) {
+      try {
+        const outcome = await handleServerPreflightRejection(err, taskPayload);
+        if (outcome === 'retried') {
+          if (window.innerWidth <= 1080) document.body.classList.remove('nav-open');
+          return;
+        }
+        if (outcome === 'cancelled') {
+          finalizeLiveStatus();
+          setStatus('ready');
+          appendMessage('Task was not started. Fix readiness checks in Settings and try again.', 'system');
+          markHistoryFinal('cancelled');
+          stopEverything();
+          return;
+        }
+      } catch (retryErr) {
+        err = retryErr;
+      }
       finalizeLiveStatus();
       setStatus('error');
       const detail = (typeof err.detail === 'object') ? JSON.stringify(err.detail) : (err.detail || 'Unknown error.');
@@ -2478,13 +2567,17 @@
 
   const retryTask = async () => {
     if (!currentViewedTask) { toast('No task selected to retry.', 'warn'); return; }
-    try {
-      const title = $('task-title').textContent || 'Retry';
-      const result = await api(`/api/tasks/${currentViewedTask}/retry`, 'POST');
+    const originalTaskId = currentViewedTask;
+    const title = $('task-title').textContent || 'Retry';
+    const startRetriedTask = (result) => {
+      const preflight = result.preflight || {};
+      const effectiveMode = preflight.effective_mode || result.mode || $('mode-id').value;
+      const effectiveIsolatedApp = preflight.isolated_app || '';
+      const displayModel = preflight.selected_model || result.model || $('model-id').value;
       task = result.task_id; currentViewedTask = task;
       resetTaskView();
       appendMessage(title, 'user');
-      setTaskTitle(title, { mode: $('mode-id').value, model: $('model-id').value, status: 'running' });
+      setTaskTitle(title, { mode: effectiveMode, model: displayModel, status: 'running' });
       setStatus('running');
       $('btn-pause').classList.remove('hidden');
       $('btn-cancel').classList.remove('hidden');
@@ -2494,11 +2587,64 @@
       startTime = Date.now();
       timer = setInterval(updateClock, 1000);
       updateClock();
-      setLiveStatus('Initializing', 'Retrying task…');
+      setLiveStatus('Initializing', 'Retrying task...');
+      if (isDesktopMode(effectiveMode)) setDesktopSessionActive(true, effectiveMode, effectiveIsolatedApp || '');
       streamClosedManually = false;
       openStream(task);
       toast(`Retried as ${task}.`, 'ok');
-    } catch (err) { toast(err.detail || 'Retry failed.', 'err'); }
+    };
+    try {
+      let readinessOverride = false;
+      try {
+        const record = await api(`/api/tasks/${originalTaskId}`);
+        const retryGoal = record.goal || record.context?.goal || title;
+        const retryMode = record.mode || 'auto';
+        const retryModel = record.model || null;
+        const retryIsolatedApp = record.context?.isolated_app || '';
+        const readinessDecision = await ensureTaskReadiness({
+          goal: retryGoal,
+          mode: retryMode,
+          model: retryModel,
+          isolatedApp: retryIsolatedApp,
+        });
+        if (!readinessDecision.ok) {
+          toast('Retry was not started.', 'warn');
+          return;
+        }
+        readinessOverride = !!readinessDecision.override;
+        const effectiveMode = readinessDecision.preflight?.effective_mode || retryMode;
+        const effectiveIsolatedApp = retryIsolatedApp || readinessDecision.preflight?.isolated_app || '';
+        if (isDesktopMode(effectiveMode)) {
+          const allowed = await requestDesktopAccess({ mode: effectiveMode, isolatedApp: effectiveIsolatedApp });
+          if (!allowed) return;
+        }
+      } catch (_) {
+        // The server retry endpoint still performs the authoritative preflight.
+      }
+      const result = await api(`/api/tasks/${originalTaskId}/retry`, 'POST', { readiness_override: readinessOverride });
+      startRetriedTask(result);
+      return;
+    } catch (err) {
+      const detail = err?.detail;
+      const code = detail && typeof detail === 'object' ? detail.code : '';
+      if ((code === 'readiness_preflight_warning' || code === 'readiness_preflight_blocked') && detail.preflight) {
+        const allowed = await requestReadinessPreflight(detail.preflight);
+        if (allowed && code === 'readiness_preflight_warning' && detail.preflight?.can_override) {
+          try {
+            const result = await api(`/api/tasks/${originalTaskId}/retry`, 'POST', { readiness_override: true });
+            startRetriedTask(result);
+            return;
+          } catch (retryErr) {
+            err = retryErr;
+          }
+        } else {
+          toast('Retry was not started.', 'warn');
+          return;
+        }
+      }
+      const message = typeof err.detail === 'object' ? (err.detail.message || JSON.stringify(err.detail)) : (err.detail || 'Retry failed.');
+      toast(message, 'err');
+    }
   };
 
   const copyCurrentLog = async () => {
@@ -2602,6 +2748,7 @@
       'claude-3-5-sonnet-20241022',
       'gpt-4o-mini'
     ];
+    modelSelectionTouched = false;
     select.innerHTML = '';
     if (!list.length) {
       const option = document.createElement('option');
@@ -2633,7 +2780,11 @@
     if (!select.value && select.options.length) select.value = 'tier:balanced';
     selectPreferredModelForMode($('mode-id')?.value || 'auto');
     const sbm = $('sb-model-val'); if (sbm) sbm.textContent = select.options[select.selectedIndex]?.textContent || '—';
-    select.onchange = () => { const sbm = $('sb-model-val'); if (sbm) sbm.textContent = select.options[select.selectedIndex]?.textContent || '—'; };
+    select.onchange = () => {
+      modelSelectionTouched = true;
+      const sbm = $('sb-model-val');
+      if (sbm) sbm.textContent = select.options[select.selectedIndex]?.textContent || '—';
+    };
   };
 
   const newSession = () => {
@@ -3900,6 +4051,21 @@
     youtube:  '<svg viewBox="0 0 24 24" fill="currentColor"><rect x="2" y="6" width="20" height="12" rx="3"/><polygon points="10 9 16 12 10 15" fill="#fff"/></svg>',
     folder:   '<svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.8"><path d="M3 7.5a2 2 0 0 1 2-2h4l2 2h8a2 2 0 0 1 2 2V17a2 2 0 0 1-2 2H5a2 2 0 0 1-2-2z"/></svg>',
     clipboard:'<svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.8"><rect x="8" y="3" width="8" height="4" rx="1"/><path d="M16 5h2a2 2 0 0 1 2 2v12a2 2 0 0 1-2 2H6a2 2 0 0 1-2-2V7a2 2 0 0 1 2-2h2"/></svg>',
+    sheet:    '<svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.8"><rect x="3" y="3" width="18" height="18" rx="2"/><line x1="3" y1="9" x2="21" y2="9"/><line x1="3" y1="15" x2="21" y2="15"/><line x1="9" y1="3" x2="9" y2="21"/><line x1="15" y1="3" x2="15" y2="21"/></svg>',
+    doc:      '<svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.8"><path d="M14 3H7a2 2 0 0 0-2 2v14a2 2 0 0 0 2 2h10a2 2 0 0 0 2-2V8z"/><polyline points="14 3 14 8 19 8"/><line x1="8" y1="13" x2="16" y2="13"/><line x1="8" y1="17" x2="14" y2="17"/></svg>',
+    slides:   '<svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.8"><rect x="3" y="4" width="18" height="12" rx="2"/><line x1="12" y1="16" x2="12" y2="20"/><line x1="8" y1="20" x2="16" y2="20"/></svg>',
+    code:     '<svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.8"><polyline points="16 18 22 12 16 6"/><polyline points="8 6 2 12 8 18"/></svg>',
+    design:   '<svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.8"><circle cx="13.5" cy="6.5" r="2.5"/><circle cx="6.5" cy="11.5" r="2.5"/><circle cx="16.5" cy="14.5" r="2.5"/><circle cx="9" cy="18" r="2.5"/></svg>',
+    map:      '<svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.8"><path d="M21 10c0 6-9 12-9 12s-9-6-9-12a9 9 0 0 1 18 0z"/><circle cx="12" cy="10" r="3"/></svg>',
+    cart:     '<svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.8"><circle cx="9" cy="20" r="1.5"/><circle cx="18" cy="20" r="1.5"/><path d="M2 3h3l2.4 12.2a1.5 1.5 0 0 0 1.5 1.3h8.5a1.5 1.5 0 0 0 1.5-1.2L22 7H6"/></svg>',
+    briefcase:'<svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.8"><rect x="2" y="7" width="20" height="13" rx="2"/><path d="M8 7V5a2 2 0 0 1 2-2h4a2 2 0 0 1 2 2v2"/></svg>',
+    social:   '<svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.8"><line x1="4" y1="9" x2="20" y2="9"/><line x1="4" y1="15" x2="20" y2="15"/><line x1="10" y1="3" x2="8" y2="21"/><line x1="16" y1="3" x2="14" y2="21"/></svg>',
+    check:    '<svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.8"><rect x="3" y="3" width="18" height="18" rx="3"/><polyline points="8 12 11 15 16 9"/></svg>',
+    crm:      '<svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.8"><circle cx="9" cy="8" r="3"/><path d="M3 20a6 6 0 0 1 12 0"/><circle cx="17" cy="9" r="2.5"/><path d="M16 20a5 5 0 0 1 5-5"/></svg>',
+    music:    '<svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.8"><path d="M9 18V5l12-2v13"/><circle cx="6" cy="18" r="3"/><circle cx="18" cy="16" r="3"/></svg>',
+    video:    '<svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.8"><rect x="2" y="6" width="14" height="12" rx="2"/><polygon points="16 10 22 7 22 17 16 14"/></svg>',
+    message:  '<svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.8"><path d="M21 11.5a8.4 8.4 0 0 1-9 8 9 9 0 0 1-4-1L3 20l1.5-4.5a8.4 8.4 0 0 1-1-4A8.4 8.4 0 0 1 12 3a8.4 8.4 0 0 1 9 8.5z"/></svg>',
+    ticket:   '<svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.8"><path d="M3 8a2 2 0 0 1 2-2h14a2 2 0 0 1 2 2v2a2 2 0 0 0 0 4v2a2 2 0 0 1-2 2H5a2 2 0 0 1-2-2v-2a2 2 0 0 0 0-4z"/></svg>',
   };
 
   const url = (path) => path;
