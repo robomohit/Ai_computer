@@ -2323,8 +2323,50 @@ class ToolExecutor:
         except Exception:
             return None
 
+    def _click_snapshot(self):
+        """Cheap fingerprint of UI state so we can tell whether a click did
+        something: the foreground window plus the set of visible top-level
+        windows (a menu or dialog opening spawns a NEW window — class #32768 for
+        menus — even when the foreground owner stays put). Pure win32gui, no slow
+        UIA focus read. Best-effort; any failure -> empty snapshot."""
+        snap = {"fg": None, "wins": None}
+        try:
+            import win32gui  # type: ignore
+            h = win32gui.GetForegroundWindow()
+            snap["fg"] = (h, win32gui.GetWindowText(h))
+            hwnds = set()
+
+            def _enum(hwnd, _):
+                if win32gui.IsWindowVisible(hwnd):
+                    hwnds.add(hwnd)
+
+            win32gui.EnumWindows(_enum, None)
+            snap["wins"] = hwnds
+        except Exception:
+            pass
+        return snap
+
+    def _verify_clicked(self, before: dict):
+        """True if the click visibly changed UI state (a menu/dialog appeared or
+        the foreground window changed), None if we can't tell. Never False: a
+        click that produces no observable change is common and legitimate, so we
+        annotate confidence rather than cry failure."""
+        try:
+            time.sleep(0.12)  # let a menu/dialog actually paint before we look
+            after = self._click_snapshot()
+            bw, aw = before.get("wins"), after.get("wins")
+            if bw is not None and aw is not None and (aw - bw):
+                return True  # a new top-level window (menu/dialog) appeared
+            bf, af = before.get("fg"), after.get("fg")
+            if bf and af and bf != af:
+                return True
+        except Exception:
+            pass
+        return None
+
     def uia_click(self, query: str, app: str = ""):
         from .widget.desktop_features import invoke_ui_element
+        before = self._click_snapshot()
         res = invoke_ui_element(query, app)
         if not res.get("ok"):
             # Auto-fallback: try OCR pixel-click before giving up to the model.
@@ -2358,7 +2400,13 @@ class ToolExecutor:
             rect=res.get("rect", {}),
             app_rect=app_rect,
         )
-        return ToolResult(ok=True, output=f"Activated '{res.get('target')}' via {res.get('method')}.{tok}", data=data)
+        # Post-action verification: did the click visibly change UI state?
+        verified = self._verify_clicked(before)
+        data["verified"] = verified
+        if isinstance(data.get("overlay"), dict):
+            data["overlay"]["verified"] = verified
+        verdict = " (verified)" if verified is True else ""
+        return ToolResult(ok=True, output=f"Activated '{res.get('target')}' via {res.get('method')}{verdict}.{tok}", data=data)
 
     def uia_type(self, query: str, text: str, app: str = "", clear_first: bool = False, submit: bool = False):
         from .widget.desktop_features import type_into_ui_element

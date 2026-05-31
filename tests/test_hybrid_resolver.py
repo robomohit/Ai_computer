@@ -166,6 +166,48 @@ def test_no_reuse_for_browser_or_url(monkeypatch, tmp_path):
     assert launched.get("called") is True
 
 
+def test_uia_click_verifies_state_change(monkeypatch, tmp_path):
+    import app.widget.desktop_features as df
+
+    monkeypatch.setattr(df, "invoke_ui_element",
+                        lambda q, a: {"ok": True, "method": "invoke_pattern",
+                                      "target": "Edit", "rect": {}})
+    monkeypatch.setattr(df, "app_window_rect",
+                        lambda a: {"left": 0, "top": 0, "width": 800, "height": 600})
+
+    ex = _ex(tmp_path)
+    # a menu popup (new top-level window 99) appears -> the click took effect.
+    snaps = iter([{"fg": (1, "Notepad"), "wins": {1, 2}},
+                  {"fg": (1, "Notepad"), "wins": {1, 2, 99}}])
+    monkeypatch.setattr(ex, "_click_snapshot", lambda: next(snaps))
+
+    res = ex.uia_click("Edit", "Notepad")
+    assert res.ok is True
+    assert res.data["verified"] is True
+    assert "(verified)" in res.output
+
+
+def test_uia_click_unverifiable_is_not_a_failure(monkeypatch, tmp_path):
+    import app.widget.desktop_features as df
+
+    monkeypatch.setattr(df, "invoke_ui_element",
+                        lambda q, a: {"ok": True, "method": "invoke_pattern",
+                                      "target": "Bold", "rect": {}})
+    monkeypatch.setattr(df, "app_window_rect",
+                        lambda a: {"left": 0, "top": 0, "width": 800, "height": 600})
+
+    ex = _ex(tmp_path)
+    # nothing observable changed (e.g. a toggle that keeps focus) -> verified None,
+    # but the click is still a success, never mislabelled as failed.
+    monkeypatch.setattr(ex, "_click_snapshot",
+                        lambda: {"fg": (1, "Word"), "wins": {1, 2}})
+
+    res = ex.uia_click("Bold", "Word")
+    assert res.ok is True
+    assert res.data["verified"] is None
+    assert "(verified)" not in res.output
+
+
 def test_uia_type_reports_verification(monkeypatch, tmp_path):
     import app.widget.desktop_features as df
 
