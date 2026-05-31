@@ -656,6 +656,8 @@ _ICONS = {
     "message":  '<path d="M21 11.5a8.4 8.4 0 0 1-9 8.4 9 9 0 0 1-3.5-.7L3 21l1.8-5.4A8.4 8.4 0 0 1 12 3a8.4 8.4 0 0 1 9 8.5z"/>',
     "video":    '<rect x="2" y="6" width="14" height="12" rx="2"/><path d="m22 8-6 4 6 4z"/>',
     "ticket":   '<path d="M3 8a2 2 0 0 1 2-2h14a2 2 0 0 1 2 2v2a2 2 0 0 0 0 4v2a2 2 0 0 1-2 2H5a2 2 0 0 1-2-2v-2a2 2 0 0 0 0-4z"/><line x1="13" y1="6" x2="13" y2="18"/>',
+    "sound":    '<path d="M11 5 6 9H2v6h4l5 4z"/><path d="M15.5 8.5a5 5 0 0 1 0 7"/><path d="M18.5 5.5a9 9 0 0 1 0 13"/>',
+    "soundoff": '<path d="M11 5 6 9H2v6h4l5 4z"/><line x1="22" y1="9" x2="16" y2="15"/><line x1="16" y1="9" x2="22" y2="15"/>',
 }
 
 
@@ -1156,6 +1158,9 @@ def main(port: int = 8000) -> int:
 
     # ── the capsule window ──
     class Capsule(QWidget):
+        # Thread-safe delivery of a recognized voice transcript to the UI thread.
+        transcriptReady = Signal(str)
+
         def __init__(self) -> None:
             super().__init__()
             self.setWindowTitle("AI Computer Sidekick")
@@ -1185,6 +1190,9 @@ def main(port: int = 8000) -> int:
             self._bg_light = 0.0
             self._animating = False           # True during grow/shrink tween
             self._setup_mode = False          # first-run: input captures API key
+            self._voice_mode = False          # talk-to-it / it-talks-back loop
+            self._listening = False           # mic actively capturing
+            self.transcriptReady.connect(self._on_transcript)
             # Discrete light/dark theme for the CONTENT (chips, icons, card
             # text). Flipped with hysteresis so the chrome stays legible: over
             # a bright backdrop the whole capsule becomes a light glass with
@@ -1271,13 +1279,33 @@ def main(port: int = 8000) -> int:
             self.status.hide()
             pill_row.addWidget(self.status)
 
-            # Mic — push-to-talk. Hold to record, release to transcribe.
+            # Voice conversation toggle — when ON, the agent reads its replies
+            # aloud and re-arms the mic for hands-free back-and-forth.
+            self.voice_btn = QPushButton()
+            self.voice_btn.setCheckable(True)
+            self.voice_btn.setIcon(_icon("soundoff", 16, "#1A1D24", 1.8))
+            self.voice_btn.setIconSize(QSize(16, 16))
+            self.voice_btn.setFixedSize(32, 32)
+            self.voice_btn.setCursor(Qt.PointingHandCursor)
+            self.voice_btn.setToolTip("Voice conversation — talk to it, it talks back")
+            self.voice_btn.setStyleSheet(
+                "QPushButton{ background: transparent;"
+                "  border: 1px solid rgba(20,24,32,30); border-radius: 16px; }"
+                "QPushButton:hover{ background: rgba(20,24,32,30); }"
+                "QPushButton:checked{ background: rgba(91,224,208,70);"
+                "  border-color: rgba(40,160,150,200); }"
+            )
+            self.voice_btn.clicked.connect(self._toggle_voice_mode)
+            pill_row.addWidget(self.voice_btn)
+
+            # Mic — click to dictate (toggle). Recognizes one utterance and, in
+            # voice mode, submits it automatically.
             self.mic_btn = QPushButton()
             self.mic_btn.setIcon(_icon("mic", 16, "#1A1D24", 1.8))
             self.mic_btn.setIconSize(QSize(16, 16))
             self.mic_btn.setFixedSize(32, 32)
             self.mic_btn.setCursor(Qt.PointingHandCursor)
-            self.mic_btn.setToolTip("Hold to talk — release to transcribe")
+            self.mic_btn.setToolTip("Click to dictate")
             self.mic_btn.setStyleSheet(
                 "QPushButton{"
                 "  background: transparent;"
@@ -1285,13 +1313,13 @@ def main(port: int = 8000) -> int:
                 "  border-radius: 16px;"
                 "}"
                 "QPushButton:hover{ background: rgba(20,24,32,30); }"
-                "QPushButton:pressed{"
+                "QPushButton:checked{"
                 "  background: rgba(229,72,77,200);"
                 "  border-color: rgba(229,72,77,255);"
                 "}"
             )
-            self.mic_btn.pressed.connect(self._mic_start)
-            self.mic_btn.released.connect(self._mic_stop)
+            self.mic_btn.setCheckable(True)
+            self.mic_btn.clicked.connect(self._toggle_mic)
             pill_row.addWidget(self.mic_btn)
 
             # Plus button — submit. Sits at the right edge of the pill.
@@ -2052,59 +2080,94 @@ def main(port: int = 8000) -> int:
             self._refresh_placeholder()
 
         # ── Push-to-talk via Windows Speech Recognition (SAPI) ──────────
-        def _mic_start(self) -> None:
-            """Begin a SAPI recognition session in a background thread.
-            We use Windows' built-in dictation — no extra deps required."""
-            if getattr(self, "_recognizer", None):
+        # ── Voice conversation (local, free: Windows STT in + SAPI TTS out) ──
+        def _toggle_voice_mode(self) -> None:
+            """Turn the talk-to-it / it-talks-back loop on or off."""
+            self._voice_mode = self.voice_btn.isChecked()
+            try:
+                from . import voice as _voice
+            except Exception:
+                _voice = None
+            if self._voice_mode:
+                self.voice_btn.setIcon(_icon("sound", 16, "#06231f", 1.8))
+                if _voice and not _voice.tts_available():
+                    self.statusChanged_local("Voice output unavailable on this PC")
+                self.statusChanged_local("Voice on — click the mic and talk")
+            else:
+                self.voice_btn.setIcon(_icon("soundoff", 16, "#1A1D24", 1.8))
+                try:
+                    if _voice:
+                        _voice.stop_speaking()
+                except Exception:
+                    pass
+
+        def _toggle_mic(self) -> None:
+            """Click to start/stop a single dictation capture."""
+            if self._listening:
+                # let the in-flight recognition finish on its own; just un-check
+                self.mic_btn.setChecked(False)
                 return
+            try:
+                from . import voice as _voice
+            except Exception:
+                self.statusChanged_local("Voice not available")
+                self.mic_btn.setChecked(False)
+                return
+            if not _voice.stt_available():
+                self.statusChanged_local("Speech recognition unavailable on this PC")
+                self.mic_btn.setChecked(False)
+                return
+            self._listening = True
+            self.mic_btn.setChecked(True)
             self.status.setText("Listening…")
             self.status.show()
-            self._mic_text = ""
-            threading.Thread(target=self._mic_run, daemon=True).start()
 
-        def _mic_stop(self) -> None:
-            rec = getattr(self, "_recognizer", None)
-            if not rec:
-                self.status.hide()
+            def _run():
+                text = ""
+                try:
+                    text = _voice.listen(timeout=8.0)
+                except Exception as exc:
+                    print(f"[capsule] mic error: {exc}", flush=True)
+                # marshal back to the UI thread
+                self.transcriptReady.emit(text or "")
+
+            threading.Thread(target=_run, daemon=True).start()
+
+        def _on_transcript(self, text: str) -> None:
+            self._listening = False
+            self.mic_btn.setChecked(False)
+            self.status.hide()
+            text = (text or "").strip()
+            if not text:
+                self.statusChanged_local(
+                    "Didn't catch that — check your mic is on")
+                return
+            if self._setup_mode:
+                self.input.setText(text)
+                return
+            # fill the input; in voice mode, submit hands-free
+            self.input.setText((self.input.text() + " " + text).strip()
+                               if self.input.text().strip() else text)
+            self.input.setFocus()
+            if self._voice_mode:
+                self._submit()
+
+        def _speak_answer(self, text: str) -> None:
+            """In voice mode, read the agent's reply aloud, then re-arm the mic
+            for a hands-free next turn."""
+            if not self._voice_mode:
                 return
             try:
-                rec.Recognizer.State = 0  # SRS_INACTIVE
-            except Exception:
-                pass
-            self._recognizer = None
-            self.status.hide()
-            text = (self._mic_text or "").strip()
-            if text:
-                self.input.setText((self.input.text() + " " + text).strip())
-                self.input.setFocus()
-
-        def _mic_run(self) -> None:
-            """Background SAPI dictation. Uses comtypes; gracefully degrades."""
-            try:
-                import comtypes.client as cc
-                rec = cc.CreateObject("SAPI.SpInProcRecognizer")
-                ctx = rec.CreateRecoContext()
-                grammar = ctx.CreateGrammar()
-                grammar.DictationSetState(1)  # SGDS_ACTIVE
-                self._recognizer = rec
-
-                # Poll events for up to 12s while button held
-                start = time.time()
-                while getattr(self, "_recognizer", None):
-                    if time.time() - start > 12:
-                        break
-                    try:
-                        ev = ctx.WaitForNotifyEvent(200)
-                        if ev and getattr(ev, "Result", None):
-                            self._mic_text += " " + ev.Result.PhraseInfo.GetText()
-                    except Exception:
-                        pass
-                grammar.DictationSetState(0)
+                from . import voice as _voice
+                _voice.speak(text)
             except Exception as exc:
-                print(f"[capsule] mic unavailable: {exc}", flush=True)
-                self._recognizer = None
-                # Surface a one-time hint
-                self.statusChanged_local("Voice needs comtypes — pip install comtypes")
+                print(f"[capsule] speak error: {exc}", flush=True)
+            # hands-free: listen again a moment after the reply starts
+            QTimer.singleShot(900, self._auto_listen_next)
+
+        def _auto_listen_next(self) -> None:
+            if self._voice_mode and not self._listening and not self._busy:
+                self._toggle_mic()
 
         def statusChanged_local(self, msg: str) -> None:
             self.status.setText(msg)
@@ -2851,6 +2914,11 @@ def main(port: int = 8000) -> int:
                 _df.clear_pending_task()
             except Exception:
                 pass
+
+            # Voice mode: read the reply aloud and re-arm the mic for a
+            # hands-free next turn.
+            if clean:
+                self._speak_answer(clean)
 
             # Reset streaming state so the NEXT prompt gets a fresh card
             # (multi-turn stacking: don't delete old cards).
