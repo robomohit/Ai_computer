@@ -2143,6 +2143,11 @@ class ToolExecutor:
         from .widget.desktop_features import find_ui_elements
         res = find_ui_elements(query, app, limit)
         if not res.get("ok"):
+            # OCR fallback: the control isn't in the accessibility tree, but is
+            # its TEXT visible on screen? Report its pixel location + layer.
+            ocr = self._ocr_find_fallback(query, app)
+            if ocr is not None:
+                return ocr
             app_rect = self._app_rect_payload(app)
             data = dict(res)
             data["overlay"] = _overlay_payload(
@@ -2155,7 +2160,7 @@ class ToolExecutor:
                 phase="error",
                 fallback_reason="uia_no_match",
                 control_layer="UIA miss",
-                control_reason="accessible control not found",
+                control_reason="no accessible control and OCR found no match",
             )
             return ToolResult(ok=False, output=res.get("error", "no match"), data=data)
         lines = [f"{i+1}. {c.get('name') or c.get('automation_id') or '(unnamed)'} "
@@ -2215,6 +2220,33 @@ class ToolExecutor:
             return ToolResult(ok=True, data=data, output=(
                 f"Clicked '{matched}' via OCR fallback at ({x},{y}). "
                 f"[uia:{x-14},{y-12},28,24]{self._app_rect_token(app)}"))
+        except Exception:
+            return None
+
+    def _ocr_find_fallback(self, query: str, app: str):
+        """On a UIA find miss, locate the target by on-screen TEXT (Windows OCR)
+        and report its pixel position. Returns a ToolResult or None."""
+        try:
+            from .widget.desktop_features import ocr_find_in_app
+            hit = ocr_find_in_app(query, app)
+            if not hit.get("ok"):
+                return None
+            x, y = int(hit["x"]), int(hit["y"])
+            matched = hit.get("matched") or query
+            app_rect = self._app_rect_payload(app)
+            rect = {"left": x - 14, "top": y - 12, "width": 28, "height": 24}
+            data = {"ok": True, "items": [{"name": matched, "x": x, "y": y,
+                    "control_type": "OcrText", "score": hit.get("score", 0)}],
+                    "layer": "ocr"}
+            data["overlay"] = _overlay_payload(
+                "app_focus" if app_rect else "status", "uia_find", "find",
+                f"Found “{matched}” (OCR)", target=matched, app_rect=app_rect,
+                rect=rect, control_layer="OCR fallback",
+                control_reason="no accessible control — matched on-screen text")
+            return ToolResult(ok=True, data=data, output=(
+                f"OCR matches (no accessible control):\n1. {matched} [OcrText] "
+                f"@ ({x},{y}) via screen text. [uia:{x-14},{y-12},28,24]"
+                f"{self._app_rect_token(app)}"))
         except Exception:
             return None
 
