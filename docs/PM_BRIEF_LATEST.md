@@ -1,59 +1,61 @@
-# PM Brief — 2026-05-30 (automated run)
+# PM Brief — 2026-05-31 (automated run)
 
-**Starting commit:** `b63ad01`  →  **Ending commit:** `594efdb`
-**Run duration:** ~40 min  |  **LOC budget used:** ~149/200
-**Run type:** feature (AI-23 shipped, AI-21 pre-impl discovered)
+**Starting commit:** `d44e6ec`  →  **Ending commit:** `d16bef6`
+**Run duration:** ~45 min  |  **LOC budget used:** ~117/200
+**Run type:** mixed (3 features shipped, 1 pre-impl discovered)
 
 ## What I did
-- Synced `feature/new-updates` — already up to date at b63ad01.
-- Read last 5 PM briefs, standing policy, and RESEARCH_NOTES (latest available: 2026-05-20; newer research commits are on a separate branch not merged into feature/new-updates).
-- Ran full `pytest -q` — **205 passed, 1 skipped, 0 failed** baseline (green).
-- UI smoke: GET / → 200, /healthz → openrouter+google ok; server killed cleanly.
-- Linear survey: 0 In Progress, 0 blocked. Todo: AI-5/14/18 (needs-design), AI-13/21/23 (pickable), AI-1/2/3/4 (onboarding placeholders).
-- Audited AI-21 (Planning mode) — fully pre-implemented (commit 2d9744d: backend, UI checkbox, app.js wiring, tests). Marked Done.
-- Picked AI-23 (Thinking budget toggle + cost badge). Implemented, tested, committed (594efdb).
-- Filed AI-32: emit usage_update in native-tools streaming path (~3 LOC follow-up).
-- Board hygiene: no blocked issues; all Todo issues < 11 days old, no stale comments needed.
-- Pushed 1 commit to origin.
+- Synced `feature/new-updates` — already up to date at d44e6ec (user's UIA/click/OCR commits).
+- Read last 5 PM briefs, standing policy, and RESEARCH_NOTES (outer repo, latest: 2026-05-31 triage).
+- Ran full `pytest -q` — **243 passed, 1 skipped, 0 failed** baseline (user's 5 commits added 33 new tests since last PM run).
+- UI smoke: GET / → 200, server killed cleanly, no orphan processes.
+- Linear survey: 0 In Progress, 0 blocked. Only real shippable Todo: AI-13 (needs browser-tab infra, skipped prior run). Promoted 4 Backlog items.
+- Shipped AI-32: usage_update in hierarchical plan path.
+- Shipped AI-31: task_id in git auto-commit message.
+- Shipped AI-27: background session-token pruning.
+- Discovered AI-30 (anchor automation.json) is pre-implemented (workspace_state_path already respects AI_COMPUTER_WORKSPACE); marked Done.
+- Board hygiene: all issues < 12 days old, no stale/blocked items, no file-gone refs.
+- Filed AI-33 (SSE backpressure, Backlog).
 
 ## Tests
-- Unit/integration: **210 passed, 1 skipped, 0 failed** (25.5s) — +5 from new tests
-- UI smoke: GET / → 200, /healthz ok; no orphan processes
+- Unit/integration: **247 passed, 1 skipped, 0 failed** (28.5s) — Δ +4 from baseline
+- UI smoke: GET / → 200, no orphan processes
 
 ## Repaired
 - none (baseline was already green)
 
 ## Shipped
-- **AI-23:** Thinking budget toggle + live token cost badge — `thinking_budget` (off/standard/extended) flows through CreateTaskRequest → environment_payload → run_task → PlannerProvider. Anthropic `_chat_anthropic` adds `thinking: {type:"enabled", budget_tokens:5k/16k}` + `anthropic-beta` header when non-off; text-block extraction handles interleaved thinking blocks. Agent emits `usage_update` SSE after each hierarchical-path turn. UI: Thinking select in `.composer-options`; app.js reads it and sends in payload; `usage_update` handler updates `.usage-badge` chip on active history item; style.css badge chip. 6 new tests. (commit 594efdb)
+- **AI-32:** emit usage_update SSE when hierarchical plan completes — was missing from the hierarchical path (lines ~1271-1273 in agent.py) that returns early without entering the streaming ReAct loop where usage_update was already emitted. 1 LOC + 1 test.
+- **AI-31:** include task_id[:8] in git auto-commit message body — `_git_commit_file()` now accepts `task_id=""` and appends `task: {id[:8]}` to the message body. 4 LOC + 2 tests.
+- **AI-27:** background session-token pruning loop — `_prune_sessions_loop()` started in `_lifespan`, cancelled at shutdown alongside telegram/discord. 9 LOC + 1 test.
 
 ## Polished (unsolicited)
 - none
 
 ## New issues filed
-- **AI-32:** Emit `usage_update` in native-tools streaming path (~3 LOC). The event currently only fires from the hierarchical loop; the primary `stream_chat_with_tools` path doesn't emit it. Medium priority, Backlog.
+- **AI-33:** SSE asyncio queue backpressure for slow/mobile clients — `_stream_chunk()` has no asyncio.Queue throttling; unbuffered on slow networks. ~120 LOC, Medium priority, Backlog. Source: 2026-05-31 research triage.
 
 ## Decisions I made (and why)
-- **AI-21 marked Done without new code:** All three acceptance-criteria components (plan-first toggle in UI, API param, agent logic) were already implemented in commit 2d9744d. Per playbook, same approach as prior pre-impl discoveries (AI-26, AI-19).
-- **Picked AI-23 over AI-13 (higher priority):** AI-13 (Private Context Bridge) has no `needs-design` label but requires reading open browser tabs via browser MCP — no infrastructure for that exists in the codebase. Implementing it would require new browser automation code that can't be tested automatically in this run. AI-23 had clear scope and fully testable acceptance criteria.
-- **`usage_update` emission only in hierarchical path this run:** Filed AI-32 for the native-tools path follow-up rather than expanding scope mid-feature. Token badge will update during hierarchical tasks; native-tools tasks need AI-32.
-- **Anthropic beta header `interleaved-thinking-2025-05-14`:** Required for extended thinking API per Anthropic docs as of 2025-05.
+- **AI-30 marked pre-implemented:** Issue was filed when `automation.py` used a bare `"automation.json"` literal. Current code already uses `workspace_state_path(_REGISTRY_FILE)` which respects `AI_COMPUTER_WORKSPACE`. My attempt to add `_registry_path()` broke 5 automation tests by changing the fallback path from `./automation.json` to `~/.config/ai_computer/automation.json` — tests relied on the CWD behavior. Reverted and marked Done with a comment explaining.
+- **Promoted Backlog items instead of attempting AI-13:** All real Todo issues are needs-design. AI-13 (Private Context Bridge) was explicitly skipped prior run for lacking browser-tab infrastructure. The Backlog items (AI-32, AI-31, AI-27) had clear acceptance criteria, small scope, and directly touched code reviewed this run.
 
 ## Skipped / blocked / NEEDS HUMAN
-- none
+- **AI-13:** Private Context Bridge — skipped again (prior run's judgment held: requires browser-tab reading infrastructure not yet in codebase). Will need design pass before implementation.
+- **AI-5, AI-14, AI-18:** all needs-design → skipped per contract.
 
 ## Risk flags for this push
-- `app/providers.py` `_chat_anthropic`: `_THINKING_BUDGETS` dict defined locally inside the method on each call (minor inefficiency, but avoids module-level state). No production path changes when `thinking_budget == "off"` — the `payload["thinking"]` key is only added conditionally.
-- `app/agent.py`: `provider.thinking_budget = thinking_budget` sets an attr on the provider after creation. Idempotent and safe.
-- New `usage_update` SSE event: purely additive; existing clients that don't handle it will silently ignore it.
+- `app/agent.py` AI-32: additive single line at hierarchical-path completion; no production path removed.
+- `app/agent.py` AI-31: `_git_commit_file` signature change adds optional `task_id=""` param — all existing callers get default behavior; updated existing mocks in tests.
+- `app/main.py` AI-27: `_prune_sessions_loop` is a 300s-sleep loop; negligible overhead. Shutdown cancel is in the existing task cancel loop.
 
 ## Health snapshot
-- Full suite: **210 passed, 1 skipped, 0 failed**  (Δ vs last run: +5 passed)
-- Open Todo issues: 7  (AI-5/14/18 needs-design; AI-13 pickable; AI-1/2/3/4 onboarding)  (Δ: -1 AI-23 Done, -1 AI-21 Done)
+- Full suite: **247 passed, 1 skipped, 0 failed**  (Δ vs last run: +37 passed — 33 from user commits, 4 from this run)
+- Open Todo issues: 8 (4 real: AI-5/14/18 needs-design + AI-13; 4 Linear placeholders)  (Δ: ±0)
 - In Progress / blocked / needs-design: 0 / 0 / 3
-- Lines shipped this run: ~149  /  Last 7 runs avg: ~155
-- Trend: **healthy** — suite green, AI-23 shipped, queue shrinking
-- Haiku research last contributed: 2026-05-20 (on feature/new-updates; newer notes on separate branch)
+- Lines shipped this run: ~117  /  Last 7 runs avg: ~145
+- Trend: **healthy** — suite green, 3 backlog items closed, user's UIA commits cleanly integrated
+- Haiku research last contributed: 2026-05-31 (outer repo)
 
 ## Next run will likely tackle
-- **AI-13:** Private Context Bridge (High priority, no needs-design) — requires surveying what browser-tab reading capability exists; may need to add a `read_browser_tabs()` helper using existing MCP browser tools
-- **AI-32:** Emit usage_update in native-tools streaming path (~3 LOC, quick follow-up to AI-23)
+- **AI-8:** Watch & Act slice 2 — filesystem-watch trigger (Backlog → promote, ~100 LOC, slice 1 already shipped)
+- **AI-13:** Private Context Bridge — survey browser-tab reading capability (audit `app/tools.py` browser actions, decide if scope is tractable)

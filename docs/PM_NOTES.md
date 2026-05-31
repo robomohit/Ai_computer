@@ -1409,3 +1409,64 @@ Verify AI-26 (ALLOWED_MODELS glob may be pre-implemented), then AI-7 (Watch & Ac
 ## Next run will likely tackle
 - **AI-13:** Private Context Bridge (High priority) — survey browser-tab reading capability
 - **AI-32:** Emit usage_update in native-tools path (~3 LOC, quick win)
+
+---
+
+# PM Brief — 2026-05-31 (automated run)
+
+**Starting commit:** `d44e6ec`  →  **Ending commit:** `d16bef6`
+**Run duration:** ~45 min  |  **LOC budget used:** ~117/200
+**Run type:** mixed (3 features shipped, 1 pre-impl discovered)
+
+## What I did
+- Synced `feature/new-updates` — already up to date at d44e6ec (user's UIA/click/OCR commits).
+- Read last 5 PM briefs, standing policy, and RESEARCH_NOTES (outer repo, latest: 2026-05-31 triage).
+- Ran full `pytest -q` — **243 passed, 1 skipped, 0 failed** baseline (user's 5 commits added 33 new tests since last PM run).
+- UI smoke: GET / → 200, server killed cleanly, no orphan processes.
+- Linear survey: 0 In Progress, 0 blocked. Only real shippable Todo: AI-13 (needs browser-tab infra, skipped prior run). Promoted 4 Backlog items.
+- Shipped AI-32: usage_update in hierarchical plan path.
+- Shipped AI-31: task_id in git auto-commit message.
+- Shipped AI-27: background session-token pruning.
+- Discovered AI-30 (anchor automation.json) is pre-implemented; marked Done.
+- Board hygiene: all issues < 12 days old, no stale/blocked items.
+- Filed AI-33 (SSE backpressure, Backlog).
+
+## Tests
+- Unit/integration: **247 passed, 1 skipped, 0 failed** (28.5s) — Δ +4 from baseline
+- UI smoke: GET / → 200, no orphan processes
+
+## Repaired
+- none (baseline was already green)
+
+## Shipped
+- **AI-32:** emit usage_update SSE when hierarchical plan completes (1 LOC + 1 test, commit 7ea1d4a)
+- **AI-31:** task_id[:8] in git auto-commit message body (4 LOC + 2 tests, commit 7ea1d4a)
+- **AI-27:** background session-token pruning loop in _lifespan (9 LOC + 1 test, commit d16bef6)
+
+## Polished (unsolicited)
+- none
+
+## New issues filed
+- **AI-33:** SSE asyncio queue backpressure for slow/mobile clients (~120 LOC, Medium, Backlog)
+
+## Decisions I made (and why)
+- **AI-30 marked pre-implemented:** `workspace_state_path(_REGISTRY_FILE)` already respects `AI_COMPUTER_WORKSPACE`. Reverted my `_registry_path()` change after it broke 5 tests (new fallback path conflicted with test CWD assumptions).
+- **Promoted Backlog over attempting AI-13:** All real Todo issues are needs-design or infra-blocked. Backlog items had clear scope + touched code reviewed this run.
+
+## Skipped / blocked / NEEDS HUMAN
+- none
+
+## Risk flags for this push
+- `_git_commit_file` signature change: optional `task_id=""` param, all existing callers get default behavior.
+
+## Health snapshot
+- Full suite: **247 passed, 1 skipped, 0 failed**  (Δ vs last run: +37 — 33 user commits, 4 this run)
+- Open Todo issues: 8 (4 real: needs-design × 3 + AI-13; 4 Linear placeholders)
+- In Progress / blocked / needs-design: 0 / 0 / 3
+- Lines shipped this run: ~117  /  Last 7 runs avg: ~145
+- Trend: **healthy**
+- Haiku research last contributed: 2026-05-31 (outer repo)
+
+## Next run will likely tackle
+- **AI-8:** Watch & Act slice 2 — filesystem-watch trigger (~100 LOC)
+- **AI-13:** Private Context Bridge — survey browser-tab reading capability
