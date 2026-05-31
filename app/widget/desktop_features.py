@@ -795,11 +795,20 @@ def ocr_available() -> bool:
         return False
 
 
+def _ocr_norm(s: str) -> str:
+    """Normalise text for OCR matching: lowercase, drop the Windows menu
+    accelerator '&' ("&File" -> "file"), and strip leading/trailing punctuation
+    so "Find...", "Edit," and "(Reply)" all compare as their bare label. Inner
+    characters are kept so multi-word labels still line up."""
+    s = (s or "").replace("&", "").strip().lower()
+    return s.strip(".,:;!?()[]{}<>\"'`…-—–/\\|")
+
+
 def ocr_find_in_app(query: str, app_hint: str = "") -> dict:
     """OCR FALLBACK: find the on-screen pixel centre of text matching `query`
     inside the app window — used when UIA has no accessible control. Local +
     fast (no vision model). Returns {ok, x, y, matched, score}."""
-    q = (query or "").strip().lower()
+    q = _ocr_norm(query)
     if not q:
         return {"ok": False, "error": "empty query"}
     wr = app_window_rect(app_hint)
@@ -816,7 +825,9 @@ def ocr_find_in_app(query: str, app_hint: str = "") -> dict:
     best, best_score = None, 0
     # single-word matches
     for wd in words:
-        t = wd["text"].lower()
+        t = _ocr_norm(wd["text"])
+        if not t:
+            continue
         if t == q:
             score = 100
         elif t.startswith(q):
@@ -835,7 +846,7 @@ def ocr_find_in_app(query: str, app_hint: str = "") -> dict:
             grp = words[i:i + n]
             if max(g["y"] for g in grp) - min(g["y"] for g in grp) > 16:
                 continue
-            phrase = " ".join(g["text"] for g in grp).lower()
+            phrase = " ".join(_ocr_norm(g["text"]) for g in grp).strip()
             if phrase == q:
                 score = 100 + n
             elif q in phrase:

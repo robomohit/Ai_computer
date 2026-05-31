@@ -88,6 +88,29 @@ def test_uia_find_reports_miss_when_uia_and_ocr_both_fail(monkeypatch, tmp_path)
     assert res.data["overlay"]["control_layer"] == "UIA miss"
 
 
+def test_ocr_norm_matches_through_punctuation_and_accelerators(monkeypatch):
+    import app.widget.desktop_features as df
+
+    # OCR sees menu labels with an accelerator '&' and trailing ellipsis; the
+    # agent's query is the bare word. Normalisation should still match exactly.
+    screen = [
+        {"text": "&File", "x": 20, "y": 10},
+        {"text": "Find...", "x": 80, "y": 10},
+        {"text": "Edit,", "x": 140, "y": 10},
+    ]
+    monkeypatch.setattr(df, "app_window_rect",
+                        lambda a: {"left": 0, "top": 0, "width": 400, "height": 300})
+    monkeypatch.setattr(df, "win_ocr_words", lambda l, t, w, h: screen)
+
+    hit = df.ocr_find_in_app("Find", "Notepad")
+    assert hit["ok"] is True
+    assert (hit["x"], hit["y"]) == (80, 10)
+    assert hit["score"] == 100  # exact after normalising the trailing "..."
+
+    assert df.ocr_find_in_app("File", "Notepad")["score"] == 100  # '&' stripped
+    assert df.ocr_find_in_app("Edit", "Notepad")["score"] == 100  # ',' stripped
+
+
 def test_uia_type_reports_verification(monkeypatch, tmp_path):
     import app.widget.desktop_features as df
 
