@@ -2146,10 +2146,11 @@ class ToolExecutor:
         return ""
 
     @staticmethod
-    def _app_rect_token(app: str) -> str:
+    def _app_rect_token(app: str, payload: Optional[Dict[str, int]] = None) -> str:
         """Encode the target app WINDOW bounds so the overlay can draw a glowing
-        edge around the whole app the agent is working in."""
-        r = ToolExecutor._app_rect_payload(app)
+        edge around the whole app the agent is working in. Pass `payload` to reuse
+        an already-fetched rect and skip a second window-enumeration lookup."""
+        r = payload if payload is not None else ToolExecutor._app_rect_payload(app)
         if r:
             return f" [app:{r['left']},{r['top']},{r['width']},{r['height']}]"
         return ""
@@ -2216,7 +2217,7 @@ class ToolExecutor:
             rect=rect,
             app_rect=app_rect,
         )
-        return ToolResult(ok=True, output="UIA matches:\n" + "\n".join(lines) + tok + self._app_rect_token(app), data=data)
+        return ToolResult(ok=True, output="UIA matches:\n" + "\n".join(lines) + tok + self._app_rect_token(app, app_rect), data=data)
 
     # ── Hybrid resolver fallbacks: UIA -> OCR pixel (local, no model) -> the
     #    agent escalates to the vision model only if both miss. ──────────────
@@ -2245,7 +2246,7 @@ class ToolExecutor:
             )
             return ToolResult(ok=True, data=data, output=(
                 f"Clicked '{matched}' via OCR fallback at ({x},{y}). "
-                f"[uia:{x-14},{y-12},28,24]{self._app_rect_token(app)}"))
+                f"[uia:{x-14},{y-12},28,24]{self._app_rect_token(app, app_rect)}"))
         except Exception:
             return None
 
@@ -2272,7 +2273,7 @@ class ToolExecutor:
             return ToolResult(ok=True, data=data, output=(
                 f"OCR matches (no accessible control):\n1. {matched} [OcrText] "
                 f"@ ({x},{y}) via screen text. [uia:{x-14},{y-12},28,24]"
-                f"{self._app_rect_token(app)}"))
+                f"{self._app_rect_token(app, app_rect)}"))
         except Exception:
             return None
 
@@ -2319,7 +2320,7 @@ class ToolExecutor:
             )
             return ToolResult(ok=True, data=data, output=(
                 f"Typed into '{matched}' via OCR fallback at ({x},{y}). "
-                f"[uia:{x-14},{y-12},28,24]{self._app_rect_token(app)}"))
+                f"[uia:{x-14},{y-12},28,24]{self._app_rect_token(app, app_rect)}"))
         except Exception:
             return None
 
@@ -2390,7 +2391,7 @@ class ToolExecutor:
             return ToolResult(ok=False, output=res.get("error", "click failed"), data=data)
         app_rect = self._app_rect_payload(app)
         target = str(res.get("target") or query or "").strip()
-        tok = self._uia_rect_token(res.get("rect", {})) + self._app_rect_token(app)
+        tok = self._uia_rect_token(res.get("rect", {})) + self._app_rect_token(app, app_rect)
         data = _uia_result_data(
             res,
             tool="uia_click",
@@ -2436,7 +2437,7 @@ class ToolExecutor:
         verified = self._verify_typed(query, app, text)
         app_rect = self._app_rect_payload(app)
         target = str(res.get("target") or query or "").strip()
-        tok = self._uia_rect_token(res.get("rect", {})) + self._app_rect_token(app)
+        tok = self._uia_rect_token(res.get("rect", {})) + self._app_rect_token(app, app_rect)
         data = _uia_result_data(
             res,
             tool="uia_type",
@@ -2497,7 +2498,7 @@ class ToolExecutor:
             "top": int(res.get("top", 0)),
             "width": int(res.get("width", 0)),
             "height": int(res.get("height", 0)),
-        }) + self._app_rect_token(app)
+        }) + self._app_rect_token(app, app_rect)
         data = _uia_result_data(
             res,
             tool="uia_wait",
