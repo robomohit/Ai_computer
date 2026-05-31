@@ -245,6 +245,38 @@ def test_no_electron_hint_for_native_app(monkeypatch, tmp_path):
     assert "electron_hint" not in res.data
 
 
+def test_uia_click_sequence_one_call(monkeypatch, tmp_path):
+    import app.widget.desktop_features as df
+
+    seen = []
+    monkeypatch.setattr(df, "invoke_ui_element",
+                        lambda q, a: seen.append(q) or {"ok": True, "target": q})
+    monkeypatch.setattr(df, "app_window_rect",
+                        lambda a: {"left": 0, "top": 0, "width": 400, "height": 300})
+
+    res = _ex(tmp_path).uia_click_sequence(
+        ["Two", "Five", "Six", "Minus", "Eight", "Nine", "Equals"], "Calculator")
+    assert res.ok is True
+    assert res.data["clicked"] == 7 and res.data["total"] == 7
+    assert seen == ["Two", "Five", "Six", "Minus", "Eight", "Nine", "Equals"]
+
+
+def test_uia_click_sequence_stops_on_miss(monkeypatch, tmp_path):
+    import app.widget.desktop_features as df
+
+    # 'Nine' isn't found in UIA and OCR also misses -> stop, report which failed.
+    monkeypatch.setattr(df, "invoke_ui_element",
+                        lambda q, a: {"ok": q != "Nine", "target": q})
+    monkeypatch.setattr(df, "ocr_find_in_app", lambda q, a: {"ok": False})
+    monkeypatch.setattr(df, "app_window_rect",
+                        lambda a: {"left": 0, "top": 0, "width": 0, "height": 0})
+
+    res = _ex(tmp_path).uia_click_sequence("Two,Nine,Equals", "Calculator")
+    assert res.ok is False
+    assert res.data["failed"] == "Nine"
+    assert res.data["clicked"] == 1  # only Two landed before the miss
+
+
 def test_uia_type_reports_verification(monkeypatch, tmp_path):
     import app.widget.desktop_features as df
 

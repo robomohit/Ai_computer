@@ -93,6 +93,7 @@ _DESKTOP_POST_ACTION_TYPES = {
 _UIA_ACTION_TYPES = {
     ActionType.uia_find,
     ActionType.uia_click,
+    ActionType.uia_click_sequence,
     ActionType.uia_type,
     ActionType.uia_wait,
 }
@@ -1382,13 +1383,15 @@ class AgentService:
                         "name, uia_wait, or electron_unlock, and if still stuck say so plainly in finish. NEVER "
                         "claim a task succeeded without having read the concrete result back; a confident but "
                         "wrong 'done' is the worst possible outcome.\n"
-                        "- For Calculator/math: CLICK the on-screen buttons by their accessible names (One, Two, "
-                        "Plus, 'Multiply by', Equals, Clear) with uia_click — do NOT uia_type into the "
-                        "Calculator, it has no editable text field, and never invent control names like "
-                        "'Button::Digit 1'. Enter things in the right ORDER: digits, then operator, then digits, "
-                        "then Equals. 47 × 89 → click Four,Seven,'Multiply by',Eight,Nine,Equals (reads 4183). "
-                        "Chained (12+8)×5 → One,Two,Plus,Eight,Equals (reads 20), then 'Multiply by',Five,Equals "
-                        "(reads 100). Read the display back and report the number.\n"
+                        "- MULTI-CLICK SEQUENCES → use uia_click_sequence (ONE call, no drift between clicks). "
+                        "Any known run of buttons — Calculator digits/operators, tabbing a form — should go in a "
+                        "single uia_click_sequence with the targets in order, NOT many separate uia_click calls. "
+                        "Do NOT uia_type into the Calculator (no text field) and never invent names like "
+                        "'Button::Digit 1' — use the accessible names (One..Nine, Plus, Minus, 'Multiply by', "
+                        "'Divide by', Equals, Clear). 47×89 → uia_click_sequence targets "
+                        "[Four,Seven,'Multiply by',Eight,Nine,Equals] (reads 4183). Chained (12+8)×5 → one "
+                        "sequence [One,Two,Plus,Eight,Equals] (reads 20) then another [<read 20>,'Multiply by',"
+                        "Five,Equals] → 100. After the sequence, uia_find the display and report the number.\n"
                         "- RECOVER, don't surrender: if your verified outcome is wrong or incomplete (e.g. you "
                         "clicked Clear by mistake and the display is 0), do the steps again correctly — do NOT "
                         "finish with a vague apology like 'I misunderstood' or 'next time'. Either deliver the "

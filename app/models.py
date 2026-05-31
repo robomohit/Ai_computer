@@ -98,6 +98,7 @@ class ActionType(str, Enum):
     screen_context = "screen_context"
     uia_find = "uia_find"
     uia_click = "uia_click"
+    uia_click_sequence = "uia_click_sequence"
     uia_type = "uia_type"
     uia_wait = "uia_wait"
     electron_check = "electron_check"

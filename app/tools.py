@@ -2415,6 +2415,54 @@ class ToolExecutor:
             pass
         return None
 
+    def uia_click_sequence(self, targets, app: str = "", stop_on_error: bool = True):
+        """Click a whole ORDERED list of controls in ONE call (each resolved by
+        UIA InvokePattern, with the same OCR pixel fallback as uia_click). This
+        collapses an N-click task (e.g. entering digits + operators into the
+        Calculator, or tabbing a form) into a single tool round-trip — which is
+        the key reliability win: the model can't drift or lose track between
+        clicks because there is no intermediate turn. Returns a per-step summary.
+        `targets` may be a list or a comma-separated string."""
+        from .widget.desktop_features import invoke_ui_element
+        if isinstance(targets, str):
+            targets = [t.strip() for t in targets.split(",") if t.strip()]
+        targets = [str(t).strip() for t in (targets or []) if str(t).strip()]
+        if not targets:
+            return ToolResult(ok=False, output="uia_click_sequence: no targets given.")
+        steps, clicked, failed = [], 0, None
+        for tgt in targets:
+            res = invoke_ui_element(tgt, app)
+            if res.get("ok"):
+                clicked += 1
+                steps.append(f"{tgt}=ok")
+            else:
+                ocr = self._ocr_click_fallback(tgt, app)
+                if ocr is not None and ocr.ok:
+                    clicked += 1
+                    steps.append(f"{tgt}=ocr")
+                else:
+                    failed = tgt
+                    steps.append(f"{tgt}=MISS")
+                    if stop_on_error:
+                        break
+            time.sleep(0.06)  # let each click register before the next
+        ok = failed is None
+        app_rect = self._app_rect_payload(app)
+        head = (f"Clicked {clicked}/{len(targets)} in sequence"
+                + ("" if ok else f"; STOPPED at '{failed}' (not found)"))
+        data = {"ok": ok, "clicked": clicked, "total": len(targets),
+                "steps": steps, "failed": failed}
+        data["overlay"] = _overlay_payload(
+            "app_focus" if app_rect else "status", "uia_click_sequence", "click",
+            head, target=(failed or (targets[-1] if targets else "")),
+            app_rect=app_rect, phase=("done" if ok else "error"),
+            control_layer=("UIA exact" if ok else "UIA miss"))
+        out = head + "\n" + " → ".join(steps) + self._app_rect_token(app, app_rect)
+        if not ok:
+            out += ("\nThe rest were not attempted. Re-check the name of the "
+                    "missing control with uia_find, then continue.")
+        return ToolResult(ok=ok, output=out, data=data)
+
     def uia_click(self, query: str, app: str = ""):
         from .widget.desktop_features import invoke_ui_element
         before = self._click_snapshot()
@@ -2695,6 +2743,7 @@ class ToolExecutor:
         "find_symbol":    ["symbol"],
         "uia_find":       ["query"],
         "uia_click":      ["query"],
+        "uia_click_sequence": ["targets"],
         "uia_type":       ["query", "text"],
         "uia_wait":       ["query"],
         "electron_check": ["exe"],
@@ -2882,6 +2931,7 @@ class ToolExecutor:
             ActionType.screen_context: lambda a: self.screen_context(),
             ActionType.uia_find: lambda a: self.uia_find(a.args["query"], a.args.get("app", ""), a.args.get("limit", 5)),
             ActionType.uia_click: lambda a: self.uia_click(a.args["query"], a.args.get("app", "")),
+            ActionType.uia_click_sequence: lambda a: self.uia_click_sequence(a.args.get("targets") or a.args.get("queries") or a.args.get("query"), a.args.get("app", ""), a.args.get("stop_on_error", True)),
             ActionType.uia_type: lambda a: self.uia_type(a.args["query"], a.args["text"], a.args.get("app", ""), a.args.get("clear_first", False), a.args.get("submit", False)),
             ActionType.uia_wait: lambda a: self.uia_wait(a.args["query"], a.args.get("app", ""), a.args.get("timeout", 6.0)),
             ActionType.electron_check: lambda a: self.electron_check(a.args["exe"]),
