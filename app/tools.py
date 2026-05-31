@@ -2187,10 +2187,92 @@ class ToolExecutor:
         )
         return ToolResult(ok=True, output="UIA matches:\n" + "\n".join(lines) + tok + self._app_rect_token(app), data=data)
 
+    # ── Hybrid resolver fallbacks: UIA -> OCR pixel (local, no model) -> the
+    #    agent escalates to the vision model only if both miss. ──────────────
+    def _ocr_click_fallback(self, query: str, app: str):
+        """On a UIA miss, locate the target by on-screen TEXT (Windows OCR) and
+        pixel-click it. Returns a ToolResult tagged 'OCR fallback', or None if
+        OCR can't find it (then the caller reports the UIA miss)."""
+        try:
+            from .widget.desktop_features import ocr_find_in_app
+            import pyautogui
+            hit = ocr_find_in_app(query, app)
+            if not hit.get("ok"):
+                return None
+            x, y = int(hit["x"]), int(hit["y"])
+            pyautogui.click(x, y)
+            app_rect = self._app_rect_payload(app)
+            matched = hit.get("matched") or query
+            data = {"ok": True, "method": "ocr_pixel", "matched": matched,
+                    "x": x, "y": y}
+            data["overlay"] = _overlay_payload(
+                "app_focus" if app_rect else "status", "uia_click", "click",
+                f"Clicking “{matched}” (OCR)", target=matched, app_rect=app_rect,
+                rect={"left": x - 14, "top": y - 12, "width": 28, "height": 24},
+                control_layer="OCR fallback",
+                control_reason="no accessible control — matched on-screen text",
+            )
+            return ToolResult(ok=True, data=data, output=(
+                f"Clicked '{matched}' via OCR fallback at ({x},{y}). "
+                f"[uia:{x-14},{y-12},28,24]{self._app_rect_token(app)}"))
+        except Exception:
+            return None
+
+    def _ocr_type_fallback(self, query: str, text: str, app: str,
+                           clear_first: bool, submit: bool):
+        """On a UIA miss for a text field: OCR-find the field/label, click to
+        focus it, then paste the text. Returns a ToolResult or None."""
+        try:
+            from .widget.desktop_features import ocr_find_in_app
+            import pyautogui, uiautomation as uia
+            hit = ocr_find_in_app(query, app)
+            if not hit.get("ok"):
+                return None
+            x, y = int(hit["x"]), int(hit["y"])
+            pyautogui.click(x, y)
+            time.sleep(0.12)
+            if clear_first:
+                pyautogui.hotkey("ctrl", "a")
+                pyautogui.press("delete")
+            try:
+                saved = uia.GetClipboardText()
+            except Exception:
+                saved = ""
+            uia.SetClipboardText(text)
+            pyautogui.hotkey("ctrl", "v")
+            time.sleep(0.1)
+            if submit:
+                pyautogui.press("enter")
+            try:
+                if saved:
+                    uia.SetClipboardText(saved)
+            except Exception:
+                pass
+            app_rect = self._app_rect_payload(app)
+            matched = hit.get("matched") or query
+            data = {"ok": True, "method": "ocr_pixel_type", "matched": matched,
+                    "x": x, "y": y}
+            data["overlay"] = _overlay_payload(
+                "app_focus" if app_rect else "status", "uia_type", "type",
+                f"Typing into “{matched}” (OCR)", target=matched, app_rect=app_rect,
+                rect={"left": x - 14, "top": y - 12, "width": 28, "height": 24},
+                control_layer="OCR fallback",
+                control_reason="no accessible field — matched on-screen text",
+            )
+            return ToolResult(ok=True, data=data, output=(
+                f"Typed into '{matched}' via OCR fallback at ({x},{y}). "
+                f"[uia:{x-14},{y-12},28,24]{self._app_rect_token(app)}"))
+        except Exception:
+            return None
+
     def uia_click(self, query: str, app: str = ""):
         from .widget.desktop_features import invoke_ui_element
         res = invoke_ui_element(query, app)
         if not res.get("ok"):
+            # Auto-fallback: try OCR pixel-click before giving up to the model.
+            ocr_result = self._ocr_click_fallback(query, app)
+            if ocr_result is not None:
+                return ocr_result
             app_rect = self._app_rect_payload(app)
             data = dict(res)
             data["overlay"] = _overlay_payload(
@@ -2203,7 +2285,7 @@ class ToolExecutor:
                 phase="error",
                 fallback_reason="uia_no_match",
                 control_layer="UIA miss",
-                control_reason="accessible control not found",
+                control_reason="no accessible control and OCR found no match",
             )
             return ToolResult(ok=False, output=res.get("error", "click failed"), data=data)
         app_rect = self._app_rect_payload(app)
@@ -2224,6 +2306,10 @@ class ToolExecutor:
         from .widget.desktop_features import type_into_ui_element
         res = type_into_ui_element(query, text, app, clear_first, submit)
         if not res.get("ok"):
+            # Auto-fallback: OCR-find the field, click to focus, then paste.
+            ocr_result = self._ocr_type_fallback(query, text, app, clear_first, submit)
+            if ocr_result is not None:
+                return ocr_result
             app_rect = self._app_rect_payload(app)
             data = dict(res)
             data["overlay"] = _overlay_payload(
@@ -2236,9 +2322,12 @@ class ToolExecutor:
                 phase="error",
                 fallback_reason="uia_no_match",
                 control_layer="UIA miss",
-                control_reason="accessible control not found",
+                control_reason="no accessible field and OCR found no match",
             )
             return ToolResult(ok=False, output=res.get("error", "type failed"), data=data)
+        # Post-action verification: read the control back and confirm the text
+        # actually landed (computer mastery, not just "fire and hope").
+        verified = self._verify_typed(query, app, text)
         app_rect = self._app_rect_payload(app)
         target = str(res.get("target") or query or "").strip()
         tok = self._uia_rect_token(res.get("rect", {})) + self._app_rect_token(app)
@@ -2251,7 +2340,30 @@ class ToolExecutor:
             rect=res.get("rect", {}),
             app_rect=app_rect,
         )
-        return ToolResult(ok=True, output=f"Typed into '{res.get('target')}' via {res.get('method')}.{tok}", data=data)
+        data["verified"] = verified
+        if isinstance(data.get("overlay"), dict):
+            data["overlay"]["verified"] = verified
+        verdict = " (verified)" if verified is True else (
+            " (could not verify)" if verified is False else "")
+        return ToolResult(ok=True, output=f"Typed into '{res.get('target')}' via {res.get('method')}{verdict}.{tok}", data=data)
+
+    def _verify_typed(self, query: str, app: str, text: str):
+        """Read the control back after typing; True if the text is present,
+        False if a value read-back contradicts it, None if not verifiable."""
+        try:
+            from .widget.desktop_features import _find_uia_control
+            ctrl, _info = _find_uia_control(query, app)
+            if ctrl is None:
+                return None
+            try:
+                val = ctrl.GetValuePattern().Value
+            except Exception:
+                return None
+            if val is None:
+                return None
+            return (text or "").strip() in str(val)
+        except Exception:
+            return None
 
     def uia_wait(self, query: str, app: str = "", timeout: float = 6.0):
         from .widget.desktop_features import wait_for_ui_element

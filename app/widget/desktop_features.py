@@ -741,6 +741,120 @@ def app_window_rect(app_hint: str) -> dict:
         return {"left": 0, "top": 0, "width": 0, "height": 0}
 
 
+async def _win_ocr_async(left: int, top: int, width: int, height: int) -> list:
+    import io
+    import winsdk.windows.media.ocr as _ocr
+    import winsdk.windows.graphics.imaging as _img
+    import winsdk.windows.storage.streams as _st
+    from PIL import ImageGrab
+    region = (left, top, left + width, top + height)
+    img = ImageGrab.grab(region).convert("RGB")
+    buf = io.BytesIO()
+    img.save(buf, format="BMP")
+    data = buf.getvalue()
+    stream = _st.InMemoryRandomAccessStream()
+    writer = _st.DataWriter(stream.get_output_stream_at(0))
+    writer.write_bytes(data)
+    await writer.store_async()
+    decoder = await _img.BitmapDecoder.create_async(stream)
+    bmp = await decoder.get_software_bitmap_async()
+    engine = _ocr.OcrEngine.try_create_from_user_profile_languages()
+    if engine is None:
+        return []
+    result = await engine.recognize_async(bmp)
+    out = []
+    for line in result.lines:
+        for w in line.words:
+            r = w.bounding_rect
+            out.append({
+                "text": w.text,
+                "x": int(left + r.x + r.width / 2),
+                "y": int(top + r.y + r.height / 2),
+                "w": int(r.width), "h": int(r.height),
+            })
+    return out
+
+
+def win_ocr_words(left: int, top: int, width: int, height: int) -> list:
+    """Windows-native OCR of a screen region -> [{text, x, y, w, h}] in SCREEN
+    coords. Uses Windows.Media.Ocr (no external binary). [] if unavailable."""
+    if width <= 0 or height <= 0:
+        return []
+    try:
+        import asyncio
+        return asyncio.run(_win_ocr_async(left, top, width, height))
+    except Exception:
+        return []
+
+
+def ocr_available() -> bool:
+    try:
+        import winsdk.windows.media.ocr as _ocr  # noqa: F401
+        return _ocr.OcrEngine.try_create_from_user_profile_languages() is not None
+    except Exception:
+        return False
+
+
+def ocr_find_in_app(query: str, app_hint: str = "") -> dict:
+    """OCR FALLBACK: find the on-screen pixel centre of text matching `query`
+    inside the app window — used when UIA has no accessible control. Local +
+    fast (no vision model). Returns {ok, x, y, matched, score}."""
+    q = (query or "").strip().lower()
+    if not q:
+        return {"ok": False, "error": "empty query"}
+    wr = app_window_rect(app_hint)
+    if not wr.get("width"):
+        try:
+            from PIL import ImageGrab
+            sw, sh = ImageGrab.grab().size
+            wr = {"left": 0, "top": 0, "width": sw, "height": sh}
+        except Exception:
+            return {"ok": False, "error": "no app window / screen"}
+    words = win_ocr_words(wr["left"], wr["top"], wr["width"], wr["height"])
+    if not words:
+        return {"ok": False, "error": "ocr unavailable or no text found"}
+    best, best_score = None, 0
+    # single-word matches
+    for wd in words:
+        t = wd["text"].lower()
+        if t == q:
+            score = 100
+        elif t.startswith(q):
+            score = 82
+        elif q in t:
+            score = 64
+        elif len(t) >= 3 and t in q:
+            score = 44
+        else:
+            score = 0
+        if score > best_score:
+            best_score, best = score, wd
+    # consecutive-word phrase matches (same line)
+    for n in (2, 3, 4):
+        for i in range(len(words) - n + 1):
+            grp = words[i:i + n]
+            if max(g["y"] for g in grp) - min(g["y"] for g in grp) > 16:
+                continue
+            phrase = " ".join(g["text"] for g in grp).lower()
+            if phrase == q:
+                score = 100 + n
+            elif q in phrase:
+                score = 74
+            else:
+                score = 0
+            if score > best_score:
+                best_score = score
+                best = {
+                    "text": " ".join(g["text"] for g in grp),
+                    "x": sum(g["x"] for g in grp) // len(grp),
+                    "y": sum(g["y"] for g in grp) // len(grp),
+                }
+    if best and best_score >= 44:
+        return {"ok": True, "x": best["x"], "y": best["y"],
+                "matched": best["text"], "score": best_score}
+    return {"ok": False, "error": f"no OCR text matched '{query}'"}
+
+
 def _onscreen_rect(ctrl) -> dict:
     """Current on-screen bounds of a live control as {left, top, width, height}.
     Read AFTER ScrollIntoView so virtualized/offscreen controls report real

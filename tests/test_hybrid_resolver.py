@@ -1,0 +1,76 @@
+"""Hybrid resolver: UIA -> OCR pixel (local, no model) -> (agent escalates to
+vision). Plus uia_type post-action verification. These exercise the fallback
+wiring with the OCR + UIA layers mocked, so they run without a real desktop."""
+from pathlib import Path
+
+import app.tools as tools_mod
+from app.tools import ToolExecutor
+
+
+def _ex(tmp_path):
+    return ToolExecutor(Path(tmp_path), home_dir=Path(tmp_path))
+
+
+def test_uia_click_falls_back_to_ocr_on_uia_miss(monkeypatch, tmp_path):
+    import app.widget.desktop_features as df
+
+    # UIA finds nothing...
+    monkeypatch.setattr(df, "invoke_ui_element",
+                        lambda q, a: {"ok": False, "error": "no UIA control matched"})
+    # ...but OCR locates the on-screen text.
+    monkeypatch.setattr(df, "ocr_find_in_app",
+                        lambda q, a: {"ok": True, "x": 329, "y": 216,
+                                      "matched": "Edit", "score": 100})
+    monkeypatch.setattr(df, "app_window_rect",
+                        lambda a: {"left": 0, "top": 0, "width": 800, "height": 600})
+
+    clicked = {}
+    fake_pyautogui = type("PG", (), {"click": staticmethod(
+        lambda x, y: clicked.update(x=x, y=y))})
+    monkeypatch.setitem(__import__("sys").modules, "pyautogui", fake_pyautogui)
+
+    res = _ex(tmp_path).uia_click("Edit", "Notepad")
+    assert res.ok is True
+    assert clicked == {"x": 329, "y": 216}
+    assert res.data["overlay"]["control_layer"] == "OCR fallback"
+    assert res.data["method"] == "ocr_pixel"
+
+
+def test_uia_click_reports_miss_when_uia_and_ocr_both_fail(monkeypatch, tmp_path):
+    import app.widget.desktop_features as df
+
+    monkeypatch.setattr(df, "invoke_ui_element",
+                        lambda q, a: {"ok": False, "error": "no UIA control matched"})
+    monkeypatch.setattr(df, "ocr_find_in_app",
+                        lambda q, a: {"ok": False, "error": "no OCR text matched"})
+    monkeypatch.setattr(df, "app_window_rect",
+                        lambda a: {"left": 0, "top": 0, "width": 0, "height": 0})
+
+    res = _ex(tmp_path).uia_click("Reply", "Chrome")
+    assert res.ok is False
+    # the agent will escalate to the vision model from here
+    assert res.data["overlay"]["control_layer"] == "UIA miss"
+
+
+def test_uia_type_reports_verification(monkeypatch, tmp_path):
+    import app.widget.desktop_features as df
+
+    monkeypatch.setattr(df, "type_into_ui_element",
+                        lambda q, t, a, c, s: {"ok": True, "method": "paste",
+                                               "target": "Text editor", "rect": {}})
+    monkeypatch.setattr(df, "app_window_rect",
+                        lambda a: {"left": 0, "top": 0, "width": 800, "height": 600})
+
+    class _VP:
+        Value = "hello world"
+
+    class _Ctrl:
+        def GetValuePattern(self):
+            return _VP()
+
+    monkeypatch.setattr(df, "_find_uia_control", lambda q, a: (_Ctrl(), {}))
+
+    res = _ex(tmp_path).uia_type("Text editor", "hello world", "Notepad")
+    assert res.ok is True
+    assert res.data["verified"] is True
+    assert "verified" in res.output
