@@ -208,6 +208,43 @@ def test_uia_click_unverifiable_is_not_a_failure(monkeypatch, tmp_path):
     assert "(verified)" not in res.output
 
 
+def test_electron_unlock_hint_on_hard_miss(monkeypatch, tmp_path):
+    import app.widget.desktop_features as df
+
+    # UIA and OCR both miss, AND the target is an Electron app -> the agent is
+    # told it can unlock the DOM instead of just escalating to vision.
+    monkeypatch.setattr(df, "invoke_ui_element",
+                        lambda q, a: {"ok": False, "error": "no UIA control matched"})
+    monkeypatch.setattr(df, "ocr_find_in_app",
+                        lambda q, a: {"ok": False, "error": "no OCR text matched"})
+    monkeypatch.setattr(df, "app_window_rect",
+                        lambda a: {"left": 0, "top": 0, "width": 0, "height": 0})
+    monkeypatch.setattr(df, "electron_hint_for_app",
+                        lambda app: {"exe": r"C:\\Discord\\Discord.exe",
+                                     "tip": "Discord is an Electron app — unlock it."})
+
+    res = _ex(tmp_path).uia_click("Message", "Discord")
+    assert res.ok is False
+    assert res.data["electron_hint"]["exe"].endswith("Discord.exe")
+    assert "Electron" in res.output
+
+
+def test_no_electron_hint_for_native_app(monkeypatch, tmp_path):
+    import app.widget.desktop_features as df
+
+    monkeypatch.setattr(df, "invoke_ui_element",
+                        lambda q, a: {"ok": False, "error": "no UIA control matched"})
+    monkeypatch.setattr(df, "ocr_find_in_app",
+                        lambda q, a: {"ok": False, "error": "no OCR text matched"})
+    monkeypatch.setattr(df, "app_window_rect",
+                        lambda a: {"left": 0, "top": 0, "width": 0, "height": 0})
+    monkeypatch.setattr(df, "electron_hint_for_app", lambda app: None)
+
+    res = _ex(tmp_path).uia_click("Save", "Notepad")
+    assert res.ok is False
+    assert "electron_hint" not in res.data
+
+
 def test_uia_type_reports_verification(monkeypatch, tmp_path):
     import app.widget.desktop_features as df
 

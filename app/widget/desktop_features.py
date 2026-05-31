@@ -481,6 +481,28 @@ def resolve_app_exe(name_or_path: str) -> str:
     return name_or_path
 
 
+def electron_hint_for_app(app_hint: str) -> Optional[dict]:
+    """If `app_hint` resolves to a running Electron app, return a hint telling
+    the agent it can unlock the app's DOM for UIA by relaunching it with
+    --force-renderer-accessibility. None for native apps (where a UIA/OCR miss
+    is genuinely a miss, not a hidden-DOM problem). Used on hard resolver misses
+    so the agent can self-heal on Electron instead of blindly escalating."""
+    try:
+        exe = resolve_app_exe(app_hint or "")
+        if exe and is_electron_app(exe):
+            return {
+                "exe": exe,
+                "tip": (f"{app_hint or 'This app'} is an Electron app — its DOM "
+                        "is invisible to UIA until unlocked. Relaunch it with "
+                        "--force-renderer-accessibility (electron_unlock / "
+                        "/api/desktop/electron/relaunch) and the controls become "
+                        "directly clickable by name."),
+            }
+    except Exception:
+        pass
+    return None
+
+
 def count_app_controls(app_hint: str, cap: int = 60) -> int:
     """Count UIA controls under an app's top-level window (stops early at `cap`).
     Used to tell whether an Electron app already exposes a rich accessibility

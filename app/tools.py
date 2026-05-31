@@ -2189,7 +2189,8 @@ class ToolExecutor:
                 control_layer="UIA miss",
                 control_reason="no accessible control and OCR found no match",
             )
-            return ToolResult(ok=False, output=res.get("error", "no match"), data=data)
+            suffix = self._electron_unlock_hint(app, data)
+            return ToolResult(ok=False, output=res.get("error", "no match") + suffix, data=data)
         lines = [f"{i+1}. {c.get('name') or c.get('automation_id') or '(unnamed)'} "
                  f"[{c.get('control_type')}] @ ({c['x']},{c['y']}) score={c.get('score')}"
                  for i, c in enumerate(res.get("items", []))]
@@ -2249,6 +2250,25 @@ class ToolExecutor:
                 f"[uia:{x-14},{y-12},28,24]{self._app_rect_token(app, app_rect)}"))
         except Exception:
             return None
+
+    def _electron_unlock_hint(self, app: str, data: dict) -> str:
+        """When UIA *and* OCR both miss, check whether the target is an Electron
+        app whose DOM is simply locked to UIA. If so, attach the relaunch hint to
+        `data` and return a one-line suffix for the output so the agent can
+        self-heal (unlock) instead of blindly escalating to vision."""
+        try:
+            from .widget.desktop_features import electron_hint_for_app
+            hint = electron_hint_for_app(app)
+            if hint:
+                data["electron_hint"] = hint
+                if isinstance(data.get("overlay"), dict):
+                    data["overlay"]["control_reason"] = (
+                        "Electron app — DOM locked to UIA; relaunch with "
+                        "--force-renderer-accessibility to unlock")
+                return f" {hint['tip']}"
+        except Exception:
+            pass
+        return ""
 
     def _ocr_find_fallback(self, query: str, app: str):
         """On a UIA find miss, locate the target by on-screen TEXT (Windows OCR)
@@ -2388,7 +2408,8 @@ class ToolExecutor:
                 control_layer="UIA miss",
                 control_reason="no accessible control and OCR found no match",
             )
-            return ToolResult(ok=False, output=res.get("error", "click failed"), data=data)
+            suffix = self._electron_unlock_hint(app, data)
+            return ToolResult(ok=False, output=res.get("error", "click failed") + suffix, data=data)
         app_rect = self._app_rect_payload(app)
         target = str(res.get("target") or query or "").strip()
         tok = self._uia_rect_token(res.get("rect", {})) + self._app_rect_token(app, app_rect)
@@ -2431,7 +2452,8 @@ class ToolExecutor:
                 control_layer="UIA miss",
                 control_reason="no accessible field and OCR found no match",
             )
-            return ToolResult(ok=False, output=res.get("error", "type failed"), data=data)
+            suffix = self._electron_unlock_hint(app, data)
+            return ToolResult(ok=False, output=res.get("error", "type failed") + suffix, data=data)
         # Post-action verification: read the control back and confirm the text
         # actually landed (computer mastery, not just "fire and hope").
         verified = self._verify_typed(query, app, text)
