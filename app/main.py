@@ -72,10 +72,16 @@ async def _lifespan(application):
         except Exception as exc:
             _lifespan_log.warning("MCP server initialization failed: %s", exc)
 
-    global _telegram_task, _discord_task, _automation_task
+    async def _prune_sessions_loop():
+        while True:
+            await asyncio.sleep(300)
+            _prune_sessions()
+
+    global _telegram_task, _discord_task, _automation_task, _session_prune_task
     await _init_mcp()
     _telegram_task = asyncio.create_task(start_telegram(service))
     _discord_task = asyncio.create_task(start_discord(service))
+    _session_prune_task = asyncio.create_task(_prune_sessions_loop())
 
     from .automation import get_registry as _get_auto_registry, poll_and_fire as _poll_and_fire
 
@@ -106,7 +112,7 @@ async def _lifespan(application):
 
     yield
     # Shutdown: cancel integrations and automation poller, then clean up background browsers
-    for _t in (_telegram_task, _discord_task, _automation_task):
+    for _t in (_telegram_task, _discord_task, _automation_task, _session_prune_task):
         if _t and not _t.done():
             _t.cancel()
             try:
@@ -238,6 +244,7 @@ _tasks: Dict[str, TaskRecord] = {}
 _telegram_task: Optional[asyncio.Task] = None
 _discord_task: Optional[asyncio.Task] = None
 _automation_task: Optional[asyncio.Task] = None
+_session_prune_task: Optional[asyncio.Task] = None
 
 def _prune_sessions(now: Optional[datetime] = None) -> None:
     now = now or datetime.now(timezone.utc)

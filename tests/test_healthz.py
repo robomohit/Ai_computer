@@ -466,3 +466,20 @@ def test_task_control_trace_report_summarizes_overlays(monkeypatch, tmp_path):
     assert body["summary"]["used_uia"] is True
     assert body["summary"]["trace_events"] == 2
     assert body["entries"][1]["rect"] == {"left": 10, "top": 20, "width": 300, "height": 40}
+
+
+@pytest.mark.asyncio
+async def test_session_prune_task_started_in_lifespan(monkeypatch):
+    """_lifespan must start the background session-token pruning task (AI-27)."""
+    from app.mcp_manager import mcp_manager
+
+    async def noop(*a, **kw):
+        pass
+
+    monkeypatch.setattr(mcp_manager, "initialize_default_servers", noop)
+    monkeypatch.setattr(_tg, "start_telegram", noop)
+    monkeypatch.setattr(_dc, "start_discord", noop)
+
+    async with _m._lifespan(_m.app):
+        assert _m._session_prune_task is not None, "_session_prune_task must be created in lifespan"
+        assert not _m._session_prune_task.done(), "_session_prune_task must be running"
