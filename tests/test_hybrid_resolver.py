@@ -111,6 +111,26 @@ def test_ocr_norm_matches_through_punctuation_and_accelerators(monkeypatch):
     assert df.ocr_find_in_app("Edit", "Notepad")["score"] == 100  # ',' stripped
 
 
+def test_ocr_phrase_match_requires_word_boundary(monkeypatch):
+    import app.widget.desktop_features as df
+
+    # "view" must NOT match the substring inside "teview codebase" — that kind of
+    # cross-word hit would send a fallback click to the wrong place.
+    screen = [
+        {"text": "teview", "x": 50, "y": 40},
+        {"text": "codebase", "x": 120, "y": 40},
+    ]
+    monkeypatch.setattr(df, "app_window_rect",
+                        lambda a: {"left": 0, "top": 0, "width": 400, "height": 300})
+    monkeypatch.setattr(df, "win_ocr_words", lambda l, t, w, h: screen)
+
+    assert df.ocr_find_in_app("view", "Notepad")["ok"] is False
+    # but a real whole-word phrase hit still matches
+    screen2 = [{"text": "Review", "x": 50, "y": 40}, {"text": "codebase", "x": 120, "y": 40}]
+    monkeypatch.setattr(df, "win_ocr_words", lambda l, t, w, h: screen2)
+    assert df.ocr_find_in_app("review codebase", "Notepad")["score"] >= 100
+
+
 def test_uia_type_reports_verification(monkeypatch, tmp_path):
     import app.widget.desktop_features as df
 

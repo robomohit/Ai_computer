@@ -14,6 +14,7 @@ from __future__ import annotations
 
 import ctypes
 import os
+import re
 import sys
 import time
 import winreg
@@ -831,12 +832,14 @@ def ocr_find_in_app(query: str, app_hint: str = "") -> dict:
         if t == q:
             score = 100
         elif t.startswith(q):
-            score = 82
-        elif q in t:
-            score = 64
+            score = 82  # "Find" -> "Find..." (prefix is safe)
         elif len(t) >= 3 and t in q:
-            score = 44
+            score = 44  # OCR split a label the query spans (reverse contain)
         else:
+            # Deliberately NO bare `q in t`: a single OCR token has no internal
+            # word boundary, so "view" would wrongly match inside "teview" and
+            # send a fallback click to the wrong place. Prefer a clean miss (the
+            # agent then escalates to vision) over a confident wrong click.
             score = 0
         if score > best_score:
             best_score, best = score, wd
@@ -849,7 +852,8 @@ def ocr_find_in_app(query: str, app_hint: str = "") -> dict:
             phrase = " ".join(_ocr_norm(g["text"]) for g in grp).strip()
             if phrase == q:
                 score = 100 + n
-            elif q in phrase:
+            elif re.search(r"\b" + re.escape(q) + r"\b", phrase):
+                # whole-word(s) hit only — avoids "view" matching "teview"
                 score = 74
             else:
                 score = 0
