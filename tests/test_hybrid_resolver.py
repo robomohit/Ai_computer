@@ -52,6 +52,42 @@ def test_uia_click_reports_miss_when_uia_and_ocr_both_fail(monkeypatch, tmp_path
     assert res.data["overlay"]["control_layer"] == "UIA miss"
 
 
+def test_uia_find_falls_back_to_ocr_on_uia_miss(monkeypatch, tmp_path):
+    import app.widget.desktop_features as df
+
+    # No accessible control in the tree...
+    monkeypatch.setattr(df, "find_ui_elements",
+                        lambda q, a, n: {"ok": False, "error": "no UIA control matched"})
+    # ...but the text is visible on screen.
+    monkeypatch.setattr(df, "ocr_find_in_app",
+                        lambda q, a: {"ok": True, "x": 227, "y": 421,
+                                      "matched": "Find", "score": 100})
+    monkeypatch.setattr(df, "app_window_rect",
+                        lambda a: {"left": 0, "top": 0, "width": 800, "height": 600})
+
+    res = _ex(tmp_path).uia_find("Find", "Notepad")
+    assert res.ok is True
+    assert res.data["layer"] == "ocr"
+    assert res.data["overlay"]["control_layer"] == "OCR fallback"
+    assert res.data["items"][0]["x"] == 227 and res.data["items"][0]["y"] == 421
+    assert "OCR matches" in res.output
+
+
+def test_uia_find_reports_miss_when_uia_and_ocr_both_fail(monkeypatch, tmp_path):
+    import app.widget.desktop_features as df
+
+    monkeypatch.setattr(df, "find_ui_elements",
+                        lambda q, a, n: {"ok": False, "error": "no UIA control matched"})
+    monkeypatch.setattr(df, "ocr_find_in_app",
+                        lambda q, a: {"ok": False, "error": "no OCR text matched"})
+    monkeypatch.setattr(df, "app_window_rect",
+                        lambda a: {"left": 0, "top": 0, "width": 0, "height": 0})
+
+    res = _ex(tmp_path).uia_find("Ghost", "Chrome")
+    assert res.ok is False
+    assert res.data["overlay"]["control_layer"] == "UIA miss"
+
+
 def test_uia_type_reports_verification(monkeypatch, tmp_path):
     import app.widget.desktop_features as df
 
