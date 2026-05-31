@@ -1002,7 +1002,33 @@ class ToolExecutor:
             self._remember_started_pid(wait_result.data.get("pid"))
         return wait_result
 
+    # Apps where a second "start" just litters a duplicate window — safe to
+    # focus the existing one instead. Deliberately excludes browsers, editors
+    # (VS Code/Cursor), Explorer, and any URL/file target, where a fresh window
+    # is a legitimate intent.
+    _SINGLE_INSTANCE_APPS = {"Notepad", "Calculator", "Paint"}
+
+    def _reuse_existing_window(self, command: str) -> Optional[ToolResult]:
+        if win32gui is None:
+            return None
+        title = self._guess_launch_target_title(command)
+        if title not in self._SINGLE_INSTANCE_APPS:
+            return None
+        try:
+            matches = self._iter_matching_windows(title)
+        except Exception:
+            return None
+        if not matches:
+            return None
+        focused = self.focus_window(title)
+        if focused.ok:
+            focused.output = f"{title} already open — focused it (no duplicate launched).\n{focused.output}"
+        return focused if focused.ok else None
+
     def _launch_gui_command(self, command: str, cwd: Path) -> ToolResult:
+        reuse = self._reuse_existing_window(command)
+        if reuse is not None:
+            return reuse
         try:
             subprocess.Popen(
                 command,

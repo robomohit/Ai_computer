@@ -131,6 +131,41 @@ def test_ocr_phrase_match_requires_word_boundary(monkeypatch):
     assert df.ocr_find_in_app("review codebase", "Notepad")["score"] >= 100
 
 
+def test_reuse_existing_window_for_single_instance_app(monkeypatch, tmp_path):
+    ex = _ex(tmp_path)
+    # A Notepad window is already open...
+    monkeypatch.setattr(ex, "_iter_matching_windows",
+                        lambda t: [{"hwnd": 1, "title": "Untitled - Notepad", "pid": 9}])
+    focused = {}
+    monkeypatch.setattr(ex, "focus_window",
+                        lambda t: focused.update(t=t) or tools_mod.ToolResult(ok=True, output=f"Focused '{t}'"))
+    launched = {}
+    monkeypatch.setattr(tools_mod.subprocess, "Popen",
+                        lambda *a, **k: launched.update(called=True))
+
+    res = ex.run_command("start notepad")
+    assert res.ok is True
+    assert focused.get("t") == "Notepad"
+    assert "no duplicate launched" in res.output
+    assert launched == {}  # never spawned a second process
+
+
+def test_no_reuse_for_browser_or_url(monkeypatch, tmp_path):
+    ex = _ex(tmp_path)
+    monkeypatch.setattr(ex, "_iter_matching_windows",
+                        lambda t: [{"hwnd": 1, "title": t, "pid": 9}])
+    monkeypatch.setattr(ex, "focus_window",
+                        lambda t: tools_mod.ToolResult(ok=True, output="should-not-be-called"))
+    launched = {}
+    monkeypatch.setattr(tools_mod.subprocess, "Popen",
+                        lambda *a, **k: launched.update(called=True))
+    monkeypatch.setattr(ex, "_auto_wait_after_launch", lambda c: None)
+
+    # chrome is not single-instance -> must launch, not focus
+    ex.run_command("start chrome")
+    assert launched.get("called") is True
+
+
 def test_uia_type_reports_verification(monkeypatch, tmp_path):
     import app.widget.desktop_features as df
 
