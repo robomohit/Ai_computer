@@ -3527,8 +3527,21 @@ def main(port: int = 8000) -> int:
         menu.addAction(act_show)
         act_dash = QAction("Open dashboard…", menu)
         def _open_dash():
-            import webbrowser as _wb
-            _wb.open(f"http://127.0.0.1:{port}")
+            # Open the dashboard as a NATIVE desktop window (frameless pywebview),
+            # NOT in a web browser — this is a desktop app, not a website. We
+            # spawn a separate process because pywebview must own its main thread;
+            # it reuses the backend already running here (no port clash).
+            import subprocess, sys, os
+            root = os.path.dirname(os.path.dirname(os.path.dirname(os.path.abspath(__file__))))
+            try:
+                kwargs = {"cwd": root}
+                if os.name == "nt":
+                    kwargs["creationflags"] = 0x00000008 | 0x00000200  # DETACHED | NEW_GROUP
+                subprocess.Popen([sys.executable, "run_desktop.py", "--dashboard"], **kwargs)
+            except Exception as _e:
+                # Last-resort fallback so the user is never stranded.
+                import webbrowser as _wb
+                _wb.open(f"http://127.0.0.1:{port}")
         act_dash.triggered.connect(_open_dash)
         menu.addAction(act_dash)
 

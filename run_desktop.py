@@ -15,6 +15,15 @@ def run_server():
     uvicorn.run(app, host="127.0.0.1", port=PORT, log_level="error")
 
 
+def _server_already_running(port: int) -> bool:
+    """True if something is already serving on the port (e.g. the capsule's
+    backend). Lets a second native window attach instead of clashing."""
+    import socket
+    with socket.socket(socket.AF_INET, socket.SOCK_STREAM) as s:
+        s.settimeout(0.4)
+        return s.connect_ex(("127.0.0.1", port)) == 0
+
+
 def parse_args():
     parser = argparse.ArgumentParser(description="Launch AI Computer desktop shell.")
     parser.add_argument(
@@ -27,12 +36,15 @@ def parse_args():
 if __name__ == "__main__":
     args = parse_args()
 
-    # 1. Start the backend server in a background thread
-    t = threading.Thread(target=run_server, daemon=True)
-    t.start()
-
-    # 2. Wait a moment for the server to initialize
-    time.sleep(2)
+    # 1. Start the backend server in a background thread — unless one is already
+    #    running (e.g. the capsule launched us to open a second native window).
+    if _server_already_running(PORT):
+        print(f"[Desktop] Reusing the backend already on port {PORT}.")
+    else:
+        t = threading.Thread(target=run_server, daemon=True)
+        t.start()
+        # Wait a moment for the server to initialize
+        time.sleep(2)
 
     if not args.dashboard:
         # ── Floating Sidekick capsule ──
@@ -50,7 +62,7 @@ if __name__ == "__main__":
     bridge = DesktopBridge()
     icon_path = os.path.join(os.path.dirname(__file__), "ai_computer_app_icon_1777005021291.png")
     window = webview.create_window(
-        "AI Computer - Codex Dashboard",
+        "AI Computer",
         f"http://127.0.0.1:{PORT}",
         js_api=bridge,
         width=1400,
