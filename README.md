@@ -208,4 +208,8 @@ python -m pytest -q
 
 ## License
 
-[Apache 2.0](LICENSE) © [robomohit](https://github.com/robomohit)
+**[PolyForm Noncommercial 1.0.0](LICENSE)** © [robomohit](https://github.com/robomohit)
+
+Free to use, modify, and share for **any noncommercial purpose** — personal projects, study, research, hobby use, and nonprofits/education/government. **Commercial use is not permitted** under this license; for a commercial license, contact the author.
+
+> This is a *source-available* license, not OSI "open source." You can read and learn from the code, but you may not ship it (or a derivative) commercially without a separate agreement. *Not legal advice — consult a lawyer for specifics.*
