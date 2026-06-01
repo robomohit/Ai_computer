@@ -1,8 +1,26 @@
 # AI Computer
 
-An autonomous AI agent that controls your computer using plain English. Give it a goal — it plans, acts, and shows you exactly what it's doing in real time.
+**An autonomous AI agent that controls your computer using plain English.** Give it a goal — it plans, acts, and shows you exactly what it's doing in real time, in a floating glass capsule that sits on top of your desktop.
 
-> Coding and browser modes run on Windows, macOS, and Linux; desktop control is Windows-focused. Free to run with OpenRouter free-tier models, subject to OpenRouter's limits.
+> Free to run on [OpenRouter](https://openrouter.ai)'s free-tier models (subject to their limits). Coding and browser modes work on Windows, macOS, and Linux; native desktop control is Windows-only.
+
+### What makes it different
+
+Most computer-use agents take a **screenshot every step** and guess pixel coordinates — slow, expensive, and brittle. AI Computer drives native Windows apps through **UI Automation**: it clicks controls **by name** (no screenshots, no pixel guessing), so it's faster, cheaper, and far more reliable. It only falls back to on-screen-text OCR, then pixels, when a control genuinely isn't in the accessibility tree.
+
+- 🪟 **UIA-first desktop control** — drives Notepad, Excel, Word, Discord, Spotify, VS Code… by control name
+- 🫧 **Floating glass capsule** — frameless, translucent, always-on-top; press `Ctrl+Shift+Space` to summon it
+- 🆓 **Runs free** — defaults to OpenRouter `:free` models end to end
+- 🔌 **34 connectors, each with a skill** — the agent gets a built-in "manual" for every tool (Gmail, Calendar, Excel, Canva, Maps, GitHub…)
+- 👁️ **Watch it work** — live action ticker and an aqua glow around the app it's touching
+
+---
+
+## Requirements
+
+- **Windows 10 / 11** for the floating capsule + native desktop control. (macOS/Linux get coding + browser modes via the web dashboard.)
+- **Python 3.10 or newer** — [python.org/downloads](https://python.org/downloads) (tick *"Add python.exe to PATH"* during install).
+- One LLM API key — a **free** OpenRouter key is all you need.
 
 ---
 
@@ -54,6 +72,16 @@ Two native desktop surfaces (no browser needed):
 | **Desktop** | Drives native + Electron apps (Notepad, Discord, VS Code, Spotify…) through **Windows UI Automation** — by control name, **no screenshots, no pixel guessing**. Glows the edge of the app it's working in so you can see what it's doing. |
 
 The mode is **auto-detected** from your goal, or you can pick it manually.
+
+---
+
+## Connectors & Skills
+
+A **connector** gives the agent a tool (Gmail, Google Calendar, Excel, Canva, GitHub, Slack, Maps, Notion…). A **skill** is that tool's *manual* — it tells the agent exactly how to drive the surface and where the safety rails are (never send/post/buy/delete without your say-so).
+
+Skills load via **progressive disclosure**, the same pattern Claude's skills use: the agent always sees a one-line summary of every connected tool, and only pulls in the full how-to for the one the current task actually needs. Link the tools you use in the dashboard's **Connectors** tab.
+
+> Connectors are read-only by default. The agent drafts, summarizes, and reports — it asks before anything irreversible.
 
 ---
 
@@ -139,17 +167,45 @@ docker-compose up --build
 ## Architecture
 
 ```
-Browser UI  ──SSE──►  FastAPI (main.py)
-                           │
-                      AgentService (agent.py)
-                      ├── PlannerProvider  → LLM APIs
-                      ├── ToolExecutor     → shell / files / browser / desktop
-                      ├── SafetyManager    → blocks dangerous commands
-                      └── LogEmitter       → streams events to UI
+Capsule / Dashboard (PySide6 + pywebview)
+        │  SSE (live action stream)
+        ▼
+FastAPI  (app/main.py)
+        │
+   AgentService (app/agent.py)
+   ├── Providers      → OpenRouter / OpenAI / Anthropic / … (free models by default)
+   ├── ToolExecutor   → shell · files · browser · UIA desktop (app/tools.py)
+   │     └── Hybrid resolver: UIA control → on-screen-text OCR → pixel
+   ├── Connectors+Skills → progressive-disclosure tool manuals (app/connectors.py)
+   ├── SafetyManager  → blocks dangerous / irreversible actions
+   └── LogEmitter     → streams every step to the UI
+```
+
+---
+
+## Troubleshooting
+
+| Problem | Fix |
+|---|---|
+| `Python not found` when running `setup.bat` | Install Python 3.10+ from [python.org](https://python.org/downloads) and tick **"Add python.exe to PATH"**, then reopen the terminal. |
+| Capsule doesn't appear after `start.bat` | It's always-on-top but may be behind a fullscreen window — press **`Ctrl+Shift+Space`** to summon it. |
+| "No API key" on first run | Paste a free OpenRouter key when prompted (get one at [openrouter.ai/keys](https://openrouter.ai/keys)), or add `OPENROUTER_API_KEY=` to `.env`. |
+| Browser mode does nothing | Run `python -m playwright install chromium` to fetch the browser. |
+| Desktop agent can't find a control | Make sure the target app is open and focused; for Electron apps (Discord, Slack…) it auto-unlocks accessibility, which may need the app restarted once. |
+| Rate-limited / model busy | Free OpenRouter models have shared limits — wait a moment, or set `DESKTOP_MODEL` / a paid key for headroom. |
+
+---
+
+## Contributing
+
+Issues and PRs are welcome. Run the test suite before submitting:
+
+```bash
+python -m pytest -q
 ```
 
 ---
 
 ## License
 
-MIT — [robomohit](https://github.com/robomohit)
+[Apache 2.0](LICENSE) © [robomohit](https://github.com/robomohit)

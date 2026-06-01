@@ -51,10 +51,17 @@ scheduled_recipes.json
 screen_watches.json
 trust_policies.json
 
-# Local screenshot/debug artifacts
-aero_test_app.png
-aero_tuned.png
-final_capsule.png
-premium_glass.png
-premium_glass_final.png
-pywinstyles_transparency.png
+# Local screenshot/debug artifacts — ignore ALL root-level images (real app
+# images live under static/). Keeps stray capture files out of the repo.
+/*.png
+/*.jpg
+/*.jpeg
+/*.gif
+/*.webp
+
+# Scratch test scripts / one-off launchers at the repo root. The real test
+# suite lives in tests/ — root-level test_*.py are throwaway live scripts.
+/test_*.py
+/*_test.py
+/server_launcher.py
+/final_verify.py
