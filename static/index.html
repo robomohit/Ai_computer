@@ -84,6 +84,70 @@
     </div>
   </aside>
 
+  <!-- First-run onboarding wizard (friendly, non-technical) -->
+  <div class="onb-overlay" id="onboarding" hidden>
+    <div class="onb-card">
+      <div class="onb-progress" id="onb-progress" aria-hidden="true"></div>
+
+      <section class="onb-step" data-step="1">
+        <div class="onb-logo">
+          <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.8" stroke-linecap="round" stroke-linejoin="round"><rect x="3" y="4" width="18" height="14" rx="2"/><line x1="8" y1="21" x2="16" y2="21"/><line x1="12" y1="18" x2="12" y2="21"/><circle cx="12" cy="11" r="2.6"/></svg>
+        </div>
+        <h1 class="onb-title">Meet your AI Computer</h1>
+        <p class="onb-sub">Just tell it what you want, in plain words. It controls your apps, browses the web, and writes code — while you watch every step.</p>
+        <button class="onb-primary" type="button" data-onb-next>Get started</button>
+      </section>
+
+      <section class="onb-step" data-step="2" hidden>
+        <div class="onb-emoji">🔌</div>
+        <h1 class="onb-title">Switch on the AI</h1>
+        <p class="onb-sub">Paste a free key to power the assistant. It's free, takes about 30 seconds, and no card is needed.</p>
+        <button class="onb-link" id="onb-get-key" type="button">Get a free key →</button>
+        <input class="onb-input" id="onb-key" type="password" autocomplete="off" placeholder="Paste your key here">
+        <div class="onb-status" id="onb-key-status" role="status"></div>
+        <div class="onb-actions">
+          <button class="onb-ghost" type="button" data-onb-skip>I'll do this later</button>
+          <button class="onb-primary" id="onb-key-save" type="button">Continue</button>
+        </div>
+      </section>
+
+      <section class="onb-step" data-step="3" hidden>
+        <h1 class="onb-title">Connect your tools</h1>
+        <p class="onb-sub">Pick the apps you'd like help with. Tap to add — change them anytime later.</p>
+        <div class="onb-conn-grid" id="onb-conn-grid"></div>
+        <div class="onb-actions">
+          <button class="onb-ghost" type="button" data-onb-skip>Skip for now</button>
+          <button class="onb-primary" type="button" data-onb-next>Continue</button>
+        </div>
+      </section>
+
+      <section class="onb-step" data-step="4" hidden>
+        <h1 class="onb-title">Make it yours</h1>
+        <p class="onb-sub">A couple of quick choices — you can change everything later in Settings.</p>
+        <div class="onb-pref">
+          <span class="onb-pref-label">Appearance</span>
+          <div class="onb-seg" id="onb-theme">
+            <button type="button" data-theme="auto" class="active">System</button>
+            <button type="button" data-theme="light">Light</button>
+            <button type="button" data-theme="dark">Dark</button>
+          </div>
+        </div>
+        <label class="onb-pref">
+          <span class="onb-pref-label">Let the AI talk back<span class="onb-pref-sub">Reads answers aloud + enables the mic</span></span>
+          <input type="checkbox" id="onb-voice" class="pref-switch">
+        </label>
+        <button class="onb-primary" type="button" data-onb-next>Continue</button>
+      </section>
+
+      <section class="onb-step" data-step="5" hidden>
+        <div class="onb-emoji onb-check">✓</div>
+        <h1 class="onb-title">You're all set</h1>
+        <p class="onb-sub">Press <kbd>Ctrl</kbd>+<kbd>Shift</kbd>+<kbd>Space</kbd> anytime to summon the floating assistant. Let's go.</p>
+        <button class="onb-primary" id="onb-finish" type="button">Start using AI Computer</button>
+      </section>
+    </div>
+  </div>
+
   <div class="overlay" id="settings-overlay" role="dialog" aria-label="Settings" aria-modal="true">
     <div class="modal settings-modal">
       <div class="settings-head">

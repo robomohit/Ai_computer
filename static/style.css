@@ -527,10 +527,12 @@
     min-width: 42px;
   }
   .history-dot.running { background: transparent; box-shadow: none; color: var(--accent); }
+  .history-dot.paused { background: transparent; box-shadow: none; color: var(--warn); }
   .history-dot.done    { background: transparent; color: var(--muted); }
   .history-dot.failed  { background: transparent; color: var(--err); }
   .history-dot.cancelled { background: transparent; color: var(--muted); }
   .history-dot.running::after   { content: 'running'; }
+  .history-dot.paused::after    { content: 'paused'; }
   .history-dot.done::after      { content: 'done'; }
   .history-dot.failed::after    { content: 'failed'; }
   .history-dot.cancelled::after { content: 'cancelled'; }
@@ -3929,3 +3931,122 @@
   .pref-switch:focus-visible {
     box-shadow: 0 0 0 3px var(--accent-soft);
   }
+
+  /* ---------------- First-run onboarding wizard ---------------- */
+  .onb-overlay {
+    position: fixed;
+    inset: 0;
+    z-index: 9000;
+    display: flex;
+    align-items: center;
+    justify-content: center;
+    padding: 24px;
+    background: radial-gradient(120% 120% at 50% 0%, color-mix(in srgb, var(--accent) 14%, var(--bg-0)) 0%, var(--bg-0) 55%);
+    -webkit-app-region: drag; /* let the user move the window from the backdrop */
+  }
+  .onb-overlay[hidden] { display: none; }
+  .onb-card {
+    -webkit-app-region: no-drag;
+    width: min(480px, 100%);
+    background: var(--bg-1);
+    border: 1px solid var(--line-2);
+    border-radius: 20px;
+    padding: 40px 36px 32px;
+    box-shadow: 0 24px 80px rgba(0,0,0,0.45);
+    text-align: center;
+    animation: onbIn .4s cubic-bezier(.2,.8,.2,1);
+  }
+  @keyframes onbIn { from { opacity: 0; transform: translateY(10px) scale(.98); } to { opacity: 1; transform: none; } }
+  .onb-progress { display: flex; gap: 6px; justify-content: center; margin-bottom: 26px; }
+  .onb-progress span {
+    width: 7px; height: 7px; border-radius: 50%;
+    background: var(--line-3); transition: all .25s ease;
+  }
+  .onb-progress span.active { background: var(--accent); width: 22px; border-radius: 4px; }
+  .onb-progress span.done { background: color-mix(in srgb, var(--accent) 55%, transparent); }
+  .onb-step { display: flex; flex-direction: column; align-items: center; }
+  .onb-logo {
+    width: 64px; height: 64px; border-radius: 18px;
+    display: grid; place-items: center; margin-bottom: 22px;
+    color: var(--accent);
+    background: var(--accent-soft);
+    border: 1px solid color-mix(in srgb, var(--accent) 30%, transparent);
+  }
+  .onb-logo svg { width: 32px; height: 32px; }
+  .onb-emoji { font-size: 44px; margin-bottom: 16px; line-height: 1; }
+  .onb-emoji.onb-check {
+    width: 64px; height: 64px; border-radius: 50%;
+    display: grid; place-items: center; font-size: 34px;
+    color: var(--accent-on, #fff); background: var(--accent);
+  }
+  .onb-title { font-size: 24px; font-weight: 650; margin: 0 0 10px; color: var(--text-1); letter-spacing: -0.01em; }
+  .onb-sub { font-size: 14px; line-height: 1.55; color: var(--muted); margin: 0 0 26px; max-width: 36ch; }
+  .onb-sub kbd {
+    background: var(--bg-3); border: 1px solid var(--line-2); border-radius: 5px;
+    padding: 1px 6px; font-size: 12px; font-family: var(--mono, monospace); color: var(--text-2);
+  }
+  .onb-primary {
+    width: 100%;
+    padding: 13px 20px;
+    border: none; border-radius: 12px;
+    background: var(--accent); color: var(--accent-on, #fff);
+    font-size: 15px; font-weight: 600; cursor: pointer;
+    transition: filter .15s ease, transform .1s ease;
+  }
+  .onb-primary:hover { filter: brightness(1.06); }
+  .onb-primary:active { transform: translateY(1px); }
+  .onb-ghost {
+    padding: 13px 18px; border: none; border-radius: 12px;
+    background: transparent; color: var(--muted);
+    font-size: 14px; font-weight: 500; cursor: pointer;
+  }
+  .onb-ghost:hover { color: var(--text-1); background: var(--bg-2); }
+  .onb-actions { display: flex; gap: 10px; width: 100%; margin-top: 6px; }
+  .onb-actions .onb-primary { flex: 1; }
+  .onb-link {
+    background: none; border: none; color: var(--accent);
+    font-size: 13px; font-weight: 600; cursor: pointer; margin-bottom: 14px;
+  }
+  .onb-link:hover { text-decoration: underline; }
+  .onb-input {
+    width: 100%; padding: 12px 14px; margin-bottom: 8px;
+    background: var(--bg-3); color: var(--text-1);
+    border: 1px solid var(--line-2); border-radius: 11px;
+    font-size: 14px; outline: none; text-align: center;
+    transition: border-color .15s ease, box-shadow .15s ease;
+  }
+  .onb-input:focus { border-color: var(--accent); box-shadow: 0 0 0 3px var(--accent-soft); }
+  .onb-status { font-size: 12.5px; min-height: 18px; margin-bottom: 14px; }
+  .onb-status.ok { color: var(--accent); }
+  .onb-status.err { color: var(--err, #ff6b6b); }
+  /* Connector picker grid */
+  .onb-conn-grid {
+    display: grid; grid-template-columns: repeat(3, 1fr); gap: 8px;
+    width: 100%; margin-bottom: 22px; max-height: 280px; overflow-y: auto; padding: 2px;
+  }
+  .onb-conn {
+    display: flex; flex-direction: column; align-items: center; gap: 7px;
+    padding: 12px 6px; border-radius: 12px; cursor: pointer;
+    background: var(--bg-2); border: 1.5px solid var(--line-2);
+    transition: border-color .15s ease, background .15s ease, transform .1s ease;
+  }
+  .onb-conn:hover { background: var(--bg-3); transform: translateY(-1px); }
+  .onb-conn.on { border-color: var(--accent); background: var(--accent-soft); }
+  .onb-conn-swatch { width: 30px; height: 30px; border-radius: 9px; display: grid; place-items: center; color: #fff; }
+  .onb-conn-swatch svg { width: 17px; height: 17px; }
+  .onb-conn-name { font-size: 11px; color: var(--text-2); line-height: 1.1; text-align: center; }
+  .onb-conn .onb-conn-check { position: relative; }
+  /* Preferences mini */
+  .onb-pref {
+    display: flex; align-items: center; justify-content: space-between; gap: 14px;
+    width: 100%; padding: 12px 2px; border-bottom: 1px solid var(--line);
+  }
+  .onb-pref:last-of-type { border-bottom: none; margin-bottom: 18px; }
+  .onb-pref-label { font-size: 14px; color: var(--text-1); font-weight: 500; display: flex; flex-direction: column; gap: 2px; text-align: left; }
+  .onb-pref-sub { font-size: 11.5px; color: var(--muted-2); font-weight: 400; }
+  .onb-seg { display: inline-flex; background: var(--bg-3); border-radius: 9px; padding: 3px; gap: 2px; }
+  .onb-seg button {
+    border: none; background: transparent; color: var(--muted);
+    font-size: 12.5px; padding: 6px 12px; border-radius: 7px; cursor: pointer; font-weight: 500;
+  }
+  .onb-seg button.active { background: var(--accent); color: var(--accent-on, #fff); }

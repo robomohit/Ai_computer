@@ -553,7 +553,7 @@
   const humanize = (value = '') => value.replace(/_/g, ' ').replace(/\b\w/g, (c) => c.toUpperCase());
   const truncate = (value = '', limit = 500) => value.length > limit ? `${value.slice(0, limit)}\n…` : value;
   const escapeHtml = (value = '') => String(value).replace(/[&<>"']/g, (char) => ({ '&': '&amp;', '<': '&lt;', '>': '&gt;', '"': '&quot;', "'": '&#39;' }[char]));
-  const isTerminalStatus = (value = '') => /complete|failed|error|cancelled/i.test(value);
+  const isTerminalStatus = (value = '') => /done|complete|failed|error|cancelled/i.test(value);
 
   const toast = (message, kind = 'info', ttl = 3200) => {
     const el = document.createElement('div');
@@ -658,12 +658,12 @@
   };
 
   const setStatus = (status) => {
-    const map = { ready: 'Ready', running: 'Running', paused: 'Paused', complete: 'Complete', failed: 'Failed', error: 'Error', cancelled: 'Cancelled' };
+    const map = { ready: 'Ready', queued: 'Queued', pending: 'Pending', running: 'Running', paused: 'Paused', complete: 'Complete', failed: 'Failed', error: 'Error', cancelled: 'Cancelled' };
     const key = (status || 'ready').toLowerCase();
     currentStatus = key;
     const sb = $('sb-status');
     if (sb) { sb.className = `sb-item sb-status sb-status-${key}`; sb.innerHTML = `<span class="sb-dot"></span><span class="sb-val">${map[key] || humanize(key)}</span>`; }
-    const dotCls = { running: 'running', paused: 'paused', complete: 'done', failed: 'failed', error: 'failed' };
+    const dotCls = { queued: 'running', pending: 'running', running: 'running', paused: 'paused', complete: 'done', failed: 'failed', error: 'failed' };
     const dot = $('topbar-dot');
     if (dot) dot.className = 'topbar-dot' + (dotCls[key] ? ' ' + dotCls[key] : '');
   };
@@ -940,7 +940,8 @@
     const isTerminal = ['done', 'complete', 'failed', 'error', 'cancelled'].includes(status);
     item.className = `history-item${makeActive ? ' active' : ''}${isTerminal ? ' terminal' : ''}`;
     item.dataset.taskId = taskRecord.id || '';
-    const dotState = status === 'running' ? 'running'
+    const dotState = (status === 'running' || status === 'queued' || status === 'pending') ? 'running'
+      : status === 'paused' ? 'paused'
       : (status === 'done' || status === 'complete') ? 'done'
       : (status === 'failed' || status === 'error') ? 'failed'
       : (status === 'cancelled') ? 'cancelled' : '';
@@ -1006,6 +1007,120 @@
     const dot = activeHistoryItem.querySelector('.history-dot');
     if (!dot) return;
     dot.className = `history-dot ${state}`;
+  };
+
+  const taskRecordId = (record = {}) => record.task_id || record.id || '';
+
+  const findHistoryItem = (taskId) => historyItems.find((item) => item.dataset.taskId === taskId) || null;
+
+  const activateHistoryItem = (item) => {
+    historyItems.forEach((historyItem) => historyItem.classList.remove('active'));
+    item?.classList.add('active');
+    activeHistoryItem = item || null;
+  };
+
+  const streamCursorAfter = (events = []) => {
+    let cursor = 0;
+    events.forEach((event, idx) => {
+      const seq = Number(event?.seq);
+      cursor = Math.max(cursor, Number.isFinite(seq) ? seq + 1 : idx + 1);
+    });
+    return cursor;
+  };
+
+  const activeTaskMeta = (record = {}, events = []) => {
+    const created = events.find((event) => event.type === 'task_created') || {};
+    const preflight = created.preflight || record.preflight || {};
+    const mode = created.effective_mode || preflight.effective_mode || created.mode || record.effective_mode || record.mode || 'coding';
+    const isolatedApp = created.isolated_app || preflight.isolated_app || record.isolated_app || record.context?.isolated_app || '';
+    return {
+      goal: record.goal || created.goal || record.context?.goal || 'Running task',
+      mode,
+      model: created.model || record.model || preflight.selected_model || '',
+      isolatedApp,
+      createdAt: created.created_at || record.created_at || ''
+    };
+  };
+
+  const showLiveTaskControls = (record = {}, meta = {}) => {
+    const rawStatus = String(record.status || 'running').toLowerCase();
+    const queued = rawStatus === 'queued' || rawStatus === 'pending';
+    const paused = !!record.paused || rawStatus === 'paused';
+    isPaused = !queued && paused;
+    $('btn-pause').textContent = isPaused ? 'Resume' : 'Pause';
+    $('btn-pause').classList.toggle('hidden', queued);
+    $('btn-cancel').classList.remove('hidden');
+    $('btn-retry').classList.add('hidden');
+    $('btn-control-report').classList.add('hidden');
+    $('btn-copy-log').classList.add('hidden');
+    $('btn-download-log').classList.add('hidden');
+    $('send').classList.add('hidden');
+    setStatus(queued ? rawStatus : (isPaused ? 'paused' : 'running'));
+    setDesktopSessionActive(!queued && isDesktopMode(meta.mode), meta.mode, meta.isolatedApp || '');
+  };
+
+  const clearTrustControls = (entry, actionId = '') => {
+    entry?.details?.querySelectorAll('[data-trust-controls="1"]').forEach((node) => node.remove());
+    if (actionId && window.pendingApprovalId === actionId) {
+      $('approval')?.classList.remove('show');
+      window.pendingApprovalId = null;
+    }
+    if (actionId && window.pendingPermissionId === actionId) {
+      $('permission')?.classList.remove('show');
+      window.pendingPermissionId = null;
+      window.pendingPermissionScope = null;
+    }
+  };
+
+  const pendingTrustRequest = (events = []) => {
+    const pending = new Map();
+    events.forEach((event) => {
+      const type = event?.type || '';
+      const id = event?.action_id || '';
+      if ((type === 'approval_required' || type === 'permission_required') && id) {
+        pending.set(id, event);
+        return;
+      }
+      if (id && (type === 'action_start' || type === 'action_result' || type === 'approval_timeout' || type === 'permission_timeout')) {
+        pending.delete(id);
+      }
+      if (pending.has('__plan__') && (type === 'plan' || type === 'subtask' || type === 'action_start')) {
+        pending.delete('__plan__');
+      }
+      if (type === 'done' || type === 'error' || type === 'cancelled') pending.clear();
+    });
+    const pendingEvents = Array.from(pending.values());
+    return pendingEvents[pendingEvents.length - 1] || null;
+  };
+
+  const restorePendingTrustModal = (event, taskId) => {
+    if (!event) return;
+    if (event.type === 'approval_required') {
+      const reason = event.reason || event.action?.explanation || 'High risk action requires approval.';
+      $('app-title').textContent = `${humanize(event.action?.type || 'Action')} needs approval`;
+      $('app-reason').textContent = reason;
+      $('app-code').textContent = JSON.stringify(event.action?.args || {}, null, 2);
+      const planEdit = $('app-plan-edit');
+      const isPlanReview = event.action?.type === 'plan_review' || event.action?.args?.plan_text;
+      if (planEdit) {
+        planEdit.classList.toggle('hidden', !isPlanReview);
+        planEdit.value = isPlanReview ? (event.action?.args?.plan_text || '') : '';
+      }
+      $('approval').classList.add('show');
+      window.pendingTaskId = taskId;
+      window.pendingApprovalId = event.action_id;
+      return;
+    }
+    if (event.type === 'permission_required') {
+      const detail = event.reason || event.explanation || `The agent needs ${event.scope || 'additional'} access.`;
+      $('perm-title').textContent = `Allow ${event.scope || 'access'}?`;
+      $('perm-reason').textContent = detail;
+      $('perm-code').textContent = JSON.stringify({ scope: event.scope, explanation: event.explanation || '' }, null, 2);
+      $('permission').classList.add('show');
+      window.pendingTaskId = taskId;
+      window.pendingPermissionId = event.action_id;
+      window.pendingPermissionScope = event.scope;
+    }
   };
 
   const ensureStatusCard = () => {
@@ -2054,7 +2169,7 @@
       if (_isStepAnnouncement(event)) return;
       finalizeTurnSummary(); renderReasoning(event); return;
     }
-    if (event.type === 'plan') { finalizeTurnSummary(); renderPlan(event); return; }
+    if (event.type === 'plan') { clearTrustControls(actionCards.__plan__, '__plan__'); finalizeTurnSummary(); renderPlan(event); return; }
 
     if (event.type === 'status') {
       if (event.heartbeat) return;
@@ -2086,6 +2201,7 @@
         phase: 'Running',
       });
       const entry = ensureActionCard(event.action_id, event.action_type, event.args_summary || event.explanation || '');
+      clearTrustControls(entry, event.action_id || '');
       setActionState(entry, 'Running', 'running');
       entry.subtitleEl.textContent = layer ? `${layer} - ${detail}` : detail;
       renderControlTrace(entry, event.overlay, 'start');
@@ -2103,6 +2219,7 @@
         phase: event.ok ? 'Complete' : 'Failed',
       });
       const entry = ensureActionCard(event.action_id, event.action_type, event.args_summary || '');
+      clearTrustControls(entry, event.action_id || '');
       setActionState(entry, event.ok ? 'OK' : 'Fail', event.ok ? 'ok' : 'fail');
       if (event.args_summary) entry.subtitleEl.textContent = layer ? `${layer} - ${event.args_summary}` : event.args_summary;
       renderControlTrace(entry, event.overlay, 'result');
@@ -2252,6 +2369,7 @@
 
       const wrap = document.createElement('div');
       wrap.style.cssText = 'display:flex;gap:8px;margin-top:8px;width:100%';
+      wrap.dataset.trustControls = '1';
       const btnApprove = document.createElement('button');
       btnApprove.className = 'modal-btn primary';
       btnApprove.style.cssText = 'padding:6px 12px;font-size:12px;flex:1';
@@ -2303,6 +2421,7 @@
 
       const pWrap = document.createElement('div');
       pWrap.style.cssText = 'display:flex;gap:8px;margin-top:8px;width:100%';
+      pWrap.dataset.trustControls = '1';
       const btnAllow = document.createElement('button');
       btnAllow.className = 'modal-btn primary';
       btnAllow.style.cssText = 'padding:6px 12px;font-size:12px;flex:1';
@@ -2332,6 +2451,28 @@
         window.pendingPermissionId = event.action_id;
         window.pendingPermissionScope = event.scope;
         if (!suppressToasts) toast('Agent is waiting on a permission choice.', 'warn', 5000);
+      }
+      return;
+    }
+
+    if (event.type === 'approval_timeout' || event.type === 'permission_timeout') {
+      finalizeLiveStatus();
+      const isApproval = event.type === 'approval_timeout';
+      const entry = event.action_id && actionCards[event.action_id]
+        ? actionCards[event.action_id]
+        : ensureActionCard(event.action_id || `timeout-${Date.now()}`, isApproval ? 'approval' : 'request_permission', 'Timed out waiting for a response.');
+      setActionState(entry, 'Timed out', 'fail');
+      const seconds = Number.isFinite(event.timeout_seconds) ? `${event.timeout_seconds}s` : '';
+      const title = isApproval ? 'Approval timed out' : 'Permission timed out';
+      const copy = seconds
+        ? `No response was received within ${seconds}.`
+        : 'No response was received before the request expired.';
+      appendDetailRow(entry, isApproval ? 'Approval' : 'Permission', title, copy);
+      openEntryBody(entry);
+      if (!replay) {
+        if (isApproval) $('approval')?.classList.remove('show');
+        else $('permission')?.classList.remove('show');
+        if (!suppressToasts) toast(title, 'warn', 5000);
       }
       return;
     }
@@ -2717,26 +2858,85 @@
     }
   };
 
-  const loadTaskLog = (taskId, events, sourceEl) => {
+  const loadTaskLog = (taskId, events = [], sourceEl, { live = false, record = null, silent = false } = {}) => {
+    if (live) task = taskId;
     currentViewedTask = taskId;
-    resetTaskView({ replay: true });
-    historyItems.forEach((item) => item.classList.remove('active'));
-    sourceEl?.classList.add('active');
-    activeHistoryItem = sourceEl || null;
+    resetTaskView({ replay: !live });
+    activateHistoryItem(sourceEl || null);
     requestAnimationFrame(() => { const fs = $('feed-scroll'); if (fs) fs.scrollTop = 0; });
 
     const createdEvent = events.find((e) => e.type === 'task_created');
-    const firstGoal = createdEvent?.goal;
+    const meta = activeTaskMeta(record || {}, events);
+    const firstGoal = createdEvent?.goal || meta.goal;
     const title = sourceEl?.querySelector('.history-goal')?.textContent || firstGoal || 'Past task';
-    setTaskTitle(title, { mode: createdEvent?.mode, model: createdEvent?.model });
+    if (live) setMode(meta.mode, meta.mode === 'computer_isolated' || !!meta.isolatedApp, meta.isolatedApp);
+    setTaskTitle(title, { mode: live ? meta.mode : createdEvent?.mode, model: live ? meta.model : createdEvent?.model, status: live ? 'running' : '' });
     appendMessage(title, 'user');
-    $('btn-retry').classList.remove('hidden');
-    $('btn-control-report').classList.remove('hidden');
-    $('btn-copy-log').classList.remove('hidden');
-    $('btn-download-log').classList.remove('hidden');
+    if (!live) {
+      $('btn-retry').classList.remove('hidden');
+      $('btn-control-report').classList.remove('hidden');
+      $('btn-copy-log').classList.remove('hidden');
+      $('btn-download-log').classList.remove('hidden');
+    }
 
     events.forEach((e) => processTaskEvent(e, { replay: true, taskId, suppressToasts: true }));
-    toast('Loaded task log.', 'info', 1800);
+    if (live) {
+      streamCursor = streamCursorAfter(events);
+      showLiveTaskControls(record || { status: 'running' }, meta);
+      restorePendingTrustModal(pendingTrustRequest(events), taskId);
+      const startedAt = Date.parse(meta.createdAt || '');
+      startTime = Number.isFinite(startedAt) ? startedAt : Date.now();
+      timer = setInterval(updateClock, 1000);
+      updateClock();
+      const rawStatus = String(record?.status || 'running').toLowerCase();
+      if (rawStatus === 'queued' || rawStatus === 'pending') setLiveStatus('Queued', 'Waiting for an available task slot.');
+      else if (record?.paused || rawStatus === 'paused') setLiveStatus('Paused', 'Task is waiting.');
+      else setLiveStatus('Reconnected', 'Live task controls restored.');
+    } else if (!silent) {
+      toast('Loaded task log.', 'info', 1800);
+    }
+  };
+
+  const recoverActiveTask = async () => {
+    if (task && sse) return false;
+    let activePayload;
+    try {
+      activePayload = await api(`/api/active-tasks?cb=${Date.now()}`);
+    } catch (_) {
+      return false;
+    }
+    const activeTasks = (activePayload.tasks || [])
+      .filter((record) => taskRecordId(record) && !isTerminalStatus(record.status || ''))
+      .sort((a, b) => (Date.parse(a.created_at || '') || 0) - (Date.parse(b.created_at || '') || 0));
+    const record = activeTasks[activeTasks.length - 1];
+    if (!record) return false;
+
+    const activeId = taskRecordId(record);
+    let item = findHistoryItem(activeId);
+    if (!item) {
+      item = renderHistoryItem({
+        id: activeId,
+        goal: record.goal || record.context?.goal || 'Running task',
+        status: record.status || 'running',
+        created_at: record.created_at,
+        mode: record.mode,
+        model: record.model,
+      }, true);
+      refreshHistoryCount();
+    }
+    activateHistoryItem(item);
+
+    let events = [];
+    try {
+      const log = await api(`/api/tasks/${activeId}/log`);
+      events = log.log || [];
+    } catch (_) {}
+
+    loadTaskLog(activeId, events, item, { live: true, record, silent: true });
+    streamClosedManually = false;
+    openStream(activeId);
+    toast('Reconnected to running task.', 'ok', 2400);
+    return true;
   };
 
   const hydrateModelSelect = (models) => {
@@ -3031,12 +3231,13 @@
       }
       api(`/api/models?cb=${Date.now()}`).then((r) => hydrateModelSelect(r.models)).catch(() => {});
       refreshProviderChips();
-      api(`/api/tasks?cb=${Date.now()}`).then((r) => {
+      await api(`/api/tasks?cb=${Date.now()}`).then((r) => {
         const tasks = [...(r.tasks || [])].reverse();
         if (tasks.length) $('task-history').innerHTML = '';
         tasks.forEach((it) => renderHistoryItem(it));
         refreshHistoryCount();
       }).catch(() => {});
+      await recoverActiveTask();
       loadSkills();
       loadReadiness();
       loadMCP();
@@ -4278,4 +4479,156 @@
   if (document.readyState === 'loading') {
     document.addEventListener('DOMContentLoaded', start);
   } else { start(); }
+})();
+
+/* ---------------- First-run onboarding wizard ---------------- */
+(function initOnboarding(){
+  // Never run inside the floating capsule (it loads ?widget=1) — only the dashboard.
+  if (new URLSearchParams(location.search).get('widget')) return;
+
+  const overlay = document.getElementById('onboarding');
+  if (!overlay) return;
+  const steps = Array.from(overlay.querySelectorAll('.onb-step'));
+  const TOTAL = steps.length;
+  let cur = 1;
+  const draft = { voice: false };
+
+  async function ensureSession(){ try { await fetch('/api/session', {method:'POST'}); } catch(_){} }
+
+  function renderProgress(){
+    const p = document.getElementById('onb-progress');
+    if (!p) return;
+    p.innerHTML = '';
+    for (let i = 1; i <= TOTAL; i++){
+      const dot = document.createElement('span');
+      if (i === cur) dot.className = 'active';
+      else if (i < cur) dot.className = 'done';
+      p.appendChild(dot);
+    }
+  }
+
+  function show(n){
+    cur = Math.max(1, Math.min(TOTAL, n));
+    steps.forEach(s => { s.hidden = (Number(s.dataset.step) !== cur); });
+    renderProgress();
+    if (cur === 3) loadConnectors();
+  }
+
+  function next(){ show(cur + 1); }
+
+  // ── Step 2: API key ──
+  async function saveKey(){
+    const input = document.getElementById('onb-key');
+    const status = document.getElementById('onb-key-status');
+    const key = (input?.value || '').trim();
+    if (!key){ next(); return; } // empty = treat as "later"
+    status.className = 'onb-status'; status.textContent = 'Checking…';
+    try {
+      await ensureSession();
+      const r = await fetch('/api/setup/provider-key', {
+        method:'POST', credentials:'include',
+        headers:{'Content-Type':'application/json'},
+        body: JSON.stringify({ provider:'openrouter', key }),
+      });
+      if (r.ok){ status.className = 'onb-status ok'; status.textContent = 'Connected ✓'; setTimeout(next, 500); }
+      else { const d = await r.json().catch(()=>({})); status.className = 'onb-status err'; status.textContent = d.detail || 'That key didn’t work — double-check and try again.'; }
+    } catch(_){ status.className = 'onb-status err'; status.textContent = 'Couldn’t reach the app. Try again.'; }
+  }
+
+  // ── Step 3: connectors ──
+  let connectorsLoaded = false;
+  async function loadConnectors(){
+    if (connectorsLoaded) return;
+    const grid = document.getElementById('onb-conn-grid');
+    if (!grid) return;
+    try {
+      await ensureSession();
+      const r = await fetch('/api/connectors', { credentials:'include' });
+      const items = (await r.json()).connectors || [];
+      grid.innerHTML = '';
+      items.filter(c => c.auth_kind !== 'local').forEach(c => {
+        const tile = document.createElement('button');
+        tile.type = 'button';
+        tile.className = 'onb-conn' + (c.linked ? ' on' : '');
+        const sw = document.createElement('span');
+        sw.className = 'onb-conn-swatch';
+        sw.style.background = /^#[0-9a-fA-F]{3,8}$/.test(String(c.tint||'')) ? c.tint : 'var(--accent)';
+        sw.textContent = (c.label || '?').trim().charAt(0).toUpperCase();
+        const nm = document.createElement('span');
+        nm.className = 'onb-conn-name';
+        nm.textContent = c.label;
+        tile.append(sw, nm);
+        tile.addEventListener('click', async () => {
+          const willLink = !tile.classList.contains('on');
+          tile.classList.toggle('on', willLink);
+          try {
+            await ensureSession();
+            await fetch(`/api/connectors/${c.id}/${willLink ? 'link' : 'unlink'}`, {
+              method:'POST', credentials:'include',
+              headers:{'Content-Type':'application/json'}, body: willLink ? '{"notes":""}' : '{}',
+            });
+          } catch(_){ tile.classList.toggle('on', !willLink); } // revert on failure
+        });
+        grid.appendChild(tile);
+      });
+      connectorsLoaded = true;
+    } catch(_){ grid.innerHTML = '<p class="onb-sub">Couldn’t load connectors — you can add them later in Settings.</p>'; }
+  }
+
+  // ── Step 4: preferences ──
+  function applyThemeNow(t){
+    let r = t;
+    if (t === 'auto'){ try { r = window.matchMedia('(prefers-color-scheme: light)').matches ? 'light':'dark'; } catch(_){ r='dark'; } }
+    document.documentElement.setAttribute('data-theme', r);
+  }
+  async function savePrefs(patch){
+    try {
+      await ensureSession();
+      await fetch('/api/preferences', { method:'POST', credentials:'include',
+        headers:{'Content-Type':'application/json'}, body: JSON.stringify({ preferences: patch }) });
+    } catch(_){}
+  }
+
+  // ── Finish ──
+  async function finish(){
+    await savePrefs({ onboarded: true, speak_replies: draft.voice, voice_input: draft.voice });
+    overlay.hidden = true;
+  }
+
+  function wire(){
+    overlay.querySelectorAll('[data-onb-next]').forEach(b => b.addEventListener('click', next));
+    overlay.querySelectorAll('[data-onb-skip]').forEach(b => b.addEventListener('click', next));
+    document.getElementById('onb-key-save')?.addEventListener('click', saveKey);
+    document.getElementById('onb-key')?.addEventListener('keydown', e => { if (e.key === 'Enter') saveKey(); });
+    document.getElementById('onb-get-key')?.addEventListener('click', () => {
+      try { window.open('https://openrouter.ai/keys', '_blank'); } catch(_){}
+    });
+    // theme segmented control
+    const seg = document.getElementById('onb-theme');
+    seg?.querySelectorAll('button').forEach(btn => btn.addEventListener('click', () => {
+      seg.querySelectorAll('button').forEach(b => b.classList.remove('active'));
+      btn.classList.add('active');
+      const t = btn.dataset.theme;
+      applyThemeNow(t);
+      savePrefs({ theme: t });
+    }));
+    document.getElementById('onb-voice')?.addEventListener('change', e => { draft.voice = e.target.checked; });
+    document.getElementById('onb-finish')?.addEventListener('click', finish);
+  }
+
+  async function maybeShow(){
+    try {
+      await ensureSession();
+      const r = await fetch('/api/preferences', { credentials:'include' });
+      const prefs = r.ok ? (await r.json()).preferences : {};
+      if (prefs && prefs.onboarded) return; // already done
+    } catch(_){ /* if we can't tell, show it — better than hiding setup */ }
+    wire();
+    show(1);
+    overlay.hidden = false;
+  }
+
+  if (document.readyState === 'loading') {
+    document.addEventListener('DOMContentLoaded', maybeShow);
+  } else { maybeShow(); }
 })();
