@@ -811,6 +811,57 @@
   .topbar-dot.failed  { background: var(--err); }
   .topbar-dot.paused  { background: var(--warn); }
   .topbar-ctx { font-size: var(--fs-sm); color: var(--muted-2); font-weight: 400; white-space: nowrap; overflow: hidden; text-overflow: ellipsis; flex-shrink: 1; }
+  .topbar-control {
+    min-width: 0;
+    max-width: 220px;
+    height: 24px;
+    display: inline-flex;
+    align-items: center;
+    gap: 6px;
+    padding: 0 8px;
+    border: 1px solid var(--line);
+    border-radius: 7px;
+    background: var(--bg-2);
+    color: var(--muted);
+    font-size: var(--fs-label);
+    font-weight: 650;
+    white-space: nowrap;
+    overflow: hidden;
+    text-overflow: ellipsis;
+  }
+  .topbar-control[hidden] { display: none; }
+  .topbar-control-dot {
+    width: 6px;
+    height: 6px;
+    border-radius: 999px;
+    background: currentColor;
+    flex-shrink: 0;
+    box-shadow: 0 0 0 3px color-mix(in srgb, currentColor 12%, transparent);
+  }
+  .topbar-control span:last-child {
+    overflow: hidden;
+    text-overflow: ellipsis;
+  }
+  .topbar-control.uia {
+    color: var(--ok);
+    border-color: color-mix(in srgb, var(--ok) 38%, var(--line));
+    background: color-mix(in srgb, var(--ok) 8%, var(--bg-2));
+  }
+  .topbar-control.vision {
+    color: var(--warn);
+    border-color: color-mix(in srgb, var(--warn) 38%, var(--line));
+    background: color-mix(in srgb, var(--warn) 9%, var(--bg-2));
+  }
+  .topbar-control.electron {
+    color: var(--accent);
+    border-color: color-mix(in srgb, var(--accent) 42%, var(--line));
+    background: color-mix(in srgb, var(--accent) 10%, var(--bg-2));
+  }
+  .topbar-control.miss {
+    color: var(--err);
+    border-color: color-mix(in srgb, var(--err) 38%, var(--line));
+    background: color-mix(in srgb, var(--err) 8%, var(--bg-2));
+  }
 
   .project-folder-trigger {
     position: relative;

@@ -99,6 +99,9 @@ def test_task_preflight_detects_auto_desktop_warnings(monkeypatch):
     data = resp.json()
     assert data["effective_mode"] == "computer_isolated"
     assert data["isolated_app"] == "Notepad"
+    assert data["selected_model"] == "tier:uia"
+    assert data["model_source"] == "auto:desktop:uia"
+    assert data["model_auto"] is True
     assert data["blocked"] is False
     assert data["can_override"] is True
     assert [issue["severity"] for issue in data["issues"]] == ["warning", "warning"]
@@ -171,6 +174,144 @@ def test_create_task_requires_override_for_preflight_warnings(monkeypatch):
     assert allowed.status_code == 200
     assert allowed.json()["preflight"]["can_override"] is True
     assert _m._tasks["warning-preflight-task"].status == "queued"
+
+
+def test_retry_task_requires_override_for_preflight_warnings(monkeypatch, tmp_path):
+    from app.models import AgentContext, TaskRecord
+
+    original = TaskRecord(
+        id="retry-source",
+        status="failed",
+        context=AgentContext(goal="Open Notepad", isolated_app="Notepad"),
+        goal="Open Notepad",
+        model=None,
+        mode="auto",
+    )
+    monkeypatch.setattr(_m, "_tasks", {"retry-source": original})
+    monkeypatch.setattr(_m, "task_store_dir", tmp_path)
+    monkeypatch.setattr(_m, "_save_task_record", lambda record: None)
+    monkeypatch.setattr(_m.log_emitter, "emit", lambda *args, **kwargs: None)
+    warning_preflight = {
+        "ok": False,
+        "blocked": False,
+        "can_override": True,
+        "issues": [{"key": "uia", "label": "UIA exact control", "severity": "warning", "status": "blocked", "detail": "Using screenshot fallback."}],
+        "effective_mode": "computer_isolated",
+        "isolated_app": "Notepad",
+        "selected_model": "tier:uia",
+    }
+    monkeypatch.setattr(_m, "_build_task_preflight_payload", lambda **kwargs: warning_preflight)
+    init_calls = []
+
+    def fake_init_task(**kwargs):
+        init_calls.append(kwargs)
+        return TaskRecord(
+            id=kwargs["task_id"],
+            status="running",
+            context=AgentContext(
+                goal=kwargs["goal"],
+                screen_width=kwargs["screen_width"],
+                screen_height=kwargs["screen_height"],
+                isolated_app=kwargs.get("isolated_app"),
+                active_skills=kwargs.get("active_skills") or [],
+                project_folder=kwargs.get("project_folder"),
+                environment=kwargs.get("environment") or {},
+            ),
+            goal=kwargs["goal"],
+            model=kwargs["model"],
+            mode=kwargs["mode"],
+        )
+
+    monkeypatch.setattr(_m.service, "init_task", fake_init_task)
+    client = _client(monkeypatch)
+
+    blocked = client.post(
+        "/api/tasks/retry-source/retry",
+        headers={"Authorization": "Bearer testtoken"},
+    )
+    assert blocked.status_code == 409
+    assert blocked.json()["detail"]["code"] == "readiness_preflight_warning"
+    assert init_calls == []
+    assert "retry-source-retry-1" not in _m._tasks
+
+    allowed = client.post(
+        "/api/tasks/retry-source/retry",
+        headers={"Authorization": "Bearer testtoken"},
+        json={"readiness_override": True},
+    )
+
+    assert allowed.status_code == 200
+    body = allowed.json()
+    assert body["task_id"] == "retry-source-retry-1"
+    assert body["retried_from"] == "retry-source"
+    assert body["preflight"]["can_override"] is True
+    assert init_calls[0]["model"] == "tier:uia"
+    assert _m._tasks["retry-source-retry-1"].status == "running"
+
+
+def test_managed_external_submit_uses_preflight_queue_and_tracking(monkeypatch, tmp_path):
+    monkeypatch.setenv("OPENROUTER_API_KEY", "sk-test")
+    monkeypatch.setattr(_m, "_tasks", {})
+    monkeypatch.setattr(_m, "_queued_task_specs", [])
+    monkeypatch.setattr(_m, "_MAX_ACTIVE_TASKS", 0)
+    monkeypatch.setattr(_m, "task_store_dir", tmp_path)
+    monkeypatch.setattr(_m, "_save_task_record", lambda record: None)
+    events = []
+    monkeypatch.setattr(_m.log_emitter, "emit", lambda task_id, event, payload: events.append((task_id, event, payload)))
+    ok_preflight = {
+        "ok": True,
+        "blocked": False,
+        "can_override": False,
+        "issues": [],
+        "effective_mode": "computer_isolated",
+        "isolated_app": "Notepad",
+        "selected_model": "tier:uia",
+    }
+    monkeypatch.setattr(_m, "_build_task_preflight_payload", lambda **kwargs: ok_preflight)
+
+    record = _m._submit_managed_task(
+        goal="Open Notepad and write hello",
+        task_id="telegram-managed",
+        source="telegram",
+    )
+
+    assert record.status == "queued"
+    assert _m._tasks["telegram-managed"].model == "tier:uia"
+    assert _m._queued_task_specs[0]["model"] == "tier:uia"
+    assert _m._queued_task_specs[0]["source"] == "telegram"
+    created = [payload for _, event, payload in events if event == "task_created"][0]
+    assert created["source"] == "telegram"
+    assert created["preflight"]["effective_mode"] == "computer_isolated"
+    queued = [payload for _, event, payload in events if event == "queued"][0]
+    assert queued["source"] == "telegram"
+
+
+def test_managed_external_submit_blocks_preflight_warnings(monkeypatch, tmp_path):
+    monkeypatch.setenv("OPENROUTER_API_KEY", "sk-test")
+    monkeypatch.setattr(_m, "_tasks", {})
+    monkeypatch.setattr(_m, "_queued_task_specs", [])
+    monkeypatch.setattr(_m, "task_store_dir", tmp_path)
+    monkeypatch.setattr(_m, "_save_task_record", lambda record: None)
+    warning_preflight = {
+        "ok": False,
+        "blocked": False,
+        "can_override": True,
+        "issues": [{"key": "uia", "label": "UIA exact control", "severity": "warning", "status": "blocked", "detail": "Using screenshot fallback."}],
+        "effective_mode": "computer_isolated",
+        "isolated_app": "Notepad",
+        "selected_model": "tier:uia",
+    }
+    monkeypatch.setattr(_m, "_build_task_preflight_payload", lambda **kwargs: warning_preflight)
+
+    with pytest.raises(RuntimeError, match="UIA exact control"):
+        _m._submit_managed_task(
+            goal="Open Notepad and write hello",
+            task_id="telegram-warning",
+            source="telegram",
+        )
+
+    assert "telegram-warning" not in _m._tasks
+    assert _m._queued_task_specs == []
 
 
 def test_get_mcp_not_ready_returns_initializing(monkeypatch):

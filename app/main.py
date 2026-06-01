@@ -7,6 +7,7 @@ import json
 import os
 import re
 import secrets
+import uuid
 from datetime import datetime, timedelta, timezone
 from pathlib import Path
 from typing import Any, Dict, Optional, List, Literal
@@ -79,34 +80,23 @@ async def _lifespan(application):
 
     global _telegram_task, _discord_task, _automation_task, _session_prune_task
     await _init_mcp()
-    _telegram_task = asyncio.create_task(start_telegram(service))
-    _discord_task = asyncio.create_task(start_discord(service))
+    def _external_submit(*, goal: str, task_id: Optional[str] = None, source: str = "external") -> TaskRecord:
+        return _submit_managed_task(goal=goal, task_id=task_id, source=source)
+
+    _telegram_task = asyncio.create_task(start_telegram(service, submit_task=_external_submit))
+    _discord_task = asyncio.create_task(start_discord(service, submit_task=_external_submit))
     _session_prune_task = asyncio.create_task(_prune_sessions_loop())
 
     from .automation import get_registry as _get_auto_registry, poll_and_fire as _poll_and_fire
 
     async def _automation_submit(goal: str) -> None:
         tid = f"automation-{uuid.uuid4().hex[:8]}"
-        for env_var, mdl in [
-            ("OPENROUTER_API_KEY", "openrouter/nvidia/nemotron-3-super-120b-a12b:free"),
-            ("ANTHROPIC_API_KEY", "claude-3-5-sonnet-20241022"),
-            ("OPENAI_API_KEY", "gpt-4o-mini"),
-            ("GOOGLE_API_KEY", "gemini-2.0-flash"),
-            ("GROQ_API_KEY", "groq/llama-3.3-70b-versatile"),
-        ]:
-            if os.environ.get(env_var):
-                selected = mdl
-                break
-        else:
-            _lifespan_log.warning("Automation: no API key configured, cannot fire trigger for %r", goal)
+        try:
+            record = _submit_managed_task(goal=goal, task_id=tid, source="automation")
+        except RuntimeError as exc:
+            _lifespan_log.warning("Automation: cannot fire trigger for %r: %s", goal, exc)
             return
-        spec = {
-            "task_id": tid, "goal": goal, "model": selected,
-            "mode": "auto", "screen_width": 1280, "screen_height": 800,
-            "environment": _build_task_environment(HOME_DIR, project_folder_selected=False),
-        }
-        _start_task_from_spec(spec)
-        _lifespan_log.info("Automation: fired task %s for goal %r", tid, goal)
+        _lifespan_log.info("Automation: fired task %s for goal %r", record.id, goal)
 
     _automation_task = asyncio.create_task(_poll_and_fire(_automation_submit))
 
@@ -664,6 +654,10 @@ class TaskPreflightIn(BaseModel):
     isolated_app: Optional[str] = None
 
 
+class RetryIn(BaseModel):
+    readiness_override: bool = False
+
+
 class AutomationIn(BaseModel):
     schedule: str = Field(..., description="5-field cron expression: 'minute hour mday month wday'")
     task_template: str = Field(..., min_length=1, max_length=2000)
@@ -938,6 +932,54 @@ def _preflight_issue(check: Optional[Dict[str, Any]], severity: str, detail: str
     }
 
 
+def _select_model_for_task(goal: str, mode: str = "auto", requested_model: Optional[str] = None) -> Dict[str, Any]:
+    """Select the exact model create_task will use, without starting a task."""
+    requested_mode = mode or "auto"
+    if requested_model:
+        required_key = _required_key_for_model(requested_model)
+        return {
+            "selected_model": requested_model,
+            "model_source": "explicit",
+            "model_auto": False,
+            "required_key": required_key,
+            "missing_key": bool(required_key and not os.environ.get(required_key)),
+        }
+
+    if os.environ.get("OPENROUTER_API_KEY"):
+        detected_mode = detect_task_mode(goal, requested_mode if requested_mode != "auto" else None)
+        if detected_mode == "coding":
+            selected_model = "openrouter/qwen/qwen3-coder:free"
+            source = "auto:openrouter:coding"
+        elif detected_mode in ("computer", "computer_isolated"):
+            selected_model = os.environ.get("DESKTOP_MODEL", "").strip() or "tier:uia"
+            source = "auto:desktop:uia"
+        else:
+            selected_model = "openrouter/nvidia/nemotron-3-super-120b-a12b:free"
+            source = "auto:openrouter:default"
+        return {
+            "selected_model": selected_model,
+            "model_source": source,
+            "model_auto": True,
+            "required_key": "OPENROUTER_API_KEY",
+            "missing_key": False,
+        }
+    if os.environ.get("ANTHROPIC_API_KEY"):
+        return {"selected_model": "claude-3-5-sonnet-20241022", "model_source": "auto:anthropic", "model_auto": True, "required_key": "ANTHROPIC_API_KEY", "missing_key": False}
+    if os.environ.get("OPENAI_API_KEY"):
+        return {"selected_model": "gpt-4o-mini", "model_source": "auto:openai", "model_auto": True, "required_key": "OPENAI_API_KEY", "missing_key": False}
+    if os.environ.get("GOOGLE_API_KEY"):
+        return {"selected_model": "gemini-2.0-flash", "model_source": "auto:google", "model_auto": True, "required_key": "GOOGLE_API_KEY", "missing_key": False}
+    if os.environ.get("GROQ_API_KEY"):
+        return {"selected_model": "groq/llama-3.3-70b-versatile", "model_source": "auto:groq", "model_auto": True, "required_key": "GROQ_API_KEY", "missing_key": False}
+    if os.environ.get("OLLAMA_DEFAULT_MODEL"):
+        return {"selected_model": f"ollama/{os.environ['OLLAMA_DEFAULT_MODEL']}", "model_source": "auto:ollama:env", "model_auto": True, "required_key": None, "missing_key": False}
+
+    ollama = detect_ollama()
+    if ollama.get("available") and ollama.get("models"):
+        return {"selected_model": f"ollama/{ollama['models'][0]}", "model_source": "auto:ollama:detected", "model_auto": True, "required_key": None, "missing_key": False}
+    return {"selected_model": "", "model_source": "missing", "model_auto": True, "required_key": None, "missing_key": True}
+
+
 def _build_task_preflight_payload(
     *,
     goal: str,
@@ -953,25 +995,24 @@ def _build_task_preflight_payload(
     effective_isolated_app = isolated_app
     if effective_mode == "computer_isolated" and not effective_isolated_app:
         effective_isolated_app = infer_isolated_app_name(goal)
+    model_selection = _select_model_for_task(goal, requested_mode, model)
+    selected_model = model_selection.get("selected_model") or ""
     issues: List[Dict[str, str]] = []
 
-    if model:
-        required_key = _required_key_for_model(model)
-        if required_key and not os.environ.get(required_key):
-            provider_check = checks.get("provider_keys")
-            issues.append(_preflight_issue(
-                provider_check,
-                "blocked",
-                f"Model '{model}' requires {required_key} before this task can run.",
-            ))
-    else:
-        provider_check = checks.get("provider_keys")
-        if provider_check and provider_check.get("status") == "blocked":
-            issues.append(_preflight_issue(
-                provider_check,
-                "blocked",
-                "Add a model provider key before starting tasks.",
-            ))
+    provider_check = checks.get("provider_keys")
+    if model_selection.get("missing_key"):
+        detail = (
+            f"Model '{model}' requires {model_selection.get('required_key')} before this task can run."
+            if model and model_selection.get("required_key")
+            else "Add a model provider key before starting tasks."
+        )
+        issues.append(_preflight_issue(provider_check, "blocked", detail))
+    elif not selected_model and provider_check and provider_check.get("status") == "blocked":
+        issues.append(_preflight_issue(
+            provider_check,
+            "blocked",
+            "Add a model provider key before starting tasks.",
+        ))
 
     if effective_mode == "computer_use":
         browser = checks.get("browser")
@@ -1023,12 +1064,156 @@ def _build_task_preflight_payload(
         "effective_mode": effective_mode,
         "isolated_app": effective_isolated_app,
         "model": model,
+        "selected_model": selected_model or None,
+        "model_source": model_selection.get("model_source"),
+        "model_auto": bool(model_selection.get("model_auto")),
         "readiness": {
             "overall": readiness.get("overall"),
             "score": readiness.get("score"),
             "summary": readiness.get("summary"),
         },
     }
+
+
+def _summarize_preflight_issues(preflight: Dict[str, Any]) -> str:
+    issues = preflight.get("issues") if isinstance(preflight, dict) else []
+    if not isinstance(issues, list) or not issues:
+        return "Readiness checks did not pass."
+    parts = []
+    for issue in issues[:3]:
+        if not isinstance(issue, dict):
+            continue
+        label = str(issue.get("label") or issue.get("key") or "Capability")
+        detail = str(issue.get("detail") or issue.get("fix") or issue.get("status") or "").strip()
+        parts.append(f"{label}: {detail}" if detail else label)
+    return "; ".join(parts) or "Readiness checks did not pass."
+
+
+def _submit_managed_task(
+    *,
+    goal: str,
+    task_id: Optional[str] = None,
+    source: str = "external",
+    model: Optional[str] = None,
+    mode: Literal["auto", "coding", "computer", "computer_use", "computer_isolated", "explain"] = "auto",
+    screen_width: int = 1280,
+    screen_height: int = 800,
+    isolated_app: Optional[str] = None,
+    active_skills: Optional[List[str]] = None,
+    project_folder: Optional[str] = None,
+    plan_first: bool = False,
+    notify_on_completion: bool = False,
+    auto_commit: bool = False,
+    autonomy_level: Literal["careful", "balanced", "fast"] = "balanced",
+    thinking_budget: Literal["off", "standard", "extended"] = "off",
+    readiness_override: bool = False,
+) -> TaskRecord:
+    """Start or queue a non-HTTP task through the same model/readiness contract."""
+    task_id = task_id or f"{source}-{uuid.uuid4().hex[:8]}"
+    _validate_task_id(task_id)
+    existing = _tasks.get(task_id)
+    if existing and not _is_terminal_status(existing.status):
+        raise RuntimeError(f"Task '{task_id}' already exists and is still active.")
+    if existing or _task_store_path(task_id).exists():
+        suffix = f"-{secrets.token_hex(4)}"
+        task_id = f"{task_id[:128 - len(suffix)]}{suffix}"
+        _validate_task_id(task_id)
+
+    model_selection = _select_model_for_task(goal, mode or "auto", model)
+    selected_model = model_selection.get("selected_model") or ""
+    if not selected_model:
+        raise RuntimeError("No API keys configured. Add a provider key before starting tasks.")
+    if model_selection.get("missing_key"):
+        required_key = model_selection.get("required_key")
+        raise RuntimeError(f"Model '{selected_model}' requires {required_key} to be set.")
+
+    preflight = _build_task_preflight_payload(
+        goal=goal,
+        mode=mode or "auto",
+        model=model,
+        isolated_app=isolated_app,
+    )
+    if preflight["blocked"]:
+        raise RuntimeError(_summarize_preflight_issues(preflight))
+    if preflight.get("can_override") and preflight.get("issues") and not readiness_override:
+        raise RuntimeError(_summarize_preflight_issues(preflight))
+
+    selected_project_folder = _resolve_project_folder(project_folder)
+    effective_workspace = selected_project_folder or HOME_DIR
+    environment = _build_task_environment(
+        effective_workspace,
+        project_folder_selected=selected_project_folder is not None,
+    )
+    spec = {
+        "task_id": task_id,
+        "goal": goal,
+        "screen_width": screen_width,
+        "screen_height": screen_height,
+        "model": selected_model,
+        "mode": mode or "auto",
+        "isolated_app": isolated_app,
+        "active_skills": active_skills or [],
+        "project_folder": str(selected_project_folder) if selected_project_folder else None,
+        "environment": environment,
+        "plan_first": plan_first,
+        "notify_on_completion": notify_on_completion,
+        "auto_commit": auto_commit,
+        "autonomy_level": autonomy_level,
+        "thinking_budget": thinking_budget,
+        "source": source,
+    }
+    active_count = sum(1 for task in service._active_tasks.values() if not task.done())
+    if active_count >= _MAX_ACTIVE_TASKS:
+        context = AgentContext(
+            goal=goal,
+            screen_width=screen_width,
+            screen_height=screen_height,
+            isolated_app=isolated_app,
+            active_skills=active_skills or [],
+            project_folder=str(selected_project_folder) if selected_project_folder else None,
+            environment=environment,
+        )
+        record = TaskRecord(
+            id=task_id,
+            status="queued",
+            context=context,
+            goal=goal,
+            model=selected_model,
+            mode=mode or "auto",
+            plan_first=plan_first,
+            notify_on_completion=notify_on_completion,
+            auto_commit=auto_commit,
+            autonomy_level=autonomy_level,
+            thinking_budget=thinking_budget,
+        )
+        _tasks[task_id] = record
+        _queued_task_specs.append(spec)
+        _save_task_record(record)
+        status = "queued"
+    else:
+        record = _start_task_from_spec(spec)
+        status = "running"
+
+    log_emitter.emit(task_id, "task_created", {
+        "task_id": task_id,
+        "goal": goal,
+        "model": selected_model,
+        "mode": record.mode,
+        "effective_mode": preflight.get("effective_mode"),
+        "isolated_app": preflight.get("isolated_app"),
+        "preflight": preflight,
+        "created_at": record.created_at,
+        "project_folder": record.context.project_folder,
+        "source": source,
+    })
+    if status == "queued":
+        log_emitter.emit(task_id, "queued", {
+            "task_id": task_id,
+            "position": len(_queued_task_specs),
+            "max_active_tasks": _MAX_ACTIVE_TASKS,
+            "source": source,
+        })
+    return record
 
 @app.get("/healthz")
 async def healthz():
@@ -1652,62 +1837,24 @@ async def create_task(body: TaskIn):
         raise HTTPException(status_code=409, detail=f"Task '{body.task_id}' already exists")
     active = len(service._active_tasks)
 
-    # Auto-pick a model from whatever keys are available when none is specified
-    if not body.model:
-        if os.environ.get("OPENROUTER_API_KEY"):
-            _mode = body.mode or "auto"
-            _detected_mode = detect_task_mode(body.goal, _mode if _mode != "auto" else None)
-            # Qwen3-Coder is purpose-built for code; use it for coding mode
-            if _detected_mode == "coding":
-                selected_model = "openrouter/qwen/qwen3-coder:free"
-            elif _detected_mode in ("computer", "computer_isolated"):
-                # Desktop control via UI Automation is text-only (no vision):
-                # default to the fast, accurate free tool-calling UIA tier.
-                # OPT-IN RELIABILITY: power users can set DESKTOP_MODEL to a
-                # stronger model (e.g. anthropic/claude-3.5-sonnet, openai/gpt-4o,
-                # or any OpenRouter id) for rock-solid long multi-step sequences —
-                # the free 20b can derail on those. Free stays the default; this
-                # only kicks in when the user explicitly opts in. (When an image
-                # is attached the widget sends an explicit vision model, which
-                # takes this branch out of play since body.model is set.)
-                selected_model = os.environ.get("DESKTOP_MODEL", "").strip() or "tier:uia"
-            else:
-                selected_model = "openrouter/nvidia/nemotron-3-super-120b-a12b:free"
-        elif os.environ.get("ANTHROPIC_API_KEY"):
-            selected_model = "claude-3-5-sonnet-20241022"
-        elif os.environ.get("OPENAI_API_KEY"):
-            selected_model = "gpt-4o-mini"
-        elif os.environ.get("GOOGLE_API_KEY"):
-            selected_model = "gemini-2.0-flash"
-        elif os.environ.get("GROQ_API_KEY"):
-            selected_model = "groq/llama-3.3-70b-versatile"
-        elif os.environ.get("OLLAMA_DEFAULT_MODEL"):
-            selected_model = f"ollama/{os.environ['OLLAMA_DEFAULT_MODEL']}"
-        else:
-            ollama = detect_ollama()
-            if ollama.get("available") and ollama.get("models"):
-                selected_model = f"ollama/{ollama['models'][0]}"
-            else:
-                selected_model = ""
-        if not selected_model:
-            raise HTTPException(
-                status_code=400,
-                detail="No API keys configured. Add at least one key (OPENROUTER_API_KEY, ANTHROPIC_API_KEY, etc.) to your .env file."
-            )
-    else:
-        selected_model = body.model
-        # Validate that the required API key is present for explicitly chosen models
-        required_key = _required_key_for_model(selected_model)
-        if required_key and not os.environ.get(required_key):
-            raise HTTPException(
-                status_code=400,
-                detail=f"Model '{selected_model}' requires {required_key} to be set in your .env file."
-            )
+    model_selection = _select_model_for_task(body.goal, body.mode or "auto", body.model)
+    selected_model = model_selection.get("selected_model") or ""
+    if not selected_model:
+        raise HTTPException(
+            status_code=400,
+            detail="No API keys configured. Add at least one key (OPENROUTER_API_KEY, ANTHROPIC_API_KEY, etc.) to your .env file."
+        )
+    if model_selection.get("missing_key"):
+        required_key = model_selection.get("required_key")
+        raise HTTPException(
+            status_code=400,
+            detail=f"Model '{selected_model}' requires {required_key} to be set in your .env file."
+        )
 
     preflight = _build_task_preflight_payload(
         goal=body.goal,
         mode=body.mode or "auto",
-        model=selected_model,
+        model=body.model,
         isolated_app=body.isolated_app,
     )
     if preflight["blocked"]:
@@ -2089,7 +2236,8 @@ async def model_health():
 
 
 @app.post("/api/tasks/{task_id}/retry", dependencies=[Depends(verify_token)])
-async def retry_task(task_id: str):
+async def retry_task(task_id: str, body: Optional[RetryIn] = None):
+    body = body or RetryIn()
     _validate_task_id(task_id)
     record = _get_task_record(task_id)
     if not record:
@@ -2107,12 +2255,37 @@ async def retry_task(task_id: str):
     goal = record.goal or record.context.goal
     if not goal:
         raise HTTPException(status_code=400, detail="Task has no goal to retry")
+    preflight = _build_task_preflight_payload(
+        goal=goal,
+        mode=mode,
+        model=model,
+        isolated_app=record.context.isolated_app,
+    )
+    if preflight["blocked"]:
+        raise HTTPException(
+            status_code=409,
+            detail={
+                "code": "readiness_preflight_blocked",
+                "message": "This task cannot be retried until blocked readiness checks are fixed.",
+                "preflight": preflight,
+            },
+        )
+    if preflight.get("can_override") and preflight.get("issues") and not body.readiness_override:
+        raise HTTPException(
+            status_code=409,
+            detail={
+                "code": "readiness_preflight_warning",
+                "message": "This retry has degraded readiness checks. Re-submit with readiness_override=true to run anyway.",
+                "preflight": preflight,
+            },
+        )
+    selected_model = model or preflight.get("selected_model") or "openrouter/nvidia/nemotron-3-super-120b-a12b:free"
     new_record = service.init_task(
         task_id=new_task_id,
         goal=goal,
         screen_width=record.context.screen_width,
         screen_height=record.context.screen_height,
-        model=model or "openrouter/nvidia/nemotron-3-super-120b-a12b:free",
+        model=selected_model,
         mode=mode,
         isolated_app=record.context.isolated_app,
         active_skills=record.context.active_skills,
@@ -2130,11 +2303,21 @@ async def retry_task(task_id: str):
         "goal": goal,
         "model": new_record.model,
         "mode": new_record.mode,
+        "effective_mode": preflight.get("effective_mode"),
+        "isolated_app": preflight.get("isolated_app"),
+        "preflight": preflight,
         "created_at": new_record.created_at,
         "retried_from": task_id,
         "project_folder": new_record.context.project_folder,
     })
-    return {"task_id": new_task_id, "status": "running", "retried_from": task_id}
+    return {
+        "task_id": new_task_id,
+        "status": "running",
+        "retried_from": task_id,
+        "model": new_record.model,
+        "mode": new_record.mode,
+        "preflight": preflight,
+    }
 
 
 @app.get("/api/tasks/{task_id}/stream")

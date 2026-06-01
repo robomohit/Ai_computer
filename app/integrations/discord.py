@@ -169,7 +169,7 @@ async def consume_discord_sse(
         await _finalize_reactions(outcome)
 
 
-async def start_discord(agent_service: "AgentService") -> None:
+async def start_discord(agent_service: "AgentService", submit_task: Any | None = None) -> None:
     """Entry point called from FastAPI lifespan. Returns immediately if token absent."""
     token = os.environ.get("DISCORD_BOT_TOKEN", "").strip()
     if not token:
@@ -229,7 +229,11 @@ async def start_discord(agent_service: "AgentService") -> None:
 
         task_id = f"dc_{message.author.id}_{int(asyncio.get_event_loop().time() * 1000)}"
         try:
-            agent_service.init_task(task_id, goal)
+            if submit_task:
+                record = submit_task(goal=goal, task_id=task_id, source="discord")
+                task_id = record.id
+            else:
+                agent_service.init_task(task_id, goal)
         except Exception as exc:
             await working_msg.edit(content=f"Failed to start task: {exc}"[:1990])
             return

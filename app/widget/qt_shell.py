@@ -913,6 +913,37 @@ def main(port: int = 8000) -> int:
             })
             return True
 
+        def _retry_after_preflight_rejection(self, client, payload: dict, response):
+            try:
+                detail = response.json().get("detail", {})
+            except Exception:
+                return response
+            if not isinstance(detail, dict):
+                return response
+            code = detail.get("code")
+            preflight = detail.get("preflight") or {}
+            issues = preflight.get("issues", []) if isinstance(preflight, dict) else []
+            summary = self._summarize_preflight_issues(issues if isinstance(issues, list) else [])
+            if code == "readiness_preflight_blocked":
+                self.widgetRequested.emit({
+                    "title": "Setup needed",
+                    "icon": "alert",
+                    "text": summary or "This task cannot start until setup is fixed.",
+                })
+                self.finished.emit("Setup needed before this task can run.", [])
+                self.runningChanged.emit(False)
+                return None
+            if code == "readiness_preflight_warning" and isinstance(preflight, dict) and preflight.get("can_override"):
+                payload["readiness_override"] = True
+                self.statusChanged.emit("Capability fallback - running with safeguards...")
+                self.widgetRequested.emit({
+                    "title": "Capability fallback",
+                    "icon": "alert",
+                    "text": summary or "Running with degraded local capabilities.",
+                })
+                return client.post(f"{BASE}/api/tasks", json=payload)
+            return response
+
         def _run(self, goal: str, attach: dict) -> None:
             try:
                 import httpx
@@ -929,6 +960,11 @@ def main(port: int = 8000) -> int:
                     if not self._run_preflight(c, payload):
                         return
                     r = c.post(f"{BASE}/api/tasks", json=payload)
+                    if r.status_code >= 400:
+                        retried = self._retry_after_preflight_rejection(c, payload, r)
+                        if retried is None:
+                            return
+                        r = retried
                     if r.status_code >= 400:
                         self.finished.emit(f"Couldn't start: {r.text[:200]}")
                         self.runningChanged.emit(False)

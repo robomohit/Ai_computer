@@ -163,7 +163,7 @@ async def consume_telegram_sse(
         await _set_user_message_reaction(final)
 
 
-async def start_telegram(agent_service: "AgentService") -> None:
+async def start_telegram(agent_service: "AgentService", submit_task: Any | None = None) -> None:
     """Entry point called from FastAPI lifespan. Returns immediately if token absent."""
     token = os.environ.get("TELEGRAM_BOT_TOKEN", "").strip()
     if not token:
@@ -195,7 +195,11 @@ async def start_telegram(agent_service: "AgentService") -> None:
         working_msg = await update.message.reply_text("🤔 Thinking…")
         task_id = f"tg_{chat_id}_{int(asyncio.get_event_loop().time() * 1000)}"
         try:
-            agent_service.init_task(task_id, goal)
+            if submit_task:
+                record = submit_task(goal=goal, task_id=task_id, source="telegram")
+                task_id = record.id
+            else:
+                agent_service.init_task(task_id, goal)
         except Exception as exc:
             try:
                 await working_msg.edit_text(f"Failed to start task: {exc}")

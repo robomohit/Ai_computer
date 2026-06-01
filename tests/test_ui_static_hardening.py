@@ -154,15 +154,33 @@ def test_task_start_is_gated_by_readiness_preflight():
 
     assert "const requestReadinessPreflight" in js
     assert "const ensureTaskReadiness" in js
+    assert "const handleServerPreflightRejection" in js
+    assert "let modelSelectionTouched = false" in js
+    assert "const selectedModelForRequest" in js
     assert "const taskReadinessIssues" not in js
     assert "/api/tasks/preflight" in js
     assert "const readinessDecision = await ensureTaskReadiness({" in js
+    assert "const requestedModel = selectedModelForRequest(requestedMode)" in js
+    assert "if ((mode || 'auto') === 'auto' && !modelSelectionTouched) return null" in js
+    assert "modelSelectionTouched = true" in js
     assert "const effectiveMode = readinessDecision.preflight?.effective_mode || requestedMode" in js
     assert "const effectiveIsolatedApp = requestedIsolatedApp || readinessDecision.preflight?.isolated_app || ''" in js
+    assert "const displayModel = requestedModel || readinessDecision.preflight?.selected_model || null" in js
+    assert "setTaskTitle(goal, { mode: effectiveMode, model: displayModel, status: 'running' })" in js
     assert js.index("ensureTaskReadiness({") < js.index("requestDesktopAccess({ mode: effectiveMode")
     assert "if (isDesktopMode(effectiveMode))" in js
     assert "setDesktopSessionActive(true, effectiveMode, effectiveIsolatedApp || '')" in js
+    assert "await handleServerPreflightRejection(err, taskPayload)" in js
+    assert "taskPayload.readiness_override = true" in js
     assert "readiness_override: !!readinessDecision.override" in js
+    assert "const originalTaskId = currentViewedTask" in js
+    assert "const startRetriedTask = (result) =>" in js
+    assert "const readinessDecision = await ensureTaskReadiness({" in js
+    assert "`/api/tasks/${originalTaskId}/retry`, 'POST', { readiness_override: readinessOverride }" in js
+    assert "`/api/tasks/${originalTaskId}/retry`, 'POST', { readiness_override: true }" in js
+    assert "requestDesktopAccess({ mode: effectiveMode, isolatedApp: effectiveIsolatedApp })" in js
+    assert "const displayModel = preflight.selected_model || result.model || $('model-id').value" in js
+    assert "const effectiveMode = preflight.effective_mode || result.mode || $('mode-id').value" in js
     assert "btnContinue.hidden = blocked" in js
     assert "name.textContent = issue.label" in js
     assert "detail.textContent = issue.detail" in js
@@ -235,6 +253,14 @@ def test_control_trace_surface_present():
     assert "control_layer" in js
     assert "control_reason" in js
     assert "fallback_reason" in js
+    assert 'id="topbar-control"' in html
+    assert 'id="topbar-control-layer"' in html
+    assert "const controlLayerClass" in js
+    assert "const setControlSurface" in js
+    assert "setControlSurface({" in js
+    assert ".topbar-control" in css
+    assert ".topbar-control.uia" in css
+    assert ".topbar-control.vision" in css
     assert "app_rect" in js
     assert "control-trace-chip" in css
     assert ".control-trace-chip.layer" in css
@@ -360,6 +386,8 @@ def test_desktop_launcher_has_frameless_widget_mode():
     assert "WindowStaysOnTopHint" in qt_shell
     assert "/api/tasks/preflight" in qt_shell
     assert "payload[\"readiness_override\"] = True" in qt_shell
+    assert "_retry_after_preflight_rejection" in qt_shell
+    assert "readiness_preflight_warning" in qt_shell
     assert "Capability fallback" in qt_shell
     assert "Setup needed before this task can run." in qt_shell
     assert "AI_COMPUTER_TOPMOST" in qt_shell
