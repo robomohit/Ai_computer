@@ -5,6 +5,11 @@
 *.key
 *.pem
 
+# Build artifacts (PyInstaller)
+build/
+dist/
+*.manifest
+
 # Python
 __pycache__/
 *.pyc

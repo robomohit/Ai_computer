@@ -118,8 +118,22 @@ app.add_middleware(CORSMiddleware, allow_origins=_allowed_origins, allow_credent
 # Serve bundled static assets (vendored JS/CSS, e.g. static/vendor/mermaid.min.js)
 # so the UI stays fully offline — no CDN dependency.
 from fastapi.staticfiles import StaticFiles
-if os.path.isdir("static"):
-    app.mount("/static", StaticFiles(directory="static"), name="static")
+import sys as _sys
+
+
+def _resource_dir() -> str:
+    """Base directory for bundled resources. Works both in development AND when
+    frozen into a single .exe by PyInstaller (which extracts data to _MEIPASS)."""
+    base = getattr(_sys, "_MEIPASS", None)
+    if base:
+        return base
+    return os.path.dirname(os.path.dirname(os.path.abspath(__file__)))
+
+
+STATIC_DIR = os.path.join(_resource_dir(), "static")
+INDEX_HTML = os.path.join(STATIC_DIR, "index.html")
+if os.path.isdir(STATIC_DIR):
+    app.mount("/static", StaticFiles(directory=STATIC_DIR), name="static")
 
 
 # Defeat aggressive browser caching for our static bundle so a fresh `static/style.css`
@@ -492,7 +506,7 @@ def _serialize_task_record(record: TaskRecord) -> dict:
     payload = record.model_dump()
     payload["paused"] = bool(record.paused or record.id in service._paused_tasks)
     payload["server_running"] = _task_is_server_running(record.id)
-    if payload["server_running"]:
+    if payload["server_running"] or payload["paused"]:
         payload["status"] = "paused" if payload["paused"] else "running"
     return payload
 
@@ -695,7 +709,7 @@ class PermissionIn(BaseModel):
 @app.get("/")
 async def root():
     return FileResponse(
-        "static/index.html",
+        INDEX_HTML,
         headers={"Cache-Control": "no-store, no-cache, must-revalidate", "Pragma": "no-cache"}
     )
 
@@ -703,7 +717,7 @@ async def root():
 @app.get("/v2")
 async def root_v2():
     return FileResponse(
-        "static/index.html",
+        INDEX_HTML,
         headers={"Cache-Control": "no-store, no-cache, must-revalidate", "Pragma": "no-cache"}
     )
 
@@ -1842,18 +1856,15 @@ async def get_all_tasks():
 @app.get("/api/active-tasks", dependencies=[Depends(verify_token)])
 async def get_active_tasks():
     """Return tasks currently running or pending (not in a terminal state)."""
-    active = [
-        {
-            "task_id": tid,
-            "status": rec.status,
-            "goal": rec.goal or rec.context.goal,
-            "mode": rec.mode,
-            "model": rec.model,
-            "created_at": rec.created_at,
-        }
-        for tid, rec in _tasks.items()
-        if not _is_terminal_status(rec.status)
-    ]
+    active = []
+    for tid, rec in _tasks.items():
+        payload = _serialize_task_record(rec)
+        if _is_terminal_status(payload.get("status")):
+            continue
+        payload["task_id"] = tid
+        payload["goal"] = rec.goal or rec.context.goal
+        payload["isolated_app"] = rec.context.isolated_app
+        active.append(payload)
     return {"tasks": active}
 
 
@@ -2409,6 +2420,11 @@ async def approvals(body: ApprovalIn):
 @app.post("/api/permissions", dependencies=[Depends(verify_token)])
 async def permissions(body: PermissionIn):
     service.submit_permission(body.task_id, body.action_id, body.grant)
+    if body.scope:
+        if body.grant:
+            service.permissions.grant(body.task_id, body.scope)
+        else:
+            service.permissions.deny(body.task_id, body.scope)
     return {"ok": True, "scope": body.scope, "granted": body.grant}
 
 
