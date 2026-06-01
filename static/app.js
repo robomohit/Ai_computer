@@ -4177,3 +4177,105 @@
     setTimeout(load, 50);
   });
 })();
+
+/* ---------------- User preferences (theme, mode, voice…) ---------------- */
+(function initPreferences(){
+  let prefs = null;
+
+  async function ensureSession(){ try { await fetch('/api/session', {method:'POST'}); } catch(_){} }
+
+  function resolveTheme(t){
+    if (t === 'light' || t === 'dark') return t;
+    // auto → follow the OS
+    try {
+      return window.matchMedia('(prefers-color-scheme: light)').matches ? 'light' : 'dark';
+    } catch(_) { return 'dark'; }
+  }
+
+  function applyTheme(t){
+    document.documentElement.setAttribute('data-theme', resolveTheme(t));
+  }
+
+  // React to OS theme changes while in "auto"
+  try {
+    window.matchMedia('(prefers-color-scheme: dark)').addEventListener('change', () => {
+      if (prefs && prefs.theme === 'auto') applyTheme('auto');
+    });
+  } catch(_){}
+
+  function fillControls(){
+    if (!prefs) return;
+    const set = (id, val) => { const el = document.getElementById(id); if (el) el.value = val; };
+    const chk = (id, val) => { const el = document.getElementById(id); if (el) el.checked = !!val; };
+    set('pref-theme', prefs.theme);
+    set('pref-default-mode', prefs.default_mode);
+    set('pref-desktop-model', prefs.desktop_model || '');
+    chk('pref-speak', prefs.speak_replies);
+    chk('pref-voice-input', prefs.voice_input);
+    chk('pref-glow', prefs.show_action_glow);
+    chk('pref-confirm', prefs.confirm_sensitive);
+  }
+
+  function flashSaved(){
+    const hint = document.getElementById('pref-saved-hint');
+    if (!hint) return;
+    hint.style.opacity = '1';
+    clearTimeout(flashSaved._t);
+    flashSaved._t = setTimeout(() => { hint.style.opacity = '0'; }, 1400);
+  }
+
+  async function save(patch){
+    Object.assign(prefs, patch);
+    if ('theme' in patch) applyTheme(patch.theme);
+    try {
+      await ensureSession();
+      await fetch('/api/preferences', {
+        method:'POST', credentials:'include',
+        headers:{'Content-Type':'application/json'},
+        body: JSON.stringify({ preferences: patch }),
+      });
+      flashSaved();
+    } catch(e){ console.error('[prefs] save failed', e); }
+  }
+
+  function bind(){
+    const onSel = (id, key) => document.getElementById(id)
+      ?.addEventListener('change', e => save({ [key]: e.target.value }));
+    const onChk = (id, key) => document.getElementById(id)
+      ?.addEventListener('change', e => save({ [key]: e.target.checked }));
+    const onTxt = (id, key) => document.getElementById(id)
+      ?.addEventListener('change', e => save({ [key]: e.target.value.trim() }));
+    onSel('pref-theme', 'theme');
+    onSel('pref-default-mode', 'default_mode');
+    onChk('pref-speak', 'speak_replies');
+    onChk('pref-voice-input', 'voice_input');
+    onChk('pref-glow', 'show_action_glow');
+    onChk('pref-confirm', 'confirm_sensitive');
+    onTxt('pref-desktop-model', 'desktop_model');
+  }
+
+  async function load(){
+    try {
+      await ensureSession();
+      const r = await fetch('/api/preferences', { credentials:'include' });
+      if (!r.ok) return;
+      prefs = (await r.json()).preferences || {};
+      applyTheme(prefs.theme);
+      fillControls();
+      // Make the default-mode preference actually drive the mode selector, so
+      // new tasks start in the user's chosen mode.
+      if (prefs.default_mode && prefs.default_mode !== 'auto') {
+        const modeSel = document.getElementById('mode-id');
+        if (modeSel && modeSel.value !== prefs.default_mode) {
+          modeSel.value = prefs.default_mode;
+          modeSel.dispatchEvent(new Event('change', { bubbles: true }));
+        }
+      }
+    } catch(e){ console.error('[prefs] load failed', e); }
+  }
+
+  function start(){ bind(); load(); }
+  if (document.readyState === 'loading') {
+    document.addEventListener('DOMContentLoaded', start);
+  } else { start(); }
+})();

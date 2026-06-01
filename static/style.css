@@ -3852,3 +3852,80 @@
     color: #fff;
     border-color: var(--err);
   }
+
+  /* ---------------- Preferences (Settings panel) ---------------- */
+  .prefs-grid {
+    display: flex;
+    flex-direction: column;
+    gap: 2px;
+  }
+  .pref-row {
+    display: flex;
+    align-items: center;
+    justify-content: space-between;
+    gap: 16px;
+    padding: 11px 4px;
+    border-bottom: 1px solid var(--line);
+  }
+  .pref-row:last-child { border-bottom: none; }
+  .pref-row > span:first-child { display: flex; flex-direction: column; gap: 2px; min-width: 0; }
+  .pref-label {
+    font-size: var(--fs-body, 13px);
+    color: var(--text-1);
+    font-weight: 500;
+  }
+  .pref-sub {
+    font-size: var(--fs-label, 11px);
+    color: var(--muted-2);
+    line-height: 1.35;
+  }
+  .pref-select, .pref-input {
+    background: var(--bg-3);
+    color: var(--text-1);
+    border: 1px solid var(--line-2);
+    border-radius: 8px;
+    padding: 7px 10px;
+    font-size: var(--fs-body, 13px);
+    outline: none;
+    transition: border-color .15s ease, box-shadow .15s ease;
+  }
+  .pref-select { min-width: 150px; }
+  .pref-input { min-width: 220px; }
+  .pref-select:focus, .pref-input:focus {
+    border-color: var(--accent);
+    box-shadow: 0 0 0 3px var(--accent-soft);
+  }
+  /* Toggle switch */
+  .pref-switch {
+    appearance: none;
+    -webkit-appearance: none;
+    position: relative;
+    width: 40px;
+    height: 22px;
+    border-radius: 22px;
+    background: var(--bg-3);
+    border: 1px solid var(--line-2);
+    cursor: pointer;
+    flex: 0 0 auto;
+    transition: background .18s ease, border-color .18s ease;
+  }
+  .pref-switch::after {
+    content: '';
+    position: absolute;
+    top: 2px; left: 2px;
+    width: 16px; height: 16px;
+    border-radius: 50%;
+    background: var(--muted);
+    transition: transform .18s ease, background .18s ease;
+  }
+  .pref-switch:checked {
+    background: var(--accent);
+    border-color: var(--accent);
+  }
+  .pref-switch:checked::after {
+    transform: translateX(18px);
+    background: var(--accent-on, #fff);
+  }
+  .pref-switch:focus-visible {
+    box-shadow: 0 0 0 3px var(--accent-soft);
+  }

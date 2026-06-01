@@ -1300,6 +1300,37 @@ async def setup_status():
     return {"configured": any(have.values()), "providers": have}
 
 
+@app.get("/api/preferences", dependencies=[Depends(verify_token)])
+async def get_preferences():
+    """User UX preferences (theme, default mode, voice, etc.). Chosen on first
+    run, editable in Settings. Secrets are NOT stored here."""
+    from . import preferences
+    return {"preferences": preferences.get_all(), "options": {
+        "theme": ["auto", "dark", "light"],
+        "default_mode": ["auto", "coding", "computer_use", "computer"],
+    }}
+
+
+class _PreferencesBody(BaseModel):
+    preferences: Dict[str, Any]
+
+
+@app.post("/api/preferences", dependencies=[Depends(verify_token)])
+async def set_preferences(body: _PreferencesBody):
+    """Patch one or more preferences. Unknown keys are ignored; values are
+    validated against their type/allowed set. desktop_model also syncs to the
+    live env so it takes effect immediately."""
+    from . import preferences
+    updated = await asyncio.to_thread(preferences.update, body.preferences or {})
+    # DESKTOP_MODEL is read from the environment by the task router, so mirror it.
+    dm = (updated.get("desktop_model") or "").strip()
+    if dm:
+        os.environ["DESKTOP_MODEL"] = dm
+    else:
+        os.environ.pop("DESKTOP_MODEL", None)
+    return {"ok": True, "preferences": updated}
+
+
 @app.get("/api/skills", dependencies=[Depends(verify_token)])
 async def get_skills():
     return {"skills": skill_manager.get_all_skills()}

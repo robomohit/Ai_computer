@@ -95,6 +95,51 @@
           <div class="selector-label">Model</div>
           <select id="model-id"></select>
         </div>
+
+        <div class="skills-section" id="preferences-section">
+          <div class="history-header"><span>Preferences</span></div>
+          <div class="prefs-grid">
+            <label class="pref-row">
+              <span class="pref-label">Appearance</span>
+              <select id="pref-theme" class="pref-select">
+                <option value="auto">Match system</option>
+                <option value="dark">Dark</option>
+                <option value="light">Light</option>
+              </select>
+            </label>
+            <label class="pref-row">
+              <span class="pref-label">Default mode</span>
+              <select id="pref-default-mode" class="pref-select">
+                <option value="auto">Auto-detect</option>
+                <option value="coding">Coding</option>
+                <option value="computer">Desktop control</option>
+                <option value="computer_use">Browser cowork</option>
+              </select>
+            </label>
+            <label class="pref-row pref-toggle">
+              <span><span class="pref-label">Speak replies aloud</span><span class="pref-sub">Read the agent's answer with your PC voice</span></span>
+              <input type="checkbox" id="pref-speak" class="pref-switch">
+            </label>
+            <label class="pref-row pref-toggle">
+              <span><span class="pref-label">Voice input</span><span class="pref-sub">Show the mic so you can talk to the agent</span></span>
+              <input type="checkbox" id="pref-voice-input" class="pref-switch">
+            </label>
+            <label class="pref-row pref-toggle">
+              <span><span class="pref-label">Glow the app being controlled</span><span class="pref-sub">Aqua outline around the target window</span></span>
+              <input type="checkbox" id="pref-glow" class="pref-switch">
+            </label>
+            <label class="pref-row pref-toggle">
+              <span><span class="pref-label">Always confirm sensitive actions</span><span class="pref-sub">Ask before send / post / buy / delete</span></span>
+              <input type="checkbox" id="pref-confirm" class="pref-switch">
+            </label>
+            <label class="pref-row">
+              <span><span class="pref-label">Desktop reliability</span><span class="pref-sub">Blank = free &amp; fast. Add a stronger model id for long multi-step tasks.</span></span>
+              <input type="text" id="pref-desktop-model" class="pref-input" placeholder="e.g. claude-3-5-sonnet-20241022 (optional)">
+            </label>
+          </div>
+          <p class="settings-hint" id="pref-saved-hint" style="opacity:0;transition:opacity .3s">Saved ✓</p>
+        </div>
+
         <div class="settings-group" style="display:none">
           <div class="selector-label">Mode</div>
           <select id="mode-id">
