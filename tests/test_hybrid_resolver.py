@@ -261,6 +261,24 @@ def test_uia_click_sequence_one_call(monkeypatch, tmp_path):
     assert seen == ["Two", "Five", "Six", "Minus", "Eight", "Nine", "Equals"]
 
 
+def test_uia_click_sequence_reads_result_in_same_call(monkeypatch, tmp_path):
+    import app.widget.desktop_features as df
+
+    monkeypatch.setattr(df, "invoke_ui_element", lambda q, a: {"ok": True, "target": q})
+    monkeypatch.setattr(df, "app_window_rect",
+                        lambda a: {"left": 0, "top": 0, "width": 400, "height": 300})
+    # the result control read back after the sequence
+    monkeypatch.setattr(df, "find_ui_elements",
+                        lambda q, a, n: {"ok": True, "items": [{"name": "Display is 100"}]})
+
+    res = _ex(tmp_path).uia_click_sequence(
+        ["One", "Two", "Plus", "Eight", "Equals"], "Calculator", read_result="Display")
+    assert res.ok is True
+    # the result is read back IN THE SAME call → no separate uia_find turn needed
+    assert res.data.get("result") == "Display is 100"
+    assert "Display is 100" in res.output
+
+
 def test_uia_click_sequence_stops_on_miss(monkeypatch, tmp_path):
     import app.widget.desktop_features as df
 

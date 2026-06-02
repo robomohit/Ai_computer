@@ -2415,14 +2415,19 @@ class ToolExecutor:
             pass
         return None
 
-    def uia_click_sequence(self, targets, app: str = "", stop_on_error: bool = True):
+    def uia_click_sequence(self, targets, app: str = "", stop_on_error: bool = True,
+                           read_result: str = ""):
         """Click a whole ORDERED list of controls in ONE call (each resolved by
         UIA InvokePattern, with the same OCR pixel fallback as uia_click). This
         collapses an N-click task (e.g. entering digits + operators into the
         Calculator, or tabbing a form) into a single tool round-trip — which is
         the key reliability win: the model can't drift or lose track between
         clicks because there is no intermediate turn. Returns a per-step summary.
-        `targets` may be a list or a comma-separated string."""
+        `targets` may be a list or a comma-separated string.
+
+        Pass `read_result` (a result control's NAME, e.g. "Display") to read that
+        control's value back in THIS SAME call — so you can verify + finish in one
+        fewer turn (no separate uia_find needed)."""
         from .widget.desktop_features import invoke_ui_element
         if isinstance(targets, str):
             targets = [t.strip() for t in targets.split(",") if t.strip()]
@@ -2466,6 +2471,22 @@ class ToolExecutor:
             suffix = self._electron_unlock_hint(app, data)
             out += ("\nThe rest were not attempted. Re-check the name of the "
                     "missing control with uia_find, then continue." + suffix)
+        elif read_result:
+            # Read the named result control back in THIS call so the agent can
+            # verify + finish without spending a separate uia_find turn.
+            try:
+                from .widget.desktop_features import find_ui_elements
+                rr = find_ui_elements(read_result, app, 1)
+                items = rr.get("items") or []
+                val = (items[0].get("name") or "").strip() if items else ""
+                if val:
+                    data["result"] = val
+                    out += f"\nResult — {read_result}: {val}"
+                else:
+                    out += (f"\n(Could not read '{read_result}' — uia_find it to "
+                            "confirm the outcome.)")
+            except Exception:
+                pass
         return ToolResult(ok=ok, output=out, data=data)
 
     def uia_click(self, query: str, app: str = ""):
@@ -2937,7 +2958,7 @@ class ToolExecutor:
             ActionType.screen_context: lambda a: self.screen_context(),
             ActionType.uia_find: lambda a: self.uia_find(a.args["query"], a.args.get("app", ""), a.args.get("limit", 5)),
             ActionType.uia_click: lambda a: self.uia_click(a.args["query"], a.args.get("app", "")),
-            ActionType.uia_click_sequence: lambda a: self.uia_click_sequence(a.args.get("targets") or a.args.get("queries") or a.args.get("query"), a.args.get("app", ""), a.args.get("stop_on_error", True)),
+            ActionType.uia_click_sequence: lambda a: self.uia_click_sequence(a.args.get("targets") or a.args.get("queries") or a.args.get("query"), a.args.get("app", ""), a.args.get("stop_on_error", True), a.args.get("read_result", "")),
             ActionType.uia_type: lambda a: self.uia_type(a.args["query"], a.args["text"], a.args.get("app", ""), a.args.get("clear_first", False), a.args.get("submit", False)),
             ActionType.uia_wait: lambda a: self.uia_wait(a.args["query"], a.args.get("app", ""), a.args.get("timeout", 6.0)),
             ActionType.electron_check: lambda a: self.electron_check(a.args["exe"]),
