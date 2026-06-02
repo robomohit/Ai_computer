@@ -206,6 +206,16 @@ _KNOWN_ISOLATED_APPS = {
     "explorer": "File Explorer",
     "photos": "Photos",
     "snipping tool": "Snipping Tool",
+    # Built-in system apps — kept SPECIFIC (multi-word) on purpose: bare words
+    # like "settings"/"store"/"mail" are too ambiguous (e.g. "click the Settings
+    # button" is a full-desktop task, not the Settings app).
+    "windows settings": "Settings",
+    "settings app": "Settings",
+    "control panel": "Control Panel",
+    "task manager": "Task Manager",
+    "microsoft store": "Microsoft Store",
+    "snipping tool": "Snipping Tool",
+    "sticky notes": "Sticky Notes",
 }
 
 

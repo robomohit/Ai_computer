@@ -2905,6 +2905,13 @@ def main(port: int = 8000) -> int:
                 "error": "Error",
             }
             self._capsule_state = state
+            if state == "submitting":
+                # A fresh task is starting — clear the PREVIOUS task's control
+                # route so the pill never shows a stale app/route (e.g. "OCR
+                # fallback for Notepad" carried over) until this task's own
+                # control_profile arrives.
+                self._last_control_layer = ""
+                self._last_control_reason = ""
             if action:
                 self._last_action_phrase = action
             elif state == "idle":
