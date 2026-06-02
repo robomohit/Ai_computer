@@ -1786,7 +1786,9 @@ class AgentService:
                         "Save, VERIFY by checking the file exists on disk (list_directory / file_glob on that "
                         "resolved folder); if it's not there, the path was wrong — re-resolve and retry, don't "
                         "claim it saved.\n"
-                        f"\nAvailable tools:\n{tool_guidance}\n"
+                        # NOTE: native tool schemas are sent separately, so we do
+                        # NOT repeat the full tool_guidance here (it's ~4KB of
+                        # duplication). The XML fallback (xml_system) keeps it.
                     )
                     xml_system = (
                         "You are AI Computer — a desktop automation agent driving a real Windows PC via UI Automation (UIA).\n"
