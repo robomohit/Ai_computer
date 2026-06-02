@@ -169,5 +169,10 @@ def get_mode_packs(mode: str) -> List[str]:
     if mode == "computer_use":
         return ["core", "browser", "web"]
     if mode in ("computer", "computer_isolated"):
-        return ["core", "uia", "filesystem", "terminal", "computer", "web", "utilities"]
+        # Desktop app control: UIA + the few launch/clipboard helpers. Drop
+        # filesystem/web (a desktop task doesn't read files or web-search) — fewer
+        # tool schemas = smaller prompt = faster per turn AND fewer distractions
+        # for the model (more accurate). Coding tools inside `terminal` are pruned
+        # via _tool_excludes_for_control_route.
+        return ["core", "uia", "terminal", "computer"]
     return ["core"]

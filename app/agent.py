@@ -120,6 +120,21 @@ _TEXT_ONLY_DESKTOP_TOOL_EXCLUDES = _VISUAL_DESKTOP_ACTION_TYPES | {
     ActionType.ui_critique,
 }
 
+# Coding/dev tools that live in the `terminal` pack (kept for run_command to
+# launch apps) but are never useful for DESKTOP APP CONTROL. Excluding them
+# shrinks the tool list the model sees every turn — faster + less distracting.
+_DESKTOP_IRRELEVANT_TOOL_EXCLUDES = {
+    ActionType.git,
+    ActionType.run_tests,
+    ActionType.lint_code,
+    ActionType.find_symbol,
+    ActionType.delegate_coding,
+    ActionType.run_and_watch,
+    ActionType.bash,            # redundant with run_command for launching apps
+    ActionType.analyze_folder,  # file analysis — not desktop control
+    ActionType.todo_write,      # multi-step todo tracking — noise for app control
+}
+
 
 def _goal_requests_screen_context(goal: str) -> bool:
     text = (goal or "").lower()
@@ -141,10 +156,14 @@ def _goal_requests_screen_context(goal: str) -> bool:
 
 
 def _tool_excludes_for_control_route(mode: str, model_sees: bool, goal: str = "") -> set[ActionType]:
-    if mode in ("computer", "computer_isolated") and not model_sees:
-        excluded = set(_TEXT_ONLY_DESKTOP_TOOL_EXCLUDES)
-        if _goal_requests_screen_context(goal):
-            excluded.discard(ActionType.screen_context)
+    if mode in ("computer", "computer_isolated"):
+        # Coding tools are irrelevant to desktop control regardless of vision.
+        excluded = set(_DESKTOP_IRRELEVANT_TOOL_EXCLUDES)
+        if not model_sees:
+            # Text-only/UIA route: also drop the screenshot/pixel/mouse tools.
+            excluded |= _TEXT_ONLY_DESKTOP_TOOL_EXCLUDES
+            if _goal_requests_screen_context(goal):
+                excluded.discard(ActionType.screen_context)
         return excluded
     return set()
 
