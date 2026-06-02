@@ -315,6 +315,13 @@ def _uia_root(app_hint: str = "", fallback_foreground: bool = True):
     import uiautomation as uia
     if app_hint:
         hint = app_hint.lower().strip()
+        # Foreground window handle — when several windows of the same app are
+        # open (e.g. 5 Notepads), prefer the one the user is actually looking at.
+        fg_handle = 0
+        try:
+            fg_handle = int(uia.GetForegroundControl().NativeWindowHandle or 0)
+        except Exception:
+            pass
         best, best_score = None, -1
         for top in uia.GetRootControl().GetChildren():
             try:
@@ -330,6 +337,11 @@ def _uia_root(app_hint: str = "", fallback_foreground: bool = True):
                 try:
                     if top.GetChildren():       # has real content (not an empty pane)
                         score += 25
+                except Exception:
+                    pass
+                try:                            # the active window wins ties
+                    if fg_handle and int(top.NativeWindowHandle or 0) == fg_handle:
+                        score += 40
                 except Exception:
                     pass
                 if "activate windows" in low:   # the activation watermark, never a target
