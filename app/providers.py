@@ -273,13 +273,22 @@ def detect_task_mode(goal: str, explicit_mode: Optional[str] = None) -> str:
     computer_use_score = sum(1 for kw in _COMPUTER_USE_KEYWORDS if kw in g)
     coding_score = sum(1 for kw in _CODING_KEYWORDS if kw in g)
     computer_score = sum(1 for kw in _COMPUTER_KEYWORDS if kw in g)
+    # A NAMED desktop app (Calculator, Notepad, Settings, Paint…) is a strong
+    # signal to CONTROL that app — not to answer in coding mode. Without this,
+    # "use the Calculator app to compute 256+89" scored 0 on computer keywords
+    # and fell through to coding (which just replied "345" and never touched the
+    # app). The `> coding_score` gate below still defers to genuine coding goals
+    # like "write code to compute …" (where coding_score outweighs this boost).
+    isolated_app = infer_isolated_app_name(goal)
+    if isolated_app:
+        computer_score += 2
     # A web URL / domain is a strong browser signal.
     if re.search(r"https?://\S+|\bwww\.\S+|\b[a-z0-9][a-z0-9-]*\.(?:com|org|net|io|ai|dev|co|gov|edu|app)\b", g):
         computer_use_score += 2
     if computer_use_score >= 2 and computer_use_score >= coding_score:
         return "computer_use"
     if computer_score >= 2 and computer_score > coding_score:
-        return "computer_isolated" if infer_isolated_app_name(goal) else "computer"
+        return "computer_isolated" if isolated_app else "computer"
     return "coding"
 
 
