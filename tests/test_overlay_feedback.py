@@ -101,6 +101,15 @@ def test_uia_failure_explains_visual_fallback_context(monkeypatch, tmp_path):
         "app_window_rect",
         lambda app: {"left": 80, "top": 160, "width": 600, "height": 500},
     )
+    # uia_find falls back to on-screen-text OCR before reporting a miss. Mock it
+    # to "not found" so this test deterministically exercises the app_focus miss
+    # path instead of depending on whatever text happens to be on the real screen
+    # (otherwise it's flaky when other windows are open during the run).
+    monkeypatch.setattr(
+        desktop_features,
+        "ocr_find_in_app",
+        lambda query, app="": {"ok": False, "error": "no OCR text matched"},
+    )
 
     result = ToolExecutor(tmp_path, home_dir=tmp_path).uia_find("Send", "Discord")
 
