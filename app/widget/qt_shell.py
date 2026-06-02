@@ -2973,13 +2973,22 @@ def main(port: int = 8000) -> int:
             for b in self.recipe_buttons:
                 b.setVisible(not running)
             self.action_ticker.setVisible(running)
+            # Heartbeat that keeps the app-edge glow SOLID for the whole task,
+            # even when a slow model pauses several seconds between actions
+            # (otherwise the glow expires and re-flashes per action).
+            if not hasattr(self, "_glow_heartbeat"):
+                self._glow_heartbeat = QTimer(self)
+                self._glow_heartbeat.timeout.connect(
+                    lambda: self._vcursor.keep_app_glow_alive())
             if running:
                 self.action_label.setText("Starting…")
                 self._current_task_id = self.runner.current_task_id
                 self._set_capsule_state("submitting", "Starting task...")
+                self._glow_heartbeat.start(1500)
             self.input.setVisible(not running)
             self.status.setVisible(running)
             if not running:
+                self._glow_heartbeat.stop()  # let the glow fade out at task end
                 self.status.hide()
                 self.input.show()
                 self._current_task_id = None

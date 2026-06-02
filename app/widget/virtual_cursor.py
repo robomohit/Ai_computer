@@ -223,6 +223,15 @@ class VirtualCursorOverlay(QWidget):
         self._bump_cursor_visibility()
         self._ensure_visible()
 
+    def keep_app_glow_alive(self) -> None:
+        """Extend the app-edge glow's lifetime so it stays SOLID while the agent
+        is busy — even when a slow model pauses several seconds between actions.
+        Called on a heartbeat by the capsule while a task is running; once the
+        task ends the heartbeat stops and the glow fades out naturally."""
+        if self._app_glow is not None:
+            self._app_glow.armed_until = self._now_ms() + 3500
+            self._ensure_visible()
+
     def show_action(self, label: str, x: int | None = None,
                     y: int | None = None) -> None:
         """Show a label without firing a click/type — for actions like
