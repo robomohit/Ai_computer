@@ -708,9 +708,10 @@ def _icon(name: str, size: int = 18, color: str = "#E8EAED", width: float = 1.9)
 def main(port: int = 8000) -> int:
     from PySide6.QtCore import (Qt, QTimer, QObject, Signal, QPoint, QSize,
                                 QPropertyAnimation, QEasingCurve, QRect,
-                                QRectF, QPointF)
+                                QRectF, QPointF, Property)
     from PySide6.QtGui import (QColor, QPainter, QPainterPath, QPen, QFont,
-                               QLinearGradient, QRadialGradient, QFontDatabase)
+                               QLinearGradient, QRadialGradient, QConicalGradient,
+                               QFontDatabase)
     from PySide6.QtWidgets import (QApplication, QWidget, QLineEdit, QPushButton,
                                    QLabel, QVBoxLayout, QHBoxLayout, QScrollArea,
                                    QSizePolicy)
@@ -1613,6 +1614,261 @@ def main(port: int = 8000) -> int:
                     p.drawEllipse(QPoint(int(cx), int(cy)), int(dot), int(dot))
             p.end()
 
+    # ── Effort slider (draggable, smooth, rainbow-at-Max) ──
+    _EFFORT_KEYS = ["low", "medium", "high", "max"]
+    _EFFORT_NAMES = {"low": "Low", "medium": "Medium", "high": "High", "max": "Max"}
+
+    class EffortSlider(QWidget):
+        """A 4-stop slider (Low·Medium·High·Max). Drag the thumb — it follows the
+        cursor live, then springs to the nearest stop. The fill is aqua up to
+        High and an animated rainbow at Max. Emits levelChanged(index)."""
+        levelChanged = Signal(int)
+
+        PAD_X = 16          # horizontal inset for the rail
+        H = 40              # widget height
+
+        def __init__(self, parent=None) -> None:
+            super().__init__(parent)
+            self.setMinimumSize(228, self.H)
+            self.setCursor(Qt.PointingHandCursor)
+            self.setFocusPolicy(Qt.StrongFocus)
+            self._pos = 1.0          # animated float position 0..3
+            self._idx = 1            # committed stop index
+            self._dragging = False
+            self._anim = QPropertyAnimation(self, b"pos", self)
+            self._anim.setDuration(440)
+            self._anim.setEasingCurve(QEasingCurve.OutBack)
+            self._phase = 0
+            self._rainbow = QTimer(self)
+            self._rainbow.setInterval(36)
+            self._rainbow.timeout.connect(self._spin)
+
+        # animatable property -------------------------------------------------
+        def _get_pos(self) -> float:
+            return self._pos
+
+        def _set_pos(self, v: float) -> None:
+            self._pos = max(0.0, min(3.0, float(v)))
+            self.update()
+
+        pos = Property(float, _get_pos, _set_pos)
+
+        # public --------------------------------------------------------------
+        def set_index(self, idx: int, animate: bool = True) -> None:
+            idx = max(0, min(3, int(idx)))
+            self._idx = idx
+            self._sync_rainbow()
+            if animate:
+                self._anim.stop()
+                self._anim.setStartValue(self._pos)
+                self._anim.setEndValue(float(idx))
+                self._anim.start()
+            else:
+                self._set_pos(float(idx))
+
+        def index(self) -> int:
+            return self._idx
+
+        # geometry helpers ----------------------------------------------------
+        def _rail(self):
+            return self.PAD_X, self.width() - self.PAD_X
+
+        def _x_for(self, pos: float) -> float:
+            x0, x1 = self._rail()
+            return x0 + (x1 - x0) * (pos / 3.0)
+
+        def _pos_for_x(self, x: float) -> float:
+            x0, x1 = self._rail()
+            return max(0.0, min(3.0, (x - x0) / max(1.0, (x1 - x0)) * 3.0))
+
+        # interaction ---------------------------------------------------------
+        def mousePressEvent(self, e) -> None:
+            self._anim.stop()
+            self._dragging = True
+            self._set_pos(self._pos_for_x(e.position().x()))
+
+        def mouseMoveEvent(self, e) -> None:
+            if self._dragging:
+                self._set_pos(self._pos_for_x(e.position().x()))
+
+        def mouseReleaseEvent(self, e) -> None:
+            if not self._dragging:
+                return
+            self._dragging = False
+            self._commit(round(self._pos))
+
+        def keyPressEvent(self, e) -> None:
+            if e.key() in (Qt.Key_Left, Qt.Key_Down):
+                self._commit(self._idx - 1)
+            elif e.key() in (Qt.Key_Right, Qt.Key_Up):
+                self._commit(self._idx + 1)
+            elif e.key() == Qt.Key_Home:
+                self._commit(0)
+            elif e.key() == Qt.Key_End:
+                self._commit(3)
+            else:
+                super().keyPressEvent(e)
+
+        def _commit(self, idx: int) -> None:
+            idx = max(0, min(3, int(idx)))
+            changed = idx != self._idx
+            self.set_index(idx, animate=True)
+            if changed:
+                self.levelChanged.emit(idx)
+
+        # rainbow -------------------------------------------------------------
+        def _sync_rainbow(self) -> None:
+            at_max = self._idx == 3
+            if at_max and not self._rainbow.isActive():
+                self._rainbow.start()
+            elif not at_max and self._rainbow.isActive():
+                self._rainbow.stop()
+                self.update()
+
+        def _spin(self) -> None:
+            self._phase = (self._phase + 5) % 360
+            self.update()
+
+        # paint ---------------------------------------------------------------
+        def paintEvent(self, _e) -> None:
+            p = QPainter(self)
+            p.setRenderHint(QPainter.Antialiasing)
+            x0, x1 = self._rail()
+            cy = self.height() / 2
+            thumb_x = self._x_for(self._pos)
+            at_max = self._idx == 3 and not self._dragging
+
+            # rail
+            rail = QRectF(x0, cy - 3, x1 - x0, 6)
+            p.setPen(Qt.NoPen)
+            p.setBrush(QColor(255, 255, 255, 36))
+            p.drawRoundedRect(rail, 3, 3)
+
+            # fill
+            fill = QRectF(x0, cy - 3, max(0.0, thumb_x - x0), 6)
+            grad = QLinearGradient(x0, 0, x1, 0)
+            if at_max:
+                ph = self._phase / 360.0
+                stops = [(0.0, 0), (0.2, 40), (0.4, 130), (0.6, 200),
+                         (0.8, 280), (1.0, 330)]
+                for s, base in stops:
+                    grad.setColorAt(s, QColor.fromHsvF(((base / 360.0) + ph) % 1.0, 0.85, 1.0))
+            else:
+                c = QColor(ACCENT)
+                grad.setColorAt(0.0, QColor(74, 168, 255))
+                grad.setColorAt(1.0, c)
+            p.setBrush(grad)
+            p.drawRoundedRect(fill, 3, 3)
+
+            # stop dots
+            for i in range(4):
+                sx = self._x_for(float(i))
+                passed = thumb_x >= sx - 0.5
+                p.setBrush(QColor(255, 255, 255, 200) if passed else QColor(255, 255, 255, 70))
+                p.drawEllipse(QPointF(sx, cy), 2.6, 2.6)
+
+            # thumb
+            r = 11.0
+            # glow
+            glow = QRadialGradient(QPointF(thumb_x, cy), r * 2.2)
+            if at_max:
+                gc = QColor.fromHsvF((self._phase / 360.0) % 1.0, 0.8, 1.0)
+            else:
+                gc = QColor(ACCENT)
+            gc2 = QColor(gc); gc2.setAlpha(150)
+            gc3 = QColor(gc); gc3.setAlpha(0)
+            glow.setColorAt(0.0, gc2)
+            glow.setColorAt(1.0, gc3)
+            p.setBrush(glow)
+            p.drawEllipse(QPointF(thumb_x, cy), r * 2.0, r * 2.0)
+            # body
+            if at_max:
+                cone = QConicalGradient(QPointF(thumb_x, cy), -self._phase)
+                for k in range(7):
+                    cone.setColorAt(k / 6.0, QColor.fromHsvF((k / 6.0), 0.85, 1.0))
+                p.setBrush(cone)
+                p.setPen(QPen(QColor(255, 255, 255, 230), 2))
+            else:
+                rg = QRadialGradient(QPointF(thumb_x - 3, cy - 3), r * 1.6)
+                rg.setColorAt(0.0, QColor(255, 255, 255))
+                rg.setColorAt(1.0, QColor(ACCENT))
+                p.setBrush(rg)
+                p.setPen(QPen(QColor(255, 255, 255, 235), 2))
+            p.drawEllipse(QPointF(thumb_x, cy), r, r)
+            p.end()
+
+    class EffortPopover(QWidget):
+        """Floating glass card holding the EffortSlider + Faster/Smarter ends and
+        a live model chip. Closes when you click away (Qt.Popup)."""
+        chosen = Signal(int)
+
+        def __init__(self, start_idx: int, model_names=None, parent=None) -> None:
+            super().__init__(parent)
+            self.setWindowFlags(Qt.Popup | Qt.FramelessWindowHint
+                                | Qt.NoDropShadowWindowHint)
+            self.setAttribute(Qt.WA_TranslucentBackground)
+            self.setFixedWidth(284)
+            self._model_names = model_names or ["Free model"] * 4
+
+            lay = QVBoxLayout(self)
+            lay.setContentsMargins(20, 16, 20, 16)
+            lay.setSpacing(10)
+
+            head = QHBoxLayout(); head.setSpacing(8)
+            self._title = _plain_label("Effort")
+            self._title.setStyleSheet("color: rgba(232,236,245,160); font-size: 11px;"
+                                      " font-weight: 700; letter-spacing: .5px;")
+            self._value = _plain_label(_EFFORT_NAMES[_EFFORT_KEYS[start_idx]])
+            self._value.setStyleSheet("color: #FFFFFF; font-size: 17px; font-weight: 800;")
+            head.addWidget(self._title)
+            head.addWidget(self._value)
+            head.addStretch()
+            lay.addLayout(head)
+
+            self.slider = EffortSlider()
+            self.slider.set_index(start_idx, animate=False)
+            self.slider.levelChanged.connect(self._on_level)
+            lay.addWidget(self.slider)
+
+            ends = QHBoxLayout()
+            faster = _plain_label("Faster"); smarter = _plain_label("Smarter")
+            for w in (faster, smarter):
+                w.setStyleSheet("color: rgba(220,226,238,150); font-size: 10px;"
+                                " font-weight: 700; letter-spacing: .4px;")
+            ends.addWidget(faster); ends.addStretch(); ends.addWidget(smarter)
+            lay.addLayout(ends)
+
+            self._chip = _plain_label("")
+            self._chip.setAlignment(Qt.AlignCenter)
+            self._refresh_chip(start_idx)
+            lay.addWidget(self._chip)
+
+        def _on_level(self, idx: int) -> None:
+            self._value.setText(_EFFORT_NAMES[_EFFORT_KEYS[idx]])
+            self._refresh_chip(idx)
+            self.chosen.emit(idx)
+
+        def _refresh_chip(self, idx: int) -> None:
+            name = _EFFORT_NAMES[_EFFORT_KEYS[idx]]
+            is_max = idx == 3
+            tint = "rgba(255,255,255,235)" if not is_max else "#C9B7FF"
+            model = self._model_names[idx] if idx < len(self._model_names) else "Free model"
+            self._chip.setText(f"{model}  ·  {name}")
+            self._chip.setStyleSheet(
+                "QLabel{ margin-top: 2px; padding: 5px 10px; border-radius: 9px;"
+                "  background: rgba(255,255,255,22); border: 1px solid rgba(255,255,255,40);"
+                f"  color: {tint}; font-size: 11px; font-weight: 700; }}")
+
+        def paintEvent(self, _e) -> None:
+            p = QPainter(self)
+            p.setRenderHint(QPainter.Antialiasing)
+            rect = QRectF(self.rect()).adjusted(1, 1, -1, -1)
+            path = QPainterPath(); path.addRoundedRect(rect, 18, 18)
+            p.fillPath(path, QColor(26, 30, 40, 244))
+            p.setPen(QPen(QColor(255, 255, 255, 46), 1.2))
+            p.drawPath(path)
+            p.end()
+
     # ── the capsule window ──
     class Capsule(QWidget):
         # Thread-safe delivery of a recognized voice transcript to the UI thread.
@@ -1910,6 +2166,29 @@ def main(port: int = 8000) -> int:
             # =========================================================
             cap_row = QHBoxLayout()
             cap_row.setSpacing(8)
+
+            # ── Effort dial (persistent) ──────────────────────────────────
+            # Small pill on the left showing the current model effort. Click it
+            # to pick Low / Medium / High / Max. Free models can't tune
+            # reasoning, so effort just trades speed for a bigger model. Max
+            # goes rainbow (animated). Persists to /api/preferences.
+            self._EFFORT_ORDER = ["low", "medium", "high", "max"]
+            self._EFFORT_LABEL = {"low": "Low", "medium": "Medium",
+                                  "high": "High", "max": "Max"}
+            self._EFFORT_HINT = {
+                "low": "Fastest — a snappy small model",
+                "medium": "Best all-round free model",
+                "high": "Stronger — a bigger free model",
+                "max": "The smartest model available",
+            }
+            self._effort = "medium"
+            self._effort_popover = None
+            self.effort_chip = QPushButton()
+            self.effort_chip.setCursor(Qt.PointingHandCursor)
+            self.effort_chip.setToolTip("Effort — how capable a model to use")
+            self.effort_chip.clicked.connect(self._open_effort_menu)
+            self._style_effort_chip()
+            cap_row.addWidget(self.effort_chip)
             cap_row.addStretch()
 
             cap_btn_qss = (
@@ -2693,6 +2972,81 @@ def main(port: int = 8000) -> int:
                         self._toggle_voice_mode()
             except Exception:
                 pass
+            # Honor the saved effort level (Low / Medium / High / Max).
+            try:
+                if prefs and prefs.get("effort"):
+                    self._set_effort(str(prefs["effort"]), persist=False)
+            except Exception:
+                pass
+
+        # ── Effort dial ─────────────────────────────────────────────────────
+        def _style_effort_chip(self) -> None:
+            """Style the always-on effort pill. The rich slider + rainbow live in
+            the popover; the chip stays a calm static pill (accent for
+            Low/Med/High, a violet tint for Max)."""
+            lvl = self._effort if self._effort in self._EFFORT_ORDER else "medium"
+            label = self._EFFORT_LABEL[lvl]
+            self.effort_chip.setText(f"⚡ {label}")
+            self.effort_chip.setToolTip(
+                f"Effort: {label} — {self._EFFORT_HINT[lvl]}\nClick to change.")
+            if lvl == "max":
+                txt, border = "#C9B7FF", "rgba(160,130,255,170)"
+            else:
+                c = QColor(ACCENT)
+                txt = ACCENT
+                border = f"rgba({c.red()},{c.green()},{c.blue()},150)"
+            self.effort_chip.setStyleSheet(
+                "QPushButton{"
+                f"  color: {txt};"
+                "  background: rgba(255,255,255,26);"
+                f"  border: 1px solid {border};"
+                "  border-radius: 12px;"
+                "  padding: 4px 11px;"
+                "  font-size: 10px;"
+                "  font-weight: 800;"
+                "}"
+                "QPushButton:hover{ background: rgba(255,255,255,46); }"
+            )
+
+        _EFFORT_MODEL_NAMES = ["GPT-OSS 20B", "Balanced", "GPT-OSS 120B", "Nemotron 120B"]
+
+        def _open_effort_menu(self) -> None:
+            """Pop the floating glass slider card above the chip."""
+            start = (self._EFFORT_ORDER.index(self._effort)
+                     if self._effort in self._EFFORT_ORDER else 1)
+            pop = EffortPopover(start, model_names=self._EFFORT_MODEL_NAMES, parent=self)
+            pop.chosen.connect(
+                lambda idx: self._set_effort(self._EFFORT_ORDER[idx]))
+            pop.adjustSize()
+            chip_tl = self.effort_chip.mapToGlobal(self.effort_chip.rect().topLeft())
+            px = chip_tl.x() - 8
+            py = chip_tl.y() - pop.sizeHint().height() - 10
+            pop.move(max(8, px), max(8, py))
+            pop.show()
+            self._effort_popover = pop  # keep a ref so it isn't GC'd
+
+        def _set_effort(self, level: str, persist: bool = True) -> None:
+            level = (level or "").strip().lower()
+            if level not in self._EFFORT_ORDER:
+                level = "medium"
+            self._effort = level
+            self._style_effort_chip()
+            if persist:
+                self._save_effort_async(level)
+
+        def _save_effort_async(self, level: str) -> None:
+            import threading
+
+            def _post():
+                try:
+                    import httpx
+                    with httpx.Client(timeout=4.0) as c:
+                        c.post(f"{BASE}/api/session")
+                        c.post(f"{BASE}/api/preferences",
+                               json={"preferences": {"effort": level}})
+                except Exception:
+                    pass
+            threading.Thread(target=_post, daemon=True).start()
 
         def _enter_setup_mode(self) -> None:
             self._setup_mode = True
