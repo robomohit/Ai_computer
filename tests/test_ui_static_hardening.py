@@ -33,7 +33,8 @@ def test_dynamic_lists_do_not_render_untrusted_api_data_with_innerhtml():
 def test_app_js_has_no_literal_nul_sentinels():
     js = (_STATIC / "app.js").read_bytes()
     assert b"\x00" not in js
-    assert b"@@AIC@B" in js
+    assert b"@@AIC@" in js
+    assert b"const stash = (html, kind)" in js
 
 
 def test_terminal_and_subtask_dynamic_values_use_textcontent():
@@ -104,10 +105,46 @@ def test_copy_task_button_present_and_wired():
     assert ".history-retask" in html
     assert ".history-item.terminal .history-retask" in html
     assert "isTerminal" in html
-    assert "↻ Copy task" in html
+    assert "retask.textContent = '\\u21bb Copy task'" in html
     assert "e.stopPropagation()" in html
     assert "inp.value = taskRecord.goal" in html
     assert "inp.focus()" in html
+
+
+def test_dashboard_chrome_uses_text_nodes_for_dynamic_rows():
+    js = (_STATIC / "app.js").read_text(encoding="utf-8", errors="replace")
+
+    assert "sb.innerHTML" not in js
+    assert "mp.innerHTML" not in js
+    assert "list.innerHTML = rows.map" not in js
+    assert "item.innerHTML = `\n      <span class=\"history-dot" not in js
+    assert "row.querySelector('.folder-entry-name').textContent" not in js
+    assert "history-meta\">" not in js
+    assert "folder-entry-meta\">${" not in js
+    assert "desktop-access-badge\">${" not in js
+    assert "statusText.textContent = map[key] || humanize(key)" in js
+    assert "modeValue.textContent = label" in js
+    assert "badgeEl.textContent = badge" in js
+    assert "goal.textContent = taskRecord.goal || '(untitled)'" in js
+    assert "meta.textContent = relTime(taskRecord.created_at || taskRecord.timestamp || taskRecord.finished_at) || humanize(status || 'saved')" in js
+    assert "name.textContent = entry.name || pathLeaf(entry.path)" in js
+    assert "meta.textContent = entry.is_dir ? 'Open' : 'File'" in js
+
+
+def test_assistant_markdown_is_sanitized_and_links_are_protocol_gated():
+    js = (_STATIC / "app.js").read_text(encoding="utf-8", errors="replace")
+    css = (_STATIC / "style.css").read_text(encoding="utf-8", errors="replace")
+
+    assert "const safeMarkdownHref" in js
+    assert "if (!/^(https?:\\/\\/|mailto:)/i.test(trimmed)) return '';" in js
+    assert "['http:', 'https:', 'mailto:'].includes(parsed.protocol)" in js
+    assert "const sanitizeRenderedMarkdown" in js
+    assert "const allowedTags = new Set(['A', 'BR', 'CODE', 'EM', 'LI', 'P', 'PRE', 'STRONG', 'UL']);" in js
+    assert "child.setAttribute('target', '_blank')" in js
+    assert "child.setAttribute('rel', 'noopener noreferrer')" in js
+    assert "return sanitizeRenderedMarkdown(text);" in js
+    assert "el.innerHTML = renderMarkdown(text)" in js
+    assert ".message.assistant a.md-link" in css
 
 
 def test_settings_modal_surfaces_coding_backends():
@@ -454,6 +491,16 @@ def test_desktop_launcher_has_frameless_widget_mode():
     assert "_pause_or_resume" in qt_shell
 
 
+def test_qt_capsule_light_glass_is_readable_on_busy_backdrops():
+    root = STATIC_HTML.parents[0].parent
+    qt_shell = (root / "app" / "widget" / "qt_shell.py").read_text(encoding="utf-8")
+
+    assert "QColor(255, 255, 255, 196)" in qt_shell
+    assert "QColor(248, 250, 253, 210)" in qt_shell
+    assert "QColor(238, 242, 249, 224)" in qt_shell
+    assert "QColor(70, 84, 110, 36)" in qt_shell
+
+
 def test_qt_capsule_surfaces_trust_prompts():
     root = STATIC_HTML.parents[0].parent
     qt_shell = (root / "app" / "widget" / "qt_shell.py").read_text(encoding="utf-8")
@@ -520,6 +567,59 @@ def test_qt_capsule_prefers_task_event_stream_with_poll_fallback():
     assert "seen = stream_cursor" in qt_shell
 
 
+def test_qt_capsule_dynamic_labels_are_plain_text_and_links_are_safe():
+    root = STATIC_HTML.parents[0].parent
+    qt_shell = (root / "app" / "widget" / "qt_shell.py").read_text(encoding="utf-8")
+    capsule_widgets = (root / "app" / "widget" / "capsule_widgets.py").read_text(encoding="utf-8")
+
+    assert "def _plain_label" in qt_shell
+    assert "setTextFormat(Qt.PlainText)" in qt_shell
+    assert "setOpenExternalLinks(False)" in qt_shell
+    assert "self.status = _plain_label" in qt_shell
+    assert "self.scope_chip = _plain_label" in qt_shell
+    assert "self.vision_chip = _plain_label" in qt_shell
+    assert "self.phase_chip = _plain_label" in qt_shell
+    assert "self.reply = _plain_label" in qt_shell
+    assert "_set_plain_text(labels[-1], text[:4000])" in qt_shell
+    assert "def _safe_external_url" in qt_shell
+    assert "safe_url = _safe_external_url(u)" in qt_shell
+    assert "QPushButton(_shorten_url(safe_url))" in qt_shell
+    assert "setOpenExternalLinks(True)" not in qt_shell
+
+    assert "def _plain_label" in capsule_widgets
+    assert "title = _plain_label(title_text)" in capsule_widgets
+    assert "body = _plain_label(body_text)" in capsule_widgets
+    assert "_set_plain_text(self._status, msg)" in capsule_widgets
+    assert "url = _safe_external_url(payload_obj.get(\"url\", \"\"))" in capsule_widgets
+
+
+def test_desktop_dashboard_launch_stays_native_not_browser_fallback():
+    root = STATIC_HTML.parents[0].parent
+    launcher = (root / "run_desktop.py").read_text(encoding="utf-8")
+    qt_shell = (root / "app" / "widget" / "qt_shell.py").read_text(encoding="utf-8")
+
+    assert '"--dashboard"' in launcher
+    assert "import webview" in launcher
+    assert "pywebview is not installed" in launcher
+    assert "def _server_healthy" in launcher
+    assert "def _wait_for_server" in launcher
+    assert "def _start_backend" in launcher
+    assert "_server_already_running" not in launcher
+    assert 'f"http://127.0.0.1:{port}"' in launcher
+    assert "webbrowser.open(f\"http://127.0.0.1:{port}\")" not in qt_shell
+    assert "Dashboard desktop window failed to launch" in qt_shell
+
+
+def test_dashboard_titlebar_is_native_shell_only():
+    html = STATIC_HTML.read_text(encoding="utf-8")
+
+    assert 'class="titlebar" id="titlebar" data-os="win" hidden' in html
+    assert "function setDesktopChrome(enabled)" in html
+    assert "bar.hidden = !enabled" in html
+    assert "shell.classList.toggle('no-titlebar', !enabled)" in html
+    assert "window.addEventListener('pywebviewready'" in html
+
+
 def test_live_reasoning_not_filtered_by_step_announcement(monkeypatch):
     """Live reasoning events (thought tokens, composing…) bypass the step-announcement
     filter so they display immediately via setLiveStatus (AI-17)."""
@@ -538,6 +638,35 @@ def test_ai28_liquid_glass_css_static_asset():
     assert css_path.stat().st_size > 0, "static/liquid-glass.css is empty"
     html = STATIC_HTML.read_text(encoding="utf-8")
     assert "liquid-glass.css" in html, "liquid-glass.css not linked from index.html"
+
+
+def test_onboarding_hidden_steps_are_hard_hidden():
+    """The onboarding wizard must never render multiple hidden flex steps at once."""
+    css = (_STATIC / "style.css").read_text(encoding="utf-8")
+    js = (_STATIC / "app.js").read_text(encoding="utf-8", errors="replace")
+
+    assert "[hidden] { display: none !important; }" in css
+    assert ".onb-step[hidden]" in css
+    assert ".onb-overlay[hidden]" in css
+    assert "display: none !important;" in css
+    assert "steps.forEach(s => { s.hidden = (Number(s.dataset.step) !== cur); });" in js
+
+
+def test_liquid_glass_styles_dashboard_surfaces():
+    """Liquid glass covers the dashboard, not only the floating capsule."""
+    css = (_STATIC / "liquid-glass.css").read_text(encoding="utf-8")
+
+    assert "FLOATING WIDGET ONLY" not in css
+    assert "body[data-glass=\"on\"]:not(.widget-shell)" in css
+    for selector in (
+        ".sidebar",
+        ".topbar",
+        ".composer",
+        ".modal",
+        ".onb-card",
+        ".cmdk-panel",
+    ):
+        assert f"body[data-glass=\"on\"]:not(.widget-shell) {selector}" in css
 
 
 def test_ai15_voice_widget_v2_drag_strip_hotkey():

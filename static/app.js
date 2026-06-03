@@ -481,20 +481,28 @@
       row.type = 'button';
       row.className = `folder-entry${entry.is_dir && entry.path === projectFolderState.selectedPath ? ' active' : ''}${entry.is_dir ? '' : ' disabled'}`;
       row.disabled = !entry.is_dir;
-      row.innerHTML = `
-        <span class="folder-entry-icon" aria-hidden="true">
-          ${entry.is_dir
-            ? '<svg width="16" height="16" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.8" stroke-linecap="round" stroke-linejoin="round"><path d="M3 7.5a2 2 0 0 1 2-2h4l2 2h8a2 2 0 0 1 2 2V16a2 2 0 0 1-2 2H5a2 2 0 0 1-2-2z"/><path d="M3 10h18"/></svg>'
-            : '<svg width="16" height="16" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.8" stroke-linecap="round" stroke-linejoin="round"><path d="M14 2H6a2 2 0 0 0-2 2v16a2 2 0 0 0 2 2h12a2 2 0 0 0 2-2V8z"/><path d="M14 2v6h6"/></svg>'}
-        </span>
-        <span class="folder-entry-copy">
-          <span class="folder-entry-name"></span>
-          <span class="folder-entry-path"></span>
-        </span>
-        <span class="folder-entry-meta">${entry.is_dir ? 'Open' : 'File'}</span>
-      `;
-      row.querySelector('.folder-entry-name').textContent = entry.name || pathLeaf(entry.path);
-      row.querySelector('.folder-entry-path').textContent = entry.path || '';
+      const icon = document.createElement('span');
+      icon.className = 'folder-entry-icon';
+      icon.setAttribute('aria-hidden', 'true');
+      icon.innerHTML = entry.is_dir
+        ? '<svg width="16" height="16" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.8" stroke-linecap="round" stroke-linejoin="round"><path d="M3 7.5a2 2 0 0 1 2-2h4l2 2h8a2 2 0 0 1 2 2V16a2 2 0 0 1-2 2H5a2 2 0 0 1-2-2z"/><path d="M3 10h18"/></svg>'
+        : '<svg width="16" height="16" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.8" stroke-linecap="round" stroke-linejoin="round"><path d="M14 2H6a2 2 0 0 0-2 2v16a2 2 0 0 0 2 2h12a2 2 0 0 0 2-2V8z"/><path d="M14 2v6h6"/></svg>';
+      const copy = document.createElement('span');
+      copy.className = 'folder-entry-copy';
+      const name = document.createElement('span');
+      name.className = 'folder-entry-name';
+      name.textContent = entry.name || pathLeaf(entry.path);
+      const path = document.createElement('span');
+      path.className = 'folder-entry-path';
+      path.textContent = entry.path || '';
+      copy.appendChild(name);
+      copy.appendChild(path);
+      const meta = document.createElement('span');
+      meta.className = 'folder-entry-meta';
+      meta.textContent = entry.is_dir ? 'Open' : 'File';
+      row.appendChild(icon);
+      row.appendChild(copy);
+      row.appendChild(meta);
       if (entry.is_dir) {
         row.addEventListener('click', () => loadProjectFolderBrowser(entry.path));
       }
@@ -591,39 +599,106 @@
     requestAnimationFrame(() => { _scrollPending = false; const fs = $('feed-scroll'); if (fs) fs.scrollTop = fs.scrollHeight; });
   };
 
+  const safeMarkdownHref = (href = '') => {
+    const trimmed = String(href || '').trim();
+    if (!/^(https?:\/\/|mailto:)/i.test(trimmed)) return '';
+    try {
+      const parsed = new URL(trimmed);
+      return ['http:', 'https:', 'mailto:'].includes(parsed.protocol) ? parsed.href : '';
+    } catch (_) {
+      return '';
+    }
+  };
+
+  const sanitizeRenderedMarkdown = (html = '') => {
+    if (typeof DOMParser === 'undefined') return String(html || '');
+    const allowedTags = new Set(['A', 'BR', 'CODE', 'EM', 'LI', 'P', 'PRE', 'STRONG', 'UL']);
+    const allowedClasses = {
+      A: new Set(['md-link']),
+      CODE: new Set(['md-code']),
+      PRE: new Set(['md-pre']),
+      UL: new Set(['md-ul']),
+    };
+    const doc = new DOMParser().parseFromString(`<div>${html}</div>`, 'text/html');
+    const root = doc.body.firstElementChild;
+    const walk = (node) => {
+      Array.from(node.childNodes).forEach((child) => {
+        if (child.nodeType === 3) return;
+        if (child.nodeType !== 1) {
+          child.remove();
+          return;
+        }
+        const tag = child.tagName;
+        if (!allowedTags.has(tag)) {
+          child.replaceWith(doc.createTextNode(child.textContent || ''));
+          return;
+        }
+        const originalHref = child.getAttribute('href') || '';
+        const originalClasses = Array.from(child.classList || []);
+        Array.from(child.attributes).forEach((attr) => child.removeAttribute(attr.name));
+        const classAllow = allowedClasses[tag];
+        if (classAllow) {
+          const kept = originalClasses.filter((name) => classAllow.has(name));
+          if (kept.length) child.className = kept.join(' ');
+        }
+        if (tag === 'A') {
+          const safeHref = safeMarkdownHref(originalHref);
+          if (!safeHref) {
+            child.replaceWith(doc.createTextNode(child.textContent || ''));
+            return;
+          }
+          child.setAttribute('href', safeHref);
+          child.setAttribute('target', '_blank');
+          child.setAttribute('rel', 'noopener noreferrer');
+        }
+        walk(child);
+      });
+    };
+    walk(root);
+    return root.innerHTML;
+  };
+
   // Minimal, injection-safe markdown renderer for agent replies.
   // HTML is escaped FIRST; only known-safe tags are then inserted.
   const renderMarkdown = (raw) => {
-    const esc = (s) => String(s).replace(/&/g, '&amp;').replace(/</g, '&lt;').replace(/>/g, '&gt;');
+    const esc = escapeHtml;
     let text = String(raw || '');
     const blocks = [];
+    const stash = (html, kind) => {
+      blocks.push(html);
+      return `@@AIC@${kind}${blocks.length - 1}@@AIC@`;
+    };
     // 1. fenced code blocks ```lang\n…\n``` — pull out, escape, stash
     text = text.replace(/```[^\n]*\n?([\s\S]*?)```/g, (_, code) => {
-      blocks.push('<pre class="md-pre"><code>' + esc(code.replace(/\n$/, '')) + '</code></pre>');
-      return '@@AIC@B' + (blocks.length - 1) + '@@AIC@';
+      return stash('<pre class="md-pre"><code>' + esc(code.replace(/\n$/, '')) + '</code></pre>', 'B');
     });
     // 2. escape everything else
     text = esc(text);
     // 3. inline code `…` (content already escaped)
-    text = text.replace(/`([^`\n]+)`/g, (_, c) => '<code class="md-code">' + c + '</code>');
+    text = text.replace(/`([^`\n]+)`/g, (_, c) => stash('<code class="md-code">' + c + '</code>', 'I'));
     // 4. bold then italic
     text = text.replace(/\*\*([^*\n]+)\*\*/g, '<strong>$1</strong>');
     text = text.replace(/(^|[^*])\*([^*\n]+)\*/g, '$1<em>$2</em>');
+    text = text.replace(/\[([^\]\n]+)\]\(([^)\s]+)\)/g, (_, label, href) => {
+      const safeHref = safeMarkdownHref(href);
+      if (!safeHref) return label;
+      return `<a class="md-link" href="${escapeHtml(safeHref)}" target="_blank" rel="noopener noreferrer">${label}</a>`;
+    });
     // 5. bullet lists — group consecutive "- "/"* " lines
     text = text.replace(/(?:^|\n)((?:[-*] .+(?:\n|$))+)/g, (_, list) => {
       const items = list.trim().split(/\n/).map((l) => '<li>' + l.replace(/^[-*] /, '') + '</li>').join('');
-      return '\n@@AIC@U' + (blocks.push('<ul class="md-ul">' + items + '</ul>') - 1) + '@@AIC@';
+      return '\n' + stash('<ul class="md-ul">' + items + '</ul>', 'U');
     });
     // 6. paragraphs + line breaks
     text = text.split(/\n{2,}/).map((p) => {
       const t = p.trim();
       if (!t) return '';
-      if (/^@@AIC@[BU]\d+@@AIC@$/.test(t)) return t;
+      if (/^@@AIC@[BIU]\d+@@AIC@$/.test(t)) return t;
       return '<p>' + t.replace(/\n/g, '<br>') + '</p>';
     }).join('');
     // 7. restore stashed blocks/lists
-    text = text.replace(/@@AIC@[BU](\d+)@@AIC@/g, (_, i) => blocks[+i]);
-    return text;
+    text = text.replace(/@@AIC@[BIU](\d+)@@AIC@/g, (_, i) => blocks[+i] || '');
+    return sanitizeRenderedMarkdown(text);
   };
 
   const appendMessage = (text, kind = 'system-note') => {
@@ -662,7 +737,16 @@
     const key = (status || 'ready').toLowerCase();
     currentStatus = key;
     const sb = $('sb-status');
-    if (sb) { sb.className = `sb-item sb-status sb-status-${key}`; sb.innerHTML = `<span class="sb-dot"></span><span class="sb-val">${map[key] || humanize(key)}</span>`; }
+    if (sb) {
+      const statusClass = /^[a-z0-9_-]+$/.test(key) ? key : 'ready';
+      sb.className = `sb-item sb-status sb-status-${statusClass}`;
+      const statusDot = document.createElement('span');
+      statusDot.className = 'sb-dot';
+      const statusText = document.createElement('span');
+      statusText.className = 'sb-val';
+      statusText.textContent = map[key] || humanize(key);
+      sb.replaceChildren(statusDot, statusText);
+    }
     const dotCls = { queued: 'running', pending: 'running', running: 'running', paused: 'paused', complete: 'done', failed: 'failed', error: 'failed' };
     const dot = $('topbar-dot');
     if (dot) dot.className = 'topbar-dot' + (dotCls[key] ? ' ' + dotCls[key] : '');
@@ -754,12 +838,24 @@
           ['Other windows', 'Not targeted; may only appear if Windows focus changes', 'Limited'],
           ['Stop control', 'Pause or cancel from the top bar at any time', 'Available']
         ];
-    list.innerHTML = rows.map(([title, copy, badge]) => `
-      <div class="desktop-access-row">
-        <div><strong>${escapeHtml(title)}</strong><span>${escapeHtml(copy)}</span></div>
-        <div class="desktop-access-badge">${escapeHtml(badge)}</div>
-      </div>
-    `).join('');
+    list.innerHTML = '';
+    rows.forEach(([title, copy, badge]) => {
+      const row = document.createElement('div');
+      row.className = 'desktop-access-row';
+      const text = document.createElement('div');
+      const strong = document.createElement('strong');
+      strong.textContent = title;
+      const span = document.createElement('span');
+      span.textContent = copy;
+      text.appendChild(strong);
+      text.appendChild(span);
+      const badgeEl = document.createElement('div');
+      badgeEl.className = 'desktop-access-badge';
+      badgeEl.textContent = badge;
+      row.appendChild(text);
+      row.appendChild(badgeEl);
+      list.appendChild(row);
+    });
     desktopAccessResolver = resolve;
     overlay.classList.add('show');
   });
@@ -872,7 +968,16 @@
       const appName = isolatedApp ? ` · ${isolatedApp}` : '';
       label += ` (iso${appName})`;
     }
-    const mp = $('mode-pill'); if (mp) mp.innerHTML = `<span class="pill-label">Mode</span><span class="pill-val">${label}</span>`;
+    const mp = $('mode-pill');
+    if (mp) {
+      const modeLabel = document.createElement('span');
+      modeLabel.className = 'pill-label';
+      modeLabel.textContent = 'Mode';
+      const modeValue = document.createElement('span');
+      modeValue.className = 'pill-val';
+      modeValue.textContent = label;
+      mp.replaceChildren(modeLabel, modeValue);
+    }
     const sbm = $('sb-mode-val'); if (sbm) sbm.textContent = label;
     setDesktopSessionActive(currentStatus === 'running' || currentStatus === 'paused', currentMode, currentIsolatedApp);
     selectPreferredModelForMode(currentMode);
@@ -963,17 +1068,28 @@
       : (status === 'done' || status === 'complete') ? 'done'
       : (status === 'failed' || status === 'error') ? 'failed'
       : (status === 'cancelled') ? 'cancelled' : '';
-    item.innerHTML = `
-      <span class="history-dot ${dotState}"></span>
-      <span class="history-copy">
-        <span class="history-goal"></span>
-        <span class="history-meta">${relTime(taskRecord.created_at || taskRecord.timestamp || taskRecord.finished_at) || humanize(status || 'saved')}</span>
-        <button type="button" class="history-retask" tabindex="-1">↻ Copy task</button>
-      </span>
-    `;
-    item.querySelector('.history-goal').textContent = taskRecord.goal || '(untitled)';
+    const dot = document.createElement('span');
+    dot.className = `history-dot ${dotState}`.trim();
+    const copy = document.createElement('span');
+    copy.className = 'history-copy';
+    const goal = document.createElement('span');
+    goal.className = 'history-goal';
+    goal.textContent = taskRecord.goal || '(untitled)';
+    const meta = document.createElement('span');
+    meta.className = 'history-meta';
+    meta.textContent = relTime(taskRecord.created_at || taskRecord.timestamp || taskRecord.finished_at) || humanize(status || 'saved');
+    const retask = document.createElement('button');
+    retask.type = 'button';
+    retask.className = 'history-retask';
+    retask.tabIndex = -1;
+    retask.textContent = '\u21bb Copy task';
+    copy.appendChild(goal);
+    copy.appendChild(meta);
+    copy.appendChild(retask);
+    item.appendChild(dot);
+    item.appendChild(copy);
     item.title = [taskRecord.mode, taskRecord.model].filter(Boolean).join(' / ');
-    item.querySelector('.history-retask')?.addEventListener('click', (e) => {
+    retask.addEventListener('click', (e) => {
       e.stopPropagation();
       const inp = $('input');
       inp.value = taskRecord.goal || '';

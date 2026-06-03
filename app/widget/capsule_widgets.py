@@ -126,6 +126,30 @@ def _icon_label(name: str, size: int = 16, color: str = "#B0B4BC") -> QLabel:
     return lbl
 
 
+def _plain_label(text: str = "", parent=None) -> QLabel:
+    lbl = QLabel(str(text or ""), parent)
+    lbl.setTextFormat(Qt.PlainText)
+    lbl.setOpenExternalLinks(False)
+    return lbl
+
+
+def _set_plain_text(label: QLabel, text: str) -> None:
+    label.setTextFormat(Qt.PlainText)
+    label.setText(str(text or ""))
+
+
+def _safe_external_url(value: str) -> str:
+    text = str(value or "").strip()
+    try:
+        from urllib.parse import urlparse
+        parsed = urlparse(text)
+    except Exception:
+        return ""
+    if parsed.scheme in {"http", "https"} and parsed.netloc:
+        return text
+    return ""
+
+
 # ── Design tokens ────────────────────────────────────────────────────────────
 ACCENT = "#5BE0D0"
 _NO_BG = "background:transparent;border:none;"
@@ -302,13 +326,13 @@ class DynamicWidget(CapsuleCard):
         hdr.addWidget(_icon_label(icon_name, 20, ACCENT))
 
         col = QVBoxLayout(); col.setSpacing(1)
-        title = QLabel(title_text)
+        title = _plain_label(title_text)
         title.setFont(QFont("Segoe UI Variable Display", 13, QFont.DemiBold))
         title.setStyleSheet(f"color:{CARD_TITLE};{_NO_BG}")
         col.addWidget(title)
 
         if subtitle_text:
-            sub = QLabel(subtitle_text)
+            sub = _plain_label(subtitle_text)
             sub.setFont(QFont("Segoe UI", 9))
             sub.setStyleSheet(f"color:{CARD_SUB};{_NO_BG}")
             col.addWidget(sub)
@@ -326,7 +350,7 @@ class DynamicWidget(CapsuleCard):
             for item in shown:
                 lay.addWidget(self._make_item_row(item))
             if len(items) > 10:
-                more = QLabel(f"+{len(items) - 10} more")
+                more = _plain_label(f"+{len(items) - 10} more")
                 more.setFont(QFont("Segoe UI", 9)); more.setAlignment(Qt.AlignCenter)
                 more.setStyleSheet(f"color:{CARD_MORE};{_NO_BG}"); more.setFixedHeight(24)
                 lay.addWidget(more)
@@ -335,7 +359,7 @@ class DynamicWidget(CapsuleCard):
         body_text = s.get("text", "")
         if body_text:
             lay.addSpacing(10); lay.addWidget(_divider()); lay.addSpacing(10)
-            body = QLabel(body_text)
+            body = _plain_label(body_text)
             body.setWordWrap(True)
             body.setFont(QFont("Segoe UI", 10))
             body.setStyleSheet(f"color:{CARD_BODY};{_NO_BG}")
@@ -358,7 +382,7 @@ class DynamicWidget(CapsuleCard):
             lay.addWidget(pbar)
 
         # ── Status label for action feedback ──
-        self._status = QLabel("")
+        self._status = _plain_label("")
         self._status.setFont(QFont("Segoe UI", 9))
         self._status.setStyleSheet(f"color:{ACCENT};{_NO_BG}")
         self._status.setAlignment(Qt.AlignCenter)
@@ -391,11 +415,11 @@ class DynamicWidget(CapsuleCard):
         detail = item.get("detail", item.get("subtitle", ""))
 
         row.addWidget(_icon_label(icon, 15, "#7A7F88"))
-        nm = QLabel(name); nm.setFont(QFont("Segoe UI Variable Text", 10))
+        nm = _plain_label(name); nm.setFont(QFont("Segoe UI Variable Text", 10))
         nm.setStyleSheet(f"color:#E2E4E8;{_NO_BG}"); row.addWidget(nm, 1)
 
         if detail:
-            dt = QLabel(str(detail)); dt.setFont(QFont("Segoe UI", 9))
+            dt = _plain_label(str(detail)); dt.setFont(QFont("Segoe UI", 9))
             dt.setStyleSheet(f"color:#6B7280;{_NO_BG}"); row.addWidget(dt)
         return row_w
 
@@ -445,7 +469,7 @@ class DynamicWidget(CapsuleCard):
     # ── Action execution ──
     def _set_status(self, msg: str, color: str = ACCENT):
         self._status.setStyleSheet(f"color:{color};{_NO_BG}")
-        self._status.setText(msg); self._status.show()
+        _set_plain_text(self._status, msg); self._status.show()
 
     def _execute_action(self, action: str, payload: dict, btn: QPushButton):
         """Route a button click to the right handler."""
@@ -463,7 +487,7 @@ class DynamicWidget(CapsuleCard):
             return
         if action == "open_url":
             payload_obj = payload if isinstance(payload, dict) else {"url": str(payload or "")}
-            url = payload_obj.get("url", "")
+            url = _safe_external_url(payload_obj.get("url", ""))
             if url:
                 import webbrowser; webbrowser.open(url)
             return

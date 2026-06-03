@@ -491,6 +491,18 @@ def _shorten_url(u: str, max_len: int = 28) -> str:
         return (u or "?")[:max_len]
 
 
+def _safe_external_url(value: str) -> str:
+    text = str(value or "").strip()
+    try:
+        from urllib.parse import urlparse
+        parsed = urlparse(text)
+    except Exception:
+        return ""
+    if parsed.scheme in {"http", "https"} and parsed.netloc:
+        return text
+    return ""
+
+
 def _capture_window_pixmap(hwnd: int, max_w: int = 220, max_h: int = 140):
     """Snapshot the window's pixels via PrintWindow (works even if occluded).
     Returns a QPixmap scaled to fit max_w × max_h, or None on failure."""
@@ -702,6 +714,16 @@ def main(port: int = 8000) -> int:
     from PySide6.QtWidgets import (QApplication, QWidget, QLineEdit, QPushButton,
                                    QLabel, QVBoxLayout, QHBoxLayout, QScrollArea,
                                    QSizePolicy)
+
+    def _plain_label(text: str = "", parent=None) -> QLabel:
+        label = QLabel(str(text or ""), parent)
+        label.setTextFormat(Qt.PlainText)
+        label.setOpenExternalLinks(False)
+        return label
+
+    def _set_plain_text(label: QLabel, text: str) -> None:
+        label.setTextFormat(Qt.PlainText)
+        label.setText(str(text or ""))
 
     from .capsule_widgets import create_widget, set_api_base, set_card_palette
     from PySide6.QtWidgets import QFrame
@@ -1711,7 +1733,7 @@ def main(port: int = 8000) -> int:
                 % ACCENT)
             pill_row.addWidget(self.input, 1)
 
-            self.status = QLabel("")
+            self.status = _plain_label("")
             self.status.setFont(QFont("Segoe UI", 12))
             self.status.setStyleSheet("color:%s;background:transparent;" % ACCENT)
             self.status.hide()
@@ -1830,11 +1852,11 @@ def main(port: int = 8000) -> int:
                 "  font-weight: 650;"
                 "}"
             )
-            self.scope_chip = QLabel("Computer")
+            self.scope_chip = _plain_label("Computer")
             self.scope_chip.setStyleSheet(chip_qss + "QLabel{color:%s;}" % ACCENT)
-            self.vision_chip = QLabel("Ready")
+            self.vision_chip = _plain_label("Ready")
             self.vision_chip.setStyleSheet(chip_qss)
-            self.phase_chip = QLabel("Idle")
+            self.phase_chip = _plain_label("Idle")
             self.phase_chip.setStyleSheet(chip_qss)
             ctx.addWidget(self.scope_chip)
             ctx.addWidget(self.vision_chip)
@@ -2004,10 +2026,14 @@ def main(port: int = 8000) -> int:
             self.action_dot = QLabel("●")
             self.action_dot.setStyleSheet(
                 "color: %s; background: transparent; font-size: 14px;" % ACCENT)
+            self.action_dot.setTextFormat(Qt.PlainText)
+            self.action_dot.setOpenExternalLinks(False)
             tk_lay.addWidget(self.action_dot)
             self.action_label = QLabel("Working…")
             self.action_label.setStyleSheet(
                 "color: #062925; background: transparent; font-size: 11px;")
+            self.action_label.setTextFormat(Qt.PlainText)
+            self.action_label.setOpenExternalLinks(False)
             self.action_label.setFont(QFont("Segoe UI Variable Text", 9,
                                             QFont.Medium))
             tk_lay.addWidget(self.action_label, 1)
@@ -2136,7 +2162,7 @@ def main(port: int = 8000) -> int:
             outer.addWidget(self.widget_scroll)
 
             # ---- reply (legacy text fallback) ----
-            self.reply = QLabel("")
+            self.reply = _plain_label("")
             self.reply.setWordWrap(True)
             self.reply.setFont(QFont("Segoe UI", 11))
             self.reply.setStyleSheet(
@@ -2205,7 +2231,7 @@ def main(port: int = 8000) -> int:
                     self.apps_panel_layout.count() - 1, card)
                 cards_added += 1
             if cards_added == 0:
-                lbl = QLabel("No open windows detected.")
+                lbl = _plain_label("No open windows detected.")
                 lbl.setStyleSheet("color: rgba(255,255,255,160); padding: 12px;")
                 self.apps_panel_layout.insertWidget(0, lbl)
             self.apps_scroll.show()
@@ -2245,7 +2271,7 @@ def main(port: int = 8000) -> int:
             )
 
             # Thumbnail label, parented to the card so we can overlay an icon badge.
-            thumb_lbl = QLabel(card)
+            thumb_lbl = _plain_label("", card)
             thumb_lbl.setGeometry(6, 6, CARD_W - 12, THUMB_H - 12)
             thumb_lbl.setAlignment(Qt.AlignCenter)
             thumb_lbl.setStyleSheet(
@@ -2283,7 +2309,7 @@ def main(port: int = 8000) -> int:
                                              "QLabel{color: rgba(30,34,42,200);}")
 
             # App-icon badge — bottom-left, hangs slightly off the thumbnail
-            badge = QLabel(card)
+            badge = _plain_label("", card)
             badge.setFixedSize(34, 34)
             badge.setStyleSheet(
                 "QLabel{"
@@ -2301,7 +2327,7 @@ def main(port: int = 8000) -> int:
             # App name under the thumbnail
             from os.path import basename, splitext
             short_name = splitext(basename(win["exe"]))[0] if win["exe"] else win["title"][:20]
-            name_lbl = QLabel(short_name[:22], card)
+            name_lbl = _plain_label(short_name[:22], card)
             name_lbl.setGeometry(50, THUMB_H + 2, CARD_W - 58, 22)
             name_lbl.setStyleSheet("color:#F2F4F8; background: transparent;")
             f2 = QFont("Segoe UI Variable Text", 9)
@@ -2390,7 +2416,7 @@ def main(port: int = 8000) -> int:
             )
 
             # Native blue folder icon via shell
-            icon_lbl = QLabel(card)
+            icon_lbl = _plain_label("", card)
             icon_lbl.setGeometry((CARD_W - 64) // 2, 10, 64, 60)
             icon_lbl.setAlignment(Qt.AlignCenter)
             icon_lbl.setStyleSheet("background: transparent;")
@@ -2401,7 +2427,7 @@ def main(port: int = 8000) -> int:
                 icon_lbl.setPixmap(pm)
 
             # Folder name
-            name_lbl = QLabel(label, card)
+            name_lbl = _plain_label(label, card)
             name_lbl.setGeometry(4, 74, CARD_W - 8, 18)
             name_lbl.setAlignment(Qt.AlignCenter)
             name_lbl.setStyleSheet(
@@ -2410,7 +2436,7 @@ def main(port: int = 8000) -> int:
             name_lbl.setFont(f)
 
             # Item count
-            count_lbl = QLabel(f"{items} items", card)
+            count_lbl = _plain_label(f"{items} items", card)
             count_lbl.setGeometry(4, 94, CARD_W - 8, 16)
             count_lbl.setAlignment(Qt.AlignCenter)
             count_lbl.setStyleSheet(
@@ -3364,7 +3390,7 @@ def main(port: int = 8000) -> int:
                 from PySide6.QtWidgets import QLabel
                 labels = [w for w in card.findChildren(QLabel) if w.wordWrap()]
                 if labels:
-                    labels[-1].setText(text[:4000])
+                    _set_plain_text(labels[-1], text[:4000])
                     # Card may have grown — let the layout reflow then resize.
                     card.adjustSize()
                     if card.maximumHeight() < 100000:
@@ -3480,15 +3506,22 @@ def main(port: int = 8000) -> int:
                 lay = QHBoxLayout(strip)
                 lay.setContentsMargins(8, 4, 8, 4)
                 lay.setSpacing(6)
-                lay.addWidget(QLabel("Sources:"))
+                lay.addWidget(_plain_label("Sources:"))
                 for u in sources[:5]:
-                    lbl = QLabel(
-                        f'<a style="color:#5BE0D0;text-decoration:none" '
-                        f'href="{u}">{_shorten_url(u)}</a>'
+                    safe_url = _safe_external_url(u)
+                    if not safe_url:
+                        continue
+                    btn = QPushButton(_shorten_url(safe_url))
+                    btn.setCursor(Qt.PointingHandCursor)
+                    btn.setStyleSheet(
+                        "QPushButton{color:#5BE0D0; background:transparent;"
+                        " border:none; padding:2px 6px; text-align:left;}"
+                        "QPushButton:hover{text-decoration: underline;}"
                     )
-                    lbl.setOpenExternalLinks(True)
-                    lbl.setStyleSheet("color: #5BE0D0; padding: 2px 6px;")
-                    lay.addWidget(lbl)
+                    btn.clicked.connect(
+                        lambda _c=False, url=safe_url: __import__("webbrowser").open(url)
+                    )
+                    lay.addWidget(btn)
                 lay.addStretch()
                 # Find the card's outer layout and append the strip
                 if card.layout():
@@ -3772,21 +3805,21 @@ def main(port: int = 8000) -> int:
                 # 1) EVEN cool-white tint — clear glass, consistent top-to-bottom
                 #    (no milky band). Low alpha so the desktop reads through sharp.
                 tint = QLinearGradient(0, 0, 0, h)
-                tint.setColorAt(0.0, QColor(255, 255, 255, 116))
-                tint.setColorAt(0.5, QColor(248, 250, 253, 124))
-                tint.setColorAt(1.0, QColor(238, 242, 249, 132))
+                tint.setColorAt(0.0, QColor(255, 255, 255, 196))
+                tint.setColorAt(0.5, QColor(248, 250, 253, 210))
+                tint.setColorAt(1.0, QColor(238, 242, 249, 224))
                 p.fillPath(path, tint)
                 # 2) whisper of top gloss — just a hint, never an opaque sheet
                 sheen = QLinearGradient(0, 0, 0, h)
-                sheen.setColorAt(0.00, QColor(255, 255, 255, 60))
-                sheen.setColorAt(0.18, QColor(255, 255, 255, 14))
+                sheen.setColorAt(0.00, QColor(255, 255, 255, 76))
+                sheen.setColorAt(0.18, QColor(255, 255, 255, 24))
                 sheen.setColorAt(0.40, QColor(255, 255, 255, 0))
                 p.fillPath(path, sheen)
                 # 3) soft cool inner shadow at the very bottom for slab depth
                 p.save(); p.setClipPath(path)
                 lo = QLinearGradient(0, h * 0.72, 0, h)
                 lo.setColorAt(0.0, QColor(70, 84, 110, 0))
-                lo.setColorAt(1.0, QColor(70, 84, 110, 26))
+                lo.setColorAt(1.0, QColor(70, 84, 110, 36))
                 p.fillRect(QRectF(0, h * 0.72, w, h * 0.28), lo)
                 p.restore()
                 # 4) crisp inner top highlight line — the glass edge catching light
@@ -4098,9 +4131,9 @@ def main(port: int = 8000) -> int:
                     kwargs["creationflags"] = 0x00000008 | 0x00000200  # DETACHED | NEW_GROUP
                 subprocess.Popen([sys.executable, "run_desktop.py", "--dashboard"], **kwargs)
             except Exception as _e:
-                # Last-resort fallback so the user is never stranded.
-                import webbrowser as _wb
-                _wb.open(f"http://127.0.0.1:{port}")
+                win.statusChanged_local(
+                    "Dashboard desktop window failed to launch - run setup.bat")
+                print(f"[Desktop] Dashboard launch failed: {_e}", flush=True)
         act_dash.triggered.connect(_open_dash)
         menu.addAction(act_dash)
 

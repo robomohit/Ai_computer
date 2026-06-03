@@ -9,19 +9,71 @@ from app.main import app
 PORT = int(os.getenv("AI_COMPUTER_PORT", "8000"))
 
 
-def run_server():
+def run_server(port: int):
     # Run FastAPI server on a background thread
     # Defaults to 8000; AI_COMPUTER_PORT can override it for local testing.
-    uvicorn.run(app, host="127.0.0.1", port=PORT, log_level="error")
+    uvicorn.run(app, host="127.0.0.1", port=port, log_level="error")
 
 
-def _server_already_running(port: int) -> bool:
-    """True if something is already serving on the port (e.g. the capsule's
-    backend). Lets a second native window attach instead of clashing."""
+def _server_healthy(port: int, timeout: float = 0.7) -> bool:
+    """True only when AI Computer is actually serving HTTP on this port."""
+    import urllib.request
+    try:
+        with urllib.request.urlopen(
+            f"http://127.0.0.1:{port}/healthz",
+            timeout=timeout,
+        ) as resp:
+            return 200 <= int(resp.status) < 300
+    except Exception:
+        return False
+
+
+def _wait_for_server(port: int, timeout: float = 10.0) -> bool:
+    deadline = time.time() + timeout
+    while time.time() < deadline:
+        if _server_healthy(port, timeout=0.45):
+            return True
+        time.sleep(0.2)
+    return False
+
+
+def _free_port() -> int:
     import socket
     with socket.socket(socket.AF_INET, socket.SOCK_STREAM) as s:
-        s.settimeout(0.4)
-        return s.connect_ex(("127.0.0.1", port)) == 0
+        s.bind(("127.0.0.1", 0))
+        return int(s.getsockname()[1])
+
+
+def _start_backend(preferred_port: int) -> int:
+    if _server_healthy(preferred_port):
+        print(f"[Desktop] Reusing healthy backend on port {preferred_port}.")
+        return preferred_port
+
+    print(f"[Desktop] Starting backend on port {preferred_port}...")
+    threading.Thread(
+        target=run_server,
+        args=(preferred_port,),
+        daemon=True,
+    ).start()
+    if _wait_for_server(preferred_port):
+        return preferred_port
+
+    fallback_port = _free_port()
+    print(
+        f"[Desktop] Backend on port {preferred_port} did not become healthy; "
+        f"trying port {fallback_port}.",
+        file=sys.stderr,
+    )
+    threading.Thread(
+        target=run_server,
+        args=(fallback_port,),
+        daemon=True,
+    ).start()
+    if _wait_for_server(fallback_port):
+        return fallback_port
+
+    print("[Desktop] Backend failed to start; dashboard not opened.", file=sys.stderr)
+    sys.exit(1)
 
 
 def parse_args():
@@ -38,13 +90,7 @@ if __name__ == "__main__":
 
     # 1. Start the backend server in a background thread — unless one is already
     #    running (e.g. the capsule launched us to open a second native window).
-    if _server_already_running(PORT):
-        print(f"[Desktop] Reusing the backend already on port {PORT}.")
-    else:
-        t = threading.Thread(target=run_server, daemon=True)
-        t.start()
-        # Wait a moment for the server to initialize
-        time.sleep(2)
+    port = _start_backend(PORT)
 
     if not args.dashboard:
         # ── Floating Sidekick capsule ──
@@ -54,16 +100,24 @@ if __name__ == "__main__":
         # it. (WebView2/pywebview cannot do reliable window transparency.)
         from app.widget.qt_shell import main as qt_widget_main
         print("[Desktop] AI Computer Sidekick (Qt shell) is launching...")
-        sys.exit(qt_widget_main(PORT))
+        sys.exit(qt_widget_main(port))
 
     # ── Full dashboard (pywebview) ──
-    import webview
+    try:
+        import webview
+    except ImportError:
+        print(
+            "[Desktop] pywebview is not installed. Run setup.bat or "
+            "install requirements-desktop.txt to open the native dashboard.",
+            file=sys.stderr,
+        )
+        sys.exit(1)
     from app.desktop_bridge import DesktopBridge
     bridge = DesktopBridge()
     icon_path = os.path.join(os.path.dirname(__file__), "ai_computer_app_icon_1777005021291.png")
     window = webview.create_window(
         "AI Computer",
-        f"http://127.0.0.1:{PORT}",
+        f"http://127.0.0.1:{port}",
         js_api=bridge,
         width=1400,
         height=900,
