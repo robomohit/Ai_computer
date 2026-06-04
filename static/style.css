@@ -4635,5 +4635,10 @@
   .composer-bottom { margin-top: 6px; align-items: center; }
   .send-btn { border-radius: 999px; padding: 7px 14px; }
 
+  /* — Active feed: a little breathing room top & bottom so cards don't crowd
+       the top bar or the docked composer. — */
+  body.task-active .feed-scroll { padding-top: 18px; }
+  body.task-active .feed { padding-bottom: 8px; }
+
   /* — Sidebar: lighter, airier section headers. — */
   .sidebar { background: var(--bg-1); }
