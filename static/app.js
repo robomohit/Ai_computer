@@ -588,6 +588,29 @@
     if (diff < 86400) return `${Math.floor(diff / 3600)}h ago`;
     return `${Math.floor(diff / 86400)}d ago`;
   };
+  // Compact age for the session list — Codex-style "16h / 3d / 2w / 1mo".
+  const relTimeShort = (value) => {
+    const ts = safeDate(value); if (ts === null) return '';
+    const d = Math.floor((Date.now() - ts) / 1000);
+    if (d < 60) return 'now';
+    if (d < 3600) return `${Math.floor(d / 60)}m`;
+    if (d < 86400) return `${Math.floor(d / 3600)}h`;
+    if (d < 604800) return `${Math.floor(d / 86400)}d`;
+    if (d < 2592000) return `${Math.floor(d / 604800)}w`;
+    if (d < 31536000) return `${Math.floor(d / 2592000)}mo`;
+    return `${Math.floor(d / 31536000)}y`;
+  };
+  // Turn a raw goal into a short, clean session title (strip context banners,
+  // first line only, capped + capitalized) — so the list reads like Codex's.
+  const historyTitle = (goal) => {
+    let g = String(goal || '').trim();
+    g = g.replace(/^\s*(?:\[[^\]]*\]\s*)+/, '').trim();      // drop [Clipboard]/[Attached]/[Linked] prefixes
+    g = (g.split(/\r?\n/).find((l) => l.trim()) || g).trim(); // first non-empty line
+    g = g.replace(/\s+/g, ' ');
+    if (!g) return 'Untitled task';
+    if (g.length > 52) g = g.slice(0, 51).replace(/\s+\S*$/, '').trimEnd() + '…';
+    return g.charAt(0).toUpperCase() + g.slice(1);
+  };
   const humanize = (value = '') => value.replace(/_/g, ' ').replace(/\b\w/g, (c) => c.toUpperCase());
   const truncate = (value = '', limit = 500) => value.length > limit ? `${value.slice(0, limit)}\n…` : value;
   const escapeHtml = (value = '') => String(value).replace(/[&<>"']/g, (char) => ({ '&': '&amp;', '<': '&lt;', '>': '&gt;', '"': '&quot;', "'": '&#39;' }[char]));
@@ -1104,21 +1127,24 @@
     copy.className = 'history-copy';
     const goal = document.createElement('span');
     goal.className = 'history-goal';
-    goal.textContent = taskRecord.goal || '(untitled)';
+    goal.textContent = historyTitle(taskRecord.goal);
     const meta = document.createElement('span');
     meta.className = 'history-meta';
-    meta.textContent = relTime(taskRecord.created_at || taskRecord.timestamp || taskRecord.finished_at) || humanize(status || 'saved');
+    meta.textContent = relTimeShort(taskRecord.created_at || taskRecord.timestamp || taskRecord.finished_at) || '';
     const retask = document.createElement('button');
     retask.type = 'button';
     retask.className = 'history-retask';
     retask.tabIndex = -1;
     retask.textContent = '\u21bb Copy task';
+    retask.title = 'Copy this task into the prompt';
     copy.appendChild(goal);
     copy.appendChild(meta);
-    copy.appendChild(retask);
     item.appendChild(dot);
     item.appendChild(copy);
-    item.title = [taskRecord.mode, taskRecord.model].filter(Boolean).join(' / ');
+    item.appendChild(retask);
+    // Full goal + mode/model on hover (the visible title is shortened).
+    const fullGoal = String(taskRecord.goal || '').replace(/^\s*(?:\[[^\]]*\]\s*)+/, '').trim();
+    item.title = [fullGoal, [taskRecord.mode, taskRecord.model].filter(Boolean).join(' / ')].filter(Boolean).join('\n');
     retask.addEventListener('click', (e) => {
       e.stopPropagation();
       const inp = $('input');

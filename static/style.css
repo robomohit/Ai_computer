@@ -494,12 +494,13 @@
   .history-list::-webkit-scrollbar-track { background: transparent; }
 
   .history-item {
+    position: relative;
     display: flex;
-    gap: 10px;
-    align-items: flex-start;
-    padding: 9px 10px;
+    gap: 9px;
+    align-items: center;
+    padding: 7px 10px;
     border-radius: var(--r-sm);
-    margin-bottom: 2px;
+    margin-bottom: 1px;
     border: 1px solid transparent;
     transition: background var(--dur-fast) var(--ease-out), border-color var(--dur-fast) var(--ease-out);
     width: 100%;
@@ -514,53 +515,50 @@
     box-shadow: var(--shadow-inset);
   }
 
+  /* Small status dot (calm) — only running/failed/paused stand out; a
+     successful or cancelled run stays muted so the list reads cleanly. */
   .history-dot {
-    width: auto; height: auto;
-    border-radius: 0;
-    margin-top: 2px;
+    width: 6px; height: 6px; min-width: 6px;
+    border-radius: 50%;
     flex-shrink: 0;
-    background: transparent;
-    font-size: 10px;
-    font-family: var(--font-ui);
-    letter-spacing: 0.04em;
-    color: var(--muted);
-    line-height: 1.2;
-    min-width: 42px;
+    background: var(--line-3);
   }
-  .history-dot.running { background: transparent; box-shadow: none; color: var(--accent); }
-  .history-dot.paused { background: transparent; box-shadow: none; color: var(--warn); }
-  .history-dot.done    { background: transparent; color: var(--muted); }
-  .history-dot.failed  { background: transparent; color: var(--err); }
-  .history-dot.cancelled { background: transparent; color: var(--muted); }
-  .history-dot.running::after   { content: 'running'; }
-  .history-dot.paused::after    { content: 'paused'; }
-  .history-dot.done::after      { content: 'done'; }
-  .history-dot.failed::after    { content: 'failed'; }
-  .history-dot.cancelled::after { content: 'cancelled'; }
+  .history-dot.running { background: var(--accent); box-shadow: 0 0 0 2px var(--accent-soft); animation: dot-pulse 1.5s ease-in-out infinite; }
+  .history-dot.paused { background: var(--warn); }
+  .history-dot.done    { background: color-mix(in oklab, var(--accent) 60%, var(--line-3)); }
+  .history-dot.failed  { background: var(--err); }
+  .history-dot.cancelled { background: var(--line-3); }
 
   @keyframes dot-pulse {
     0%,100% { box-shadow: 0 0 0 2px var(--accent-soft); }
-    50%     { box-shadow: 0 0 0 5px var(--accent-soft); }
+    50%     { box-shadow: 0 0 0 4px var(--accent-soft); }
   }
 
-  .history-copy { min-width: 0; flex: 1; }
+  /* Title (one line, ellipsized) + compact age on the right — Codex-style. */
+  .history-copy {
+    min-width: 0; flex: 1;
+    display: flex; align-items: baseline; gap: 8px;
+  }
   .history-goal {
+    flex: 1; min-width: 0;
     font-size: var(--fs-sm);
     font-weight: 500;
-    line-height: 1.4;
+    line-height: 1.45;
     color: var(--ink);
-    display: -webkit-box;
-    -webkit-line-clamp: 2;
-    -webkit-box-orient: vertical;
+    white-space: nowrap;
     overflow: hidden;
+    text-overflow: ellipsis;
   }
+  .history-item.terminal:not(.active) .history-goal { color: var(--ink-2); }
   .history-meta {
-    margin-top: 3px;
+    flex-shrink: 0;
     color: var(--muted-2);
     font-size: var(--fs-micro);
-    font-family: var(--font-mono);
     letter-spacing: 0;
+    font-variant-numeric: tabular-nums;
   }
+  /* The age hides on hover so the "Copy task" affordance can take its place. */
+  .history-item:hover .history-meta { opacity: 0; }
   .usage-badge {
     display: inline-block;
     margin-top: 3px;
@@ -572,21 +570,22 @@
     font-family: var(--font-mono);
   }
   .history-retask {
-    display: none;
-    margin-top: 4px;
-    padding: 1px 6px;
-    background: none;
+    position: absolute;
+    top: 50%; right: 8px;
+    transform: translateY(-50%);
+    padding: 2px 7px;
+    background: var(--bg-3);
     border: 1px solid var(--line);
     border-radius: var(--r-sm);
     color: var(--muted-2);
     font-size: var(--fs-micro);
     cursor: pointer;
     opacity: 0;
+    pointer-events: none;
     transition: opacity var(--dur-fast) var(--ease-out), color var(--dur-fast);
   }
-  .history-item:hover .history-retask { opacity: 1; }
+  .history-item:hover .history-retask { opacity: 1; pointer-events: auto; }
   .history-item:hover .history-retask:hover { color: var(--ink); border-color: var(--line-2); }
-  .history-item.terminal .history-retask { display: inline-block; }
 
   .history-empty {
     margin: 6px 6px 0;

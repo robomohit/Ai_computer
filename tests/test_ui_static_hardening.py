@@ -106,9 +106,9 @@ def test_phase_e_typography_whitespace():
     assert ".feed-card:not(.is-active):hover" in html
     # line-height bumped to 1.6
     assert "line-height: 1.6;" in html
-    # status dots replaced with text labels
-    assert ".history-dot.running::after" in html
-    assert "content: 'done'" in html
+    # status shown as a small calm dot (running pulses); no loud text labels
+    assert ".history-dot.running" in html
+    assert "dot-pulse" in html
     # worker-tag colors reduced (workers 2-5 color lines removed)
     assert ".worker-tag.worker-2" not in html
 
@@ -117,7 +117,7 @@ def test_copy_task_button_present_and_wired():
     html = _read_all_static()
 
     assert ".history-retask" in html
-    assert ".history-item.terminal .history-retask" in html
+    assert ".history-item:hover .history-retask" in html
     assert "isTerminal" in html
     assert "retask.textContent = '\\u21bb Copy task'" in html
     assert "e.stopPropagation()" in html
@@ -139,8 +139,8 @@ def test_dashboard_chrome_uses_text_nodes_for_dynamic_rows():
     assert "statusText.textContent = map[key] || humanize(key)" in js
     assert "modeValue.textContent = label" in js
     assert "badgeEl.textContent = badge" in js
-    assert "goal.textContent = taskRecord.goal || '(untitled)'" in js
-    assert "meta.textContent = relTime(taskRecord.created_at || taskRecord.timestamp || taskRecord.finished_at) || humanize(status || 'saved')" in js
+    assert "goal.textContent = historyTitle(taskRecord.goal)" in js
+    assert "meta.textContent = relTimeShort(taskRecord.created_at || taskRecord.timestamp || taskRecord.finished_at) || ''" in js
     assert "name.textContent = entry.name || pathLeaf(entry.path)" in js
     assert "meta.textContent = entry.is_dir ? 'Open' : 'File'" in js
 
@@ -386,7 +386,7 @@ def test_dashboard_recovers_active_task_after_reload():
     assert "setDesktopSessionActive(!queued && isDesktopMode(meta.mode)" in js
     assert "openStream(activeId)" in js
     assert "toast('Reconnected to running task.'" in js
-    assert ".history-dot.paused::after" in css
+    assert ".history-dot.paused" in css
 
 
 def test_reconnect_only_reopens_unresolved_trust_prompts():
