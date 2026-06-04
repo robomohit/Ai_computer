@@ -27,7 +27,9 @@ JSON spec format:
 """
 from __future__ import annotations
 
+import html as _html
 import json
+import re
 import subprocess
 import threading
 from pathlib import Path
@@ -137,6 +139,53 @@ def _plain_label(text: str = "", parent=None) -> QLabel:
 def _set_plain_text(label: QLabel, text: str) -> None:
     label.setTextFormat(Qt.PlainText)
     label.setText(str(text or ""))
+
+
+# Code-span tint that reads on both the light- and dark-mode card surfaces.
+_MD_CODE_BG = "rgba(128,128,128,0.20)"
+
+
+def _md_to_html(text: str) -> str:
+    """Render a SAFE subset of Markdown to Qt rich text.
+
+    HTML is escaped FIRST, then only a controlled set of inline tags is
+    introduced — no raw markup from the model/agent ever passes through, so
+    this can't become an injection vector. Supports **bold**, *italic*,
+    `code`, # headings, and - bullet lists.
+    """
+    s = _html.escape(str(text or ""), quote=False)
+
+    # Protect `code` spans so bold/italic don't reformat their contents.
+    code_spans: list[str] = []
+
+    def _stash(m):
+        code_spans.append(m.group(1))
+        return f"\x00C{len(code_spans) - 1}\x00"
+
+    s = re.sub(r"`([^`\n]+)`", _stash, s)
+
+    # Headings (#..###### ) → bold line.
+    s = re.sub(r"(?m)^\s{0,3}#{1,6}\s+(.+?)\s*$", r"<b>\1</b>", s)
+    # Bold then italic (bold first so ** isn't eaten by the * rule).
+    s = re.sub(r"\*\*([^\n]+?)\*\*", r"<b>\1</b>", s)
+    s = re.sub(r"(?<![\w*])\*([^*\n]+?)\*(?![\w*])", r"<i>\1</i>", s)
+    s = re.sub(r"(?<![\w_])_([^_\n]+?)_(?![\w_])", r"<i>\1</i>", s)
+    # Bullet list markers at line start.
+    s = re.sub(r"(?m)^[ \t]*[-*][ \t]+", "•&nbsp;", s)
+
+    def _restore(m):
+        body = code_spans[int(m.group(1))]
+        return (f'<span style="font-family:Consolas,\'Cascadia Mono\',monospace;'
+                f'background:{_MD_CODE_BG};">&nbsp;{body}&nbsp;</span>')
+
+    s = re.sub(r"\x00C(\d+)\x00", _restore, s)
+    return s.replace("\n", "<br>")
+
+
+def _set_rich_text(label: QLabel, text: str) -> None:
+    """Set a label's text as rendered Markdown (safe rich text)."""
+    label.setTextFormat(Qt.RichText)
+    label.setText(_md_to_html(text))
 
 
 def _safe_external_url(value: str) -> str:
@@ -380,7 +429,9 @@ class DynamicWidget(CapsuleCard):
         body_text = s.get("text", "")
         if body_text:
             lay.addSpacing(10); lay.addWidget(_divider()); lay.addSpacing(10)
-            body = _plain_label(body_text)
+            body = QLabel()
+            body.setOpenExternalLinks(False)
+            _set_rich_text(body, body_text)   # render **bold**, `code`, etc.
             body.setWordWrap(True)
             body.setFont(QFont("Segoe UI", 10))
             body.setStyleSheet(f"color:{CARD_BODY};{_NO_BG}")

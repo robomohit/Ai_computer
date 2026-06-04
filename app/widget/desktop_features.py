@@ -833,6 +833,33 @@ def _find_uia_control(query: str, app_hint: str = ""):
     _ensure_uia_config(uia)
     try:
         root = _uia_root(app_hint)
+
+        # ── Fast path: native exact-name FindFirst (runs in UIA's C++ core,
+        # ~2x faster than the Python walk below). The walk also early-exits on
+        # the first exact (score-100) hit, so this returns the same control —
+        # just quicker. maxSearchSeconds=0 = a single immediate search, so a
+        # miss returns fast and falls through to the scored walk (which handles
+        # fuzzy / AutomationId / role matches). Skipped for chrome/titlebar
+        # names so we never grab the window's Close over a real "Close" button.
+        q = (query or "").strip()
+        if root is not None and q and not _is_chrome_control(q):
+            try:
+                fast = root.Control(searchDepth=0xFFFFFFFF, Name=q)
+                if fast.Exists(maxSearchSeconds=0, searchIntervalSeconds=0):
+                    r = fast.BoundingRectangle
+                    has_rect = r.right > r.left and r.bottom > r.top
+                    return fast, {
+                        "name": fast.Name or "",
+                        "automation_id": fast.AutomationId or "",
+                        "control_type": fast.ControlTypeName or "",
+                        "x": (r.left + r.right) // 2 if has_rect else 0,
+                        "y": (r.top + r.bottom) // 2 if has_rect else 0,
+                        "score": 100,
+                        "offscreen": not has_rect,
+                    }
+            except Exception:
+                pass
+
         best = [0, None, None]  # score, ctrl, info (mutable for early-exit)
 
         def walk(ctrl, depth=0):
@@ -881,6 +908,34 @@ def _find_uia_control(query: str, app_hint: str = ""):
         return None, {"ok": False, "error": str(exc)}
 
 
+def _dwm_visible_rect(hwnd: int) -> Optional[dict]:
+    """The window's VISIBLE bounds via DWM (DWMWA_EXTENDED_FRAME_BOUNDS).
+
+    GetWindowRect / UIA BoundingRectangle include the ~7px invisible resize
+    border Windows adds around top-level windows, so a glow drawn on that rect
+    sits too wide and too low. DWM's extended frame bounds is the real visible
+    edge — the glow then hugs the window precisely. Returns None on failure."""
+    if not hwnd:
+        return None
+    try:
+        import ctypes
+        from ctypes import wintypes
+        DWMWA_EXTENDED_FRAME_BOUNDS = 9
+        rect = wintypes.RECT()
+        hr = ctypes.windll.dwmapi.DwmGetWindowAttribute(
+            wintypes.HWND(hwnd), DWMWA_EXTENDED_FRAME_BOUNDS,
+            ctypes.byref(rect), ctypes.sizeof(rect))
+        if hr == 0:
+            w = int(rect.right - rect.left)
+            h = int(rect.bottom - rect.top)
+            if w > 0 and h > 0:
+                return {"left": int(rect.left), "top": int(rect.top),
+                        "width": w, "height": h}
+    except Exception:
+        pass
+    return None
+
+
 def app_window_rect(app_hint: str, *, fallback_foreground: bool = False) -> dict:
     """On-screen bounds of the top-level window matching app_hint (its title
     substring). Used to draw a glowing edge around the whole app the agent is
@@ -895,6 +950,12 @@ def app_window_rect(app_hint: str, *, fallback_foreground: bool = False) -> dict
         top = _uia_root(app_hint, fallback_foreground=fallback_foreground) if (app_hint or fallback_foreground) else None
         if top is None:
             return {"left": 0, "top": 0, "width": 0, "height": 0}
+        # Prefer DWM's visible bounds so the glow hugs the real window edge
+        # (BoundingRectangle includes the invisible resize border).
+        hwnd = int(getattr(top, "NativeWindowHandle", 0) or 0)
+        vis = _dwm_visible_rect(hwnd)
+        if vis is not None:
+            return vis
         return _onscreen_rect(top)
     except Exception:
         return {"left": 0, "top": 0, "width": 0, "height": 0}

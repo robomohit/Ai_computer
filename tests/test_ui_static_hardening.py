@@ -629,7 +629,10 @@ def test_qt_capsule_dynamic_labels_are_plain_text_and_links_are_safe():
     assert "self.vision_chip = _plain_label" in qt_shell
     assert "self.phase_chip = _plain_label" in qt_shell
     assert "self.reply = _plain_label" in qt_shell
-    assert "_set_plain_text(labels[-1], text[:4000])" in qt_shell
+    # The answer-card body renders a SAFE markdown subset (rich text), so the
+    # streaming update uses _set_rich_text — which escapes HTML before applying
+    # any tags (see _md_to_html below), so it can't be an injection vector.
+    assert "_set_rich_text(labels[-1], text[:4000])" in qt_shell
     assert "def _safe_external_url" in qt_shell
     assert "safe_url = _safe_external_url(u)" in qt_shell
     assert "QPushButton(_shorten_url(safe_url))" in qt_shell
@@ -637,7 +640,11 @@ def test_qt_capsule_dynamic_labels_are_plain_text_and_links_are_safe():
 
     assert "def _plain_label" in capsule_widgets
     assert "title = _plain_label(title_text)" in capsule_widgets
-    assert "body = _plain_label(body_text)" in capsule_widgets
+    # Card body renders safe Markdown (rich text). The renderer MUST escape HTML
+    # first so model/agent output can't inject markup — that's the safety gate.
+    assert "_set_rich_text(body, body_text)" in capsule_widgets
+    assert "def _md_to_html" in capsule_widgets
+    assert "_html.escape(" in capsule_widgets
     assert "_set_plain_text(self._status, msg)" in capsule_widgets
     assert "url = _safe_external_url(payload_obj.get(\"url\", \"\"))" in capsule_widgets
     assert "def _safe_local_folder_path" in capsule_widgets

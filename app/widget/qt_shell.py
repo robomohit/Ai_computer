@@ -726,7 +726,7 @@ def main(port: int = 8000) -> int:
         label.setTextFormat(Qt.PlainText)
         label.setText(str(text or ""))
 
-    from .capsule_widgets import create_widget, set_api_base, set_card_palette
+    from .capsule_widgets import create_widget, set_api_base, set_card_palette, _set_rich_text
     from PySide6.QtWidgets import QFrame
     from .virtual_cursor import VirtualCursorOverlay, parse_click_xy
     from . import desktop_features as _df
@@ -3395,7 +3395,13 @@ def main(port: int = 8000) -> int:
             self.input.setVisible(not running)
             self.status.setVisible(running)
             if not running:
-                self._glow_heartbeat.stop()  # let the glow fade out at task end
+                self._glow_heartbeat.stop()
+                # Fade the app-edge glow out immediately at task end so it does
+                # not linger ~4s after completion (the held lifetime + fade).
+                try:
+                    self._vcursor.clear_app_glow()
+                except Exception:
+                    pass
                 self.status.hide()
                 self.input.show()
                 self._current_task_id = None
@@ -3440,6 +3446,20 @@ def main(port: int = 8000) -> int:
             self.action_label.setText(phrase[:80])
             self.status.setText(phrase[:90])
             self._set_capsule_state("planning", phrase[:90])
+            # Glow the target app the MOMENT we identify it — so the aqua ring is
+            # up for the whole task, not just from the first click. The heartbeat
+            # keeps it solid; clear_app_glow() drops it the instant the task ends.
+            try:
+                ar = profile.get("app_rect")
+                if (isinstance(ar, dict) and int(ar.get("width", 0)) > 0
+                        and int(ar.get("height", 0)) > 0):
+                    self._vcursor.show_app_focus(
+                        int(ar["left"]), int(ar["top"]),
+                        int(ar["width"]), int(ar["height"]),
+                        label=(f"Working in {target}" if target and target != "Desktop"
+                               else "Working"))
+            except Exception:
+                pass
 
         def _on_status(self, msg: str) -> None:
             if not msg:
@@ -3764,7 +3784,7 @@ def main(port: int = 8000) -> int:
                 from PySide6.QtWidgets import QLabel
                 labels = [w for w in card.findChildren(QLabel) if w.wordWrap()]
                 if labels:
-                    _set_plain_text(labels[-1], text[:4000])
+                    _set_rich_text(labels[-1], text[:4000])  # render markdown
                     # Card may have grown — let the layout reflow then resize.
                     card.adjustSize()
                     if card.maximumHeight() < 100000:

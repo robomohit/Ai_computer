@@ -232,6 +232,14 @@ class VirtualCursorOverlay(QWidget):
             self._app_glow.armed_until = self._now_ms() + 3500
             self._ensure_visible()
 
+    def clear_app_glow(self) -> None:
+        """Begin fading the app-edge glow out NOW (call the instant a task ends
+        so the glow doesn't linger ~4s after completion). Fades over fade_ms
+        (~0.5s) rather than vanishing, so it still feels smooth."""
+        if self._app_glow is not None:
+            self._app_glow.armed_until = self._now_ms()
+            self._ensure_visible()
+
     def show_action(self, label: str, x: int | None = None,
                     y: int | None = None) -> None:
         """Show a label without firing a click/type — for actions like
