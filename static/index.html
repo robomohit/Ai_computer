@@ -175,6 +175,18 @@
           </details>
         </div>
 
+        <div class="settings-group" id="provider-key-group">
+          <div class="selector-label">OpenRouter key
+            <span class="key-state" id="key-state">checking…</span>
+          </div>
+          <p class="settings-hint">Powers the assistant on free models. <a href="https://openrouter.ai/keys" target="_blank" rel="noopener" class="key-link">Get a free key →</a></p>
+          <div class="key-row">
+            <input id="provider-key-input" class="pref-input" type="password" autocomplete="off" spellcheck="false" placeholder="Paste a new key to update">
+            <button id="provider-key-save" class="key-save" type="button">Save</button>
+          </div>
+          <p class="settings-hint key-status" id="provider-key-status" role="status"></p>
+        </div>
+
         <div class="skills-section" id="preferences-section">
           <div class="history-header"><span>Preferences</span></div>
           <div class="prefs-grid">

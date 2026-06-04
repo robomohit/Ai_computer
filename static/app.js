@@ -4963,3 +4963,59 @@
   document.getElementById('open-settings')
     ?.addEventListener('click', () => { setTimeout(load, 30); });
 })();
+
+/* ---------------- Provider key (Settings) ---------------- */
+(function initProviderKey(){
+  if (new URLSearchParams(location.search).get('widget')) return; // dashboard only
+  const stateEl = document.getElementById('key-state');
+  const input   = document.getElementById('provider-key-input');
+  const saveBtn = document.getElementById('provider-key-save');
+  const statusEl= document.getElementById('provider-key-status');
+  if (!stateEl || !input || !saveBtn) return;
+
+  async function ensureSession(){ try { await fetch('/api/session', {method:'POST'}); } catch(_){} }
+
+  async function refreshState(){
+    try {
+      await ensureSession();
+      const r = await fetch('/api/setup/status', { credentials:'include' });
+      const d = r.ok ? await r.json() : {};
+      const set = !!(d.providers && d.providers.openrouter);
+      stateEl.textContent = set ? 'Key set ✓' : 'No key yet';
+      stateEl.className = 'key-state ' + (set ? 'set' : 'unset');
+    } catch(_){
+      stateEl.textContent = '—'; stateEl.className = 'key-state';
+    }
+  }
+
+  async function save(){
+    const key = (input.value || '').trim();
+    if (!key){ statusEl.textContent = 'Paste a key first.'; statusEl.className = 'key-status err'; return; }
+    saveBtn.disabled = true; statusEl.textContent = 'Checking…'; statusEl.className = 'key-status';
+    try {
+      await ensureSession();
+      const r = await fetch('/api/setup/provider-key', {
+        method:'POST', credentials:'include',
+        headers:{'Content-Type':'application/json'},
+        body: JSON.stringify({ provider:'openrouter', key }),
+      });
+      if (r.ok){
+        statusEl.textContent = 'Saved ✓'; statusEl.className = 'key-status ok';
+        input.value = '';
+        refreshState();
+        setTimeout(() => { statusEl.textContent = ''; }, 2500);
+      } else {
+        const d = await r.json().catch(()=>({}));
+        statusEl.textContent = d.detail || 'That key didn’t work — double-check and try again.';
+        statusEl.className = 'key-status err';
+      }
+    } catch(_){
+      statusEl.textContent = 'Couldn’t reach the app. Try again.'; statusEl.className = 'key-status err';
+    } finally { saveBtn.disabled = false; }
+  }
+
+  saveBtn.addEventListener('click', save);
+  input.addEventListener('keydown', e => { if (e.key === 'Enter') { e.preventDefault(); save(); } });
+  document.getElementById('open-settings')?.addEventListener('click', () => { setTimeout(refreshState, 30); });
+  refreshState();
+})();

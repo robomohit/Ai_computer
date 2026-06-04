@@ -3823,9 +3823,9 @@ def main(port: int = 8000) -> int:
                 # Replace cryptic JSON with a plain-English answer card
                 clean = (
                     "All free OpenRouter models are rate-limited right now. "
-                    "Wait ~30-60 seconds and try again, or link your own "
-                    "OpenRouter key in Settings → Connectors to remove the "
-                    "limit. Original error preserved below.\n\n"
+                    "Wait ~30-60 seconds and try again, or add your own "
+                    "OpenRouter key in Settings to remove the limit. "
+                    "Original error preserved below.\n\n"
                     + clean[:600]
                 )
 

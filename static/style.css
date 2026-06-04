@@ -4503,6 +4503,31 @@
     animation: effortRainbow 3s linear infinite;
   }
 
+  /* ── Provider key field (Settings) ── */
+  .key-state {
+    font-size: 11px; font-weight: 700; letter-spacing: .02em;
+    margin-left: 8px; padding: 2px 8px; border-radius: 99px;
+    background: var(--bg-3); color: var(--muted-2);
+  }
+  .key-state.set { color: #34d399; background: color-mix(in oklab, #34d399 16%, transparent); }
+  .key-state.unset { color: #fbbf24; background: color-mix(in oklab, #fbbf24 16%, transparent); }
+  .key-link { color: var(--accent); text-decoration: none; font-weight: 600; }
+  .key-link:hover { text-decoration: underline; }
+  .key-row { display: flex; gap: 8px; margin-top: 8px; }
+  .key-row .pref-input { flex: 1; }
+  .key-save {
+    padding: 0 16px; border-radius: var(--r-sm);
+    background: var(--accent); color: #04201d; border: none;
+    font-weight: 700; font-size: 13px; cursor: pointer;
+    transition: filter .15s ease, transform .05s ease;
+  }
+  .key-save:hover { filter: brightness(1.08); }
+  .key-save:active { transform: translateY(1px); }
+  .key-save:disabled { opacity: .55; cursor: default; }
+  .key-status { min-height: 0; margin-top: 6px; transition: color .2s; }
+  .key-status.ok { color: #34d399; }
+  .key-status.err { color: #f87171; }
+
   .model-advanced { margin-top: 12px; }
   .model-advanced > summary {
     font-size: 12px; color: var(--muted-2); cursor: pointer;
