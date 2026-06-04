@@ -627,6 +627,8 @@
   const markFeedActive = () => {
     const feed = $('feed');
     if (feed) feed.classList.add('has-events');
+    // Drive idle→active chrome (centered hero collapses, topbar/controls show).
+    document.body.classList.add('task-active');
   };
 
   const removeWelcome = () => {
@@ -2322,6 +2324,7 @@
     if (!keepFeed) {
       $('feed').innerHTML = WELCOME_HTML;
       $('feed').classList.remove('has-events');
+      document.body.classList.remove('task-active');  // back to the centered idle hero
       bindExamples();
     }
   };
