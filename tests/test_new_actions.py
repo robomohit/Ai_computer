@@ -6,6 +6,7 @@ import types
 import time
 
 from app.models import Action, ActionType, ToolResult
+from app.permissions import PermissionScope, can_auto_grant_scope, scope_for_action
 from app.safety import SafetyManager
 from app.text_editor import TextEditorTool
 from app.tools import ToolExecutor
@@ -107,6 +108,234 @@ def test_safety_key_combo():
     assert dec.danger.value == "high"
 
 
+def test_safety_desktop_lifecycle_actions_always_require_approval():
+    s = SafetyManager()
+
+    close_decision = s.evaluate(
+        Action(id="close", type=ActionType.force_close_window, args={"title": "Notepad"}),
+        safe_mode=False,
+    )
+    unlock_decision = s.evaluate(
+        Action(id="unlock", type=ActionType.electron_unlock, args={"exe": "Discord.exe"}),
+        safe_mode=False,
+    )
+
+    assert close_decision.danger.value == "high"
+    assert close_decision.requires_approval is True
+    assert "terminates" in close_decision.reason
+    assert unlock_decision.danger.value == "high"
+    assert unlock_decision.requires_approval is True
+    assert "relaunches" in unlock_decision.reason
+
+
+def test_safety_process_and_watch_actions_are_classified():
+    s = SafetyManager()
+
+    kill_decision = s.evaluate(
+        Action(id="kill", type=ActionType.kill_process, args={"pid": 1234}),
+        safe_mode=False,
+    )
+    watch_safe_decision = s.evaluate(
+        Action(id="watch-safe", type=ActionType.run_and_watch, args={"command": "npm run dev"}),
+        safe_mode=True,
+    )
+    watch_auto_decision = s.evaluate(
+        Action(id="watch-auto", type=ActionType.run_and_watch, args={"command": "npm run dev"}),
+        safe_mode=False,
+    )
+    watch_dangerous_decision = s.evaluate(
+        Action(id="watch-danger", type=ActionType.run_and_watch, args={"command": "shutdown /s"}),
+        safe_mode=False,
+    )
+
+    assert kill_decision.danger.value == "high"
+    assert kill_decision.requires_approval is True
+    assert "terminates" in kill_decision.reason
+    assert watch_safe_decision.danger.value == "high"
+    assert watch_safe_decision.requires_approval is True
+    assert watch_auto_decision.danger.value == "medium"
+    assert watch_auto_decision.requires_approval is False
+    assert watch_dangerous_decision.danger.value == "high"
+    assert watch_dangerous_decision.requires_approval is True
+
+
+def test_safety_and_permissions_classify_terminal_helpers():
+    s = SafetyManager()
+
+    run_tests_safe = s.evaluate(
+        Action(id="tests-safe", type=ActionType.run_tests, args={"command": "pytest -q"}),
+        safe_mode=True,
+    )
+    run_tests_auto = s.evaluate(
+        Action(id="tests-auto", type=ActionType.run_tests, args={"command": "pytest -q"}),
+        safe_mode=False,
+    )
+    run_tests_dangerous = s.evaluate(
+        Action(id="tests-danger", type=ActionType.run_tests, args={"command": "shutdown /s"}),
+        safe_mode=False,
+    )
+    git_safe = s.evaluate(
+        Action(id="git", type=ActionType.git, args={"command": "status"}),
+        safe_mode=True,
+    )
+    lint_safe = s.evaluate(
+        Action(id="lint", type=ActionType.lint_code, args={"path": "app.py"}),
+        safe_mode=True,
+    )
+
+    assert run_tests_safe.danger.value == "high"
+    assert run_tests_safe.requires_approval is True
+    assert run_tests_auto.danger.value == "medium"
+    assert run_tests_auto.requires_approval is False
+    assert run_tests_dangerous.danger.value == "high"
+    assert run_tests_dangerous.requires_approval is True
+    assert git_safe.danger.value == "high"
+    assert git_safe.requires_approval is True
+    assert lint_safe.danger.value == "high"
+    assert lint_safe.requires_approval is True
+    assert scope_for_action("run_tests") == PermissionScope.shell
+    assert scope_for_action("run_and_watch") == PermissionScope.shell
+    assert scope_for_action("git") == PermissionScope.shell
+    assert scope_for_action("lint_code") == PermissionScope.shell
+
+
+def test_safety_and_permissions_classify_folder_analysis_modes():
+    s = SafetyManager()
+
+    scan_decision = s.evaluate(
+        Action(
+            id="scan",
+            type=ActionType.analyze_folder,
+            args={"path": "~/Downloads", "action": "scan"},
+        ),
+        safe_mode=False,
+    )
+    organize_decision = s.evaluate(
+        Action(
+            id="organize",
+            type=ActionType.analyze_folder,
+            args={"path": "~/Downloads", "action": "organize"},
+        ),
+        safe_mode=False,
+    )
+
+    assert scan_decision.danger.value == "low"
+    assert scan_decision.requires_approval is False
+    assert "folder scan" in scan_decision.reason
+    assert organize_decision.danger.value == "high"
+    assert organize_decision.requires_approval is True
+    assert "organize" in organize_decision.reason
+    assert scope_for_action("analyze_folder") == PermissionScope.filesystem
+
+
+def test_permissions_classify_filesystem_read_helpers():
+    assert scope_for_action("read_file") == PermissionScope.filesystem
+    assert scope_for_action("list_directory") == PermissionScope.filesystem
+    assert scope_for_action("file_glob") == PermissionScope.filesystem
+    assert scope_for_action("file_grep") == PermissionScope.filesystem
+    assert scope_for_action("text_view") == PermissionScope.filesystem
+    assert scope_for_action("diff_files") == PermissionScope.filesystem
+
+
+def test_permissions_classify_privacy_sensitive_local_reads():
+    assert scope_for_action("screenshot") == PermissionScope.screen
+    assert scope_for_action("screen_context") == PermissionScope.screen
+    assert scope_for_action("ocr_image") == PermissionScope.screen
+    assert scope_for_action("pixel_color_at") == PermissionScope.screen
+    assert scope_for_action("ui_critique") == PermissionScope.screen
+    assert scope_for_action("find_on_screen") == PermissionScope.screen
+    assert scope_for_action("computer", {"action": "screenshot"}) == PermissionScope.screen
+    assert scope_for_action("computer", {"action": "left_click"}) is None
+    assert scope_for_action("get_clipboard") == PermissionScope.clipboard
+    assert scope_for_action("set_clipboard") == PermissionScope.clipboard
+    assert scope_for_action("system_info") == PermissionScope.system
+    assert scope_for_action("list_processes") == PermissionScope.system
+
+
+def test_privacy_sensitive_scopes_are_not_auto_granted():
+    assert can_auto_grant_scope(PermissionScope.filesystem) is True
+    assert can_auto_grant_scope(PermissionScope.shell) is True
+    assert can_auto_grant_scope(PermissionScope.screen) is False
+    assert can_auto_grant_scope(PermissionScope.clipboard) is False
+    assert can_auto_grant_scope(PermissionScope.system) is False
+    assert can_auto_grant_scope(PermissionScope.mcp) is False
+
+
+def test_safety_and_permissions_classify_dynamic_mcp_execution():
+    s = SafetyManager()
+
+    decision = s.evaluate(
+        Action(
+            id="mcp",
+            type=ActionType.mcp_tool,
+            args={
+                "server_name": "notes",
+                "tool_name": "delete_note",
+                "tool_args": {"id": "abc"},
+            },
+        ),
+        safe_mode=False,
+    )
+    list_servers_decision = s.evaluate(
+        Action(id="mcp-list", type=ActionType.list_mcp_servers, args={}),
+        safe_mode=False,
+    )
+    list_tools_decision = s.evaluate(
+        Action(
+            id="mcp-tools",
+            type=ActionType.list_mcp_tools,
+            args={"server_name": "notes"},
+        ),
+        safe_mode=False,
+    )
+
+    assert decision.danger.value == "high"
+    assert decision.requires_approval is True
+    assert "notes.delete_note" in decision.reason
+    assert list_servers_decision.danger.value == "high"
+    assert list_servers_decision.requires_approval is True
+    assert "configured MCP server processes" in list_servers_decision.reason
+    assert list_tools_decision.danger.value == "high"
+    assert list_tools_decision.requires_approval is True
+    assert "for notes" in list_tools_decision.reason
+    assert scope_for_action("mcp_tool") == PermissionScope.mcp
+    assert scope_for_action("list_mcp_servers") == PermissionScope.mcp
+    assert scope_for_action("list_mcp_tools") == PermissionScope.mcp
+
+
+def test_run_and_watch_collects_process_output_once(workspace, monkeypatch):
+    t = ToolExecutor(workspace, text_editor=TextEditorTool(workspace))
+
+    class FakeProcess:
+        pid = 4242
+        returncode = 0
+
+        def __init__(self):
+            self.communicate_calls = 0
+            self.killed = False
+
+        def communicate(self, timeout=None):
+            self.communicate_calls += 1
+            if self.communicate_calls > 1:
+                raise AssertionError("communicate called more than once")
+            return "ready\n", ""
+
+        def kill(self):
+            self.killed = True
+
+    proc = FakeProcess()
+    monkeypatch.setattr("subprocess.Popen", lambda *args, **kwargs: proc)
+
+    result = t.run_and_watch("serve", watch_seconds=0.5)
+
+    assert result.ok
+    assert "ready" in result.output
+    assert result.data["exit_code"] == 0
+    assert result.data["killed"] is False
+    assert proc.killed is False
+    assert proc.communicate_calls == 1
+
+
 def test_file_glob_stays_inside_workspace(workspace):
     t = ToolExecutor(workspace, text_editor=TextEditorTool(workspace))
     (workspace / "src").mkdir()
@@ -141,6 +370,37 @@ def test_run_tests_rewrites_bare_pytest(workspace, monkeypatch):
 
     assert result.ok
     assert seen["command"] == "python -m pytest smoke_tests -q"
+
+
+def test_git_tool_runs_without_shell(workspace, monkeypatch):
+    t = ToolExecutor(workspace, text_editor=TextEditorTool(workspace))
+    seen = {}
+
+    def fake_run(command, **kwargs):
+        seen["command"] = command
+        seen["shell"] = kwargs.get("shell")
+        return types.SimpleNamespace(returncode=0, stdout=" M app.py\n", stderr="")
+
+    monkeypatch.setattr("subprocess.run", fake_run)
+    result = t.git("status", "--short")
+
+    assert result.ok
+    assert seen["command"] == ["git", "status", "--short"]
+    assert seen["shell"] is None
+    assert "app.py" in result.output
+
+
+def test_git_tool_rejects_shell_metacharacters(workspace, monkeypatch):
+    t = ToolExecutor(workspace, text_editor=TextEditorTool(workspace))
+
+    def fail_run(*args, **kwargs):
+        raise AssertionError("git command with shell metacharacters should not run")
+
+    monkeypatch.setattr("subprocess.run", fail_run)
+    result = t.git("status", "&& echo owned")
+
+    assert result.ok is False
+    assert "shell metacharacters" in result.output
 
 
 def test_hung_window_check_tolerates_missing_pywin32_helper(monkeypatch):

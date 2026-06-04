@@ -88,12 +88,12 @@ def parse_args():
 if __name__ == "__main__":
     args = parse_args()
 
-    # 1. Start the backend server in a background thread — unless one is already
+    # 1. Start the backend server in a background thread, unless one is already
     #    running (e.g. the capsule launched us to open a second native window).
     port = _start_backend(PORT)
 
     if not args.dashboard:
-        # ── Floating Sidekick capsule ──
+        # Floating Sidekick capsule
         # Rendered by the Qt/QtWebEngine shell: a frameless, translucent,
         # always-on-top window with real per-pixel transparency + Windows
         # Acrylic, so the glass capsule genuinely blurs the desktop behind
@@ -102,7 +102,7 @@ if __name__ == "__main__":
         print("[Desktop] AI Computer Sidekick (Qt shell) is launching...")
         sys.exit(qt_widget_main(port))
 
-    # ── Full dashboard (pywebview) ──
+    # Full dashboard (pywebview)
     try:
         import webview
     except ImportError:

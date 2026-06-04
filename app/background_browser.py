@@ -13,6 +13,7 @@ import io
 import logging
 from pathlib import Path
 from typing import Optional
+from .untrusted_content import wrap_untrusted_web_content
 
 log = logging.getLogger("background_browser")
 
@@ -171,7 +172,8 @@ class BackgroundBrowser:
 
     async def get_page_text(self) -> str:
         """Get visible text content of the page."""
-        return await self.page.inner_text("body")
+        text = await self.page.inner_text("body")
+        return wrap_untrusted_web_content(text, source=self.page.url, kind="browser_get_text")
 
     async def get_accessibility_tree(self) -> str:
         """Get a simplified accessibility tree of the page via JS."""
@@ -196,7 +198,7 @@ class BackgroundBrowser:
             tree = await self.page.evaluate(js)
             if not tree:
                 return "(no visible interactive elements found)"
-            return tree
+            return wrap_untrusted_web_content(tree, source=self.page.url, kind="browser_accessibility_tree")
         except Exception as e:
             return f"Error extracting tree: {e}"
 

@@ -7,10 +7,21 @@ class SafetyManager:
     def evaluate(self, action: Action, safe_mode: bool = True) -> ActionDecision:
         t = action.type.value
 
-        high_risk = {"run_command", "bash", "write_file", "move_file", "text_editor", "text_create", "text_str_replace", "text_insert"}
+        command_risk = {"run_command", "bash", "run_tests", "run_and_watch"}
+        high_risk = {
+            *command_risk,
+            "git",
+            "lint_code",
+            "write_file",
+            "move_file",
+            "text_editor",
+            "text_create",
+            "text_str_replace",
+            "text_insert",
+        }
 
         # Hard-blocked dangerous commands — always require approval regardless of mode
-        if t in {"run_command", "bash"}:
+        if t in command_risk:
             import re
             raw_cmd = action.args.get("command", "")
             cmd = re.sub(r"\s+", " ", raw_cmd).lower().strip()
@@ -36,6 +47,19 @@ class SafetyManager:
                 danger=DangerLevel.high,
                 reason="filesystem/shell mutation",
                 requires_approval=True,
+            )
+        if t == "analyze_folder":
+            folder_action = str(action.args.get("action", "scan")).strip().lower()
+            if folder_action not in {"", "scan"}:
+                return ActionDecision(
+                    danger=DangerLevel.high,
+                    reason=f"folder action may mutate local files: {folder_action}",
+                    requires_approval=True,
+                )
+            return ActionDecision(
+                danger=DangerLevel.low,
+                reason="read-only folder scan",
+                requires_approval=False,
             )
 
         low = {
@@ -71,6 +95,41 @@ class SafetyManager:
             if keys in dangerous:
                 return ActionDecision(danger=DangerLevel.high, reason=f"dangerous key combo: {keys}", requires_approval=True)
             return ActionDecision(danger=DangerLevel.medium, reason="keyboard shortcut", requires_approval=False)
+        if t == "force_close_window":
+            return ActionDecision(
+                danger=DangerLevel.high,
+                reason="terminates a desktop application",
+                requires_approval=True,
+            )
+        if t == "kill_process":
+            return ActionDecision(
+                danger=DangerLevel.high,
+                reason="terminates a process",
+                requires_approval=True,
+            )
+        if t == "electron_unlock":
+            return ActionDecision(
+                danger=DangerLevel.high,
+                reason="relaunches a desktop application with accessibility flags",
+                requires_approval=True,
+            )
+        if t == "mcp_tool":
+            server = str(action.args.get("server_name", "")).strip()
+            tool = str(action.args.get("tool_name", "")).strip()
+            label = f"{server}.{tool}" if server and tool else "external MCP tool"
+            return ActionDecision(
+                danger=DangerLevel.high,
+                reason=f"executes dynamic MCP tool: {label}",
+                requires_approval=True,
+            )
+        if t in {"list_mcp_servers", "list_mcp_tools"}:
+            server = str(action.args.get("server_name", "")).strip()
+            suffix = f" for {server}" if server else ""
+            return ActionDecision(
+                danger=DangerLevel.high,
+                reason=f"may start configured MCP server processes{suffix}",
+                requires_approval=True,
+            )
         if t == "api_call":
             method = action.args.get("method", "GET").upper()
             if method in ("POST", "PUT", "PATCH", "DELETE"):

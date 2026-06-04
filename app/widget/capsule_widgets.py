@@ -30,6 +30,7 @@ from __future__ import annotations
 import json
 import subprocess
 import threading
+from pathlib import Path
 
 from PySide6.QtCore import (
     Qt, QByteArray, QPropertyAnimation, QEasingCurve,
@@ -148,6 +149,26 @@ def _safe_external_url(value: str) -> str:
     if parsed.scheme in {"http", "https"} and parsed.netloc:
         return text
     return ""
+
+
+def _safe_local_folder_path(value: str) -> str:
+    text = str(value or "").strip()
+    if not text or any(ord(ch) < 32 for ch in text):
+        return ""
+    try:
+        from urllib.parse import urlparse
+        parsed = urlparse(text)
+    except Exception:
+        return ""
+    if parsed.scheme and len(parsed.scheme) > 1:
+        return ""
+    try:
+        path = Path(text).expanduser()
+        if not path.is_dir():
+            return ""
+        return str(path.resolve())
+    except Exception:
+        return ""
 
 
 # ── Design tokens ────────────────────────────────────────────────────────────
@@ -481,7 +502,7 @@ class DynamicWidget(CapsuleCard):
             self.animate_out(); return
         if action == "open_folder":
             payload_obj = payload if isinstance(payload, dict) else {"path": str(payload or "")}
-            path = payload_obj.get("path", payload_obj.get("folder_path", ""))
+            path = _safe_local_folder_path(payload_obj.get("path", payload_obj.get("folder_path", "")))
             if path:
                 subprocess.Popen(["explorer", path])
             return

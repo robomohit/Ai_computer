@@ -8,6 +8,7 @@ import base64
 import io
 import shutil
 import re
+import urllib.request
 from pathlib import Path
 from typing import Any, Awaitable, Callable, Dict, Optional
 import mss
@@ -22,6 +23,7 @@ from typing import TYPE_CHECKING
 if TYPE_CHECKING:
     from .memory import MemoryStore
 from .providers import get_scale_factor
+from .untrusted_content import wrap_untrusted_web_content
 
 try:
     import win32gui, win32api, win32con, win32process  # type: ignore
@@ -240,12 +242,14 @@ def _validate_public_http_url(url: str) -> str:
     Returns the URL if it is acceptable, otherwise raises ToolError.
     """
     import ipaddress
+    import socket
     from urllib.parse import urlsplit
 
     if not isinstance(url, str) or not url.strip():
         raise ToolError("URL is required.")
 
-    parts = urlsplit(url.strip())
+    normalized_url = url.strip()
+    parts = urlsplit(normalized_url)
     scheme = (parts.scheme or "").lower()
     if scheme not in {"http", "https"}:
         raise ToolError(f"Only http(s) URLs are allowed (got scheme '{scheme or 'none'}').")
@@ -264,17 +268,83 @@ def _validate_public_http_url(url: str) -> str:
         ip = ipaddress.ip_address(host)
     except ValueError:
         ip = None
-    if ip is not None and (
-        ip.is_loopback
-        or ip.is_private
-        or ip.is_link_local
-        or ip.is_multicast
-        or ip.is_unspecified
-        or ip.is_reserved
-    ):
+    def _is_internal_ip(candidate) -> bool:
+        return bool(
+            candidate.is_loopback
+            or candidate.is_private
+            or candidate.is_link_local
+            or candidate.is_multicast
+            or candidate.is_unspecified
+            or candidate.is_reserved
+        )
+
+    if ip is not None and _is_internal_ip(ip):
         raise ToolError(f"Refusing to fetch private/internal IP: {host}")
 
-    return url
+    if ip is None:
+        try:
+            infos = socket.getaddrinfo(host, parts.port or None, type=socket.SOCK_STREAM)
+        except socket.gaierror:
+            infos = []
+        seen_ips = set()
+        for info in infos:
+            try:
+                resolved = ipaddress.ip_address(info[4][0])
+            except Exception:
+                continue
+            if resolved in seen_ips:
+                continue
+            seen_ips.add(resolved)
+            if _is_internal_ip(resolved):
+                raise ToolError(
+                    f"Refusing to fetch host resolving to private/internal IP: {host} -> {resolved}"
+                )
+
+    return normalized_url
+
+
+class _NoRedirectHandler(urllib.request.HTTPRedirectHandler):
+    def http_error_300(self, req, fp, code, msg, headers):
+        from urllib.error import HTTPError
+
+        raise HTTPError(req.full_url, code, msg, headers, fp)
+
+    http_error_301 = http_error_300
+    http_error_302 = http_error_300
+    http_error_303 = http_error_300
+    http_error_307 = http_error_300
+    http_error_308 = http_error_300
+
+
+def _read_public_http_url(
+    url: str,
+    *,
+    max_bytes: int,
+    timeout: float = 10.0,
+    headers: Optional[Dict[str, str]] = None,
+) -> tuple[bytes, str]:
+    """Fetch a public http(s) URL, validating every redirect before following it."""
+    import urllib.error
+    import urllib.parse
+    import urllib.request
+
+    current = _validate_public_http_url(url)
+    opener = urllib.request.build_opener(_NoRedirectHandler())
+    request_headers = headers or {"User-Agent": "Mozilla/5.0 (AI Computer Agent)"}
+    for _ in range(6):
+        req = urllib.request.Request(current, headers=request_headers)
+        try:
+            with opener.open(req, timeout=timeout) as response:
+                final_url = _validate_public_http_url(response.geturl() or current)
+                return response.read(max_bytes), final_url
+        except urllib.error.HTTPError as exc:
+            if exc.code not in {301, 302, 303, 307, 308}:
+                raise
+            location = exc.headers.get("Location") if exc.headers else None
+            if not location:
+                raise ToolError(f"Redirect from {current} did not include a Location header.")
+            current = _validate_public_http_url(urllib.parse.urljoin(current, location))
+    raise ToolError("Too many redirects while fetching URL.")
 
 
 class ToolExecutor:
@@ -1481,25 +1551,6 @@ class ToolExecutor:
                 proc.kill()
             except Exception:
                 pass
-
-        still_running = False
-        exit_code = None
-        try:
-            stdout, stderr = proc.communicate(timeout=watch_seconds)
-            exit_code = proc.returncode
-        except subprocess.TimeoutExpired:
-            proc.kill()
-            try:
-                stdout, stderr = proc.communicate(timeout=2.0)
-            except subprocess.TimeoutExpired:
-                stdout, stderr = "", ""
-            still_running = True
-            exit_code = -1
-        except Exception as e:
-            try:
-                proc.kill()
-            except Exception:
-                pass
             return ToolResult(ok=False, output=f"run_and_watch error: {e}")
 
         stdout = (stdout or "")[-8000:]
@@ -1817,11 +1868,8 @@ class ToolExecutor:
         except ToolError as exc:
             return ToolResult(ok=False, output=str(exc))
         try:
-            import urllib.request
             import urllib.parse
-            req = urllib.request.Request(safe_url, headers={'User-Agent': 'Mozilla/5.0 (AI Computer Agent)'})
-            with urllib.request.urlopen(req, timeout=10) as response:
-                raw = response.read(2_000_000)
+            raw, final_url = _read_public_http_url(safe_url, max_bytes=2_000_000)
             try:
                 html = raw.decode('utf-8')
             except UnicodeDecodeError:
@@ -1838,10 +1886,14 @@ class ToolExecutor:
                 href = m.group(1).strip()
                 text = tag_re.sub('', m.group(2))
                 text = ' '.join(text.split())[:200]
-                if not href or href.startswith('#') or href.startswith('javascript:'):
+                if not href or href.startswith('#'):
                     continue
                 # Resolve relative URLs against the source.
-                full = urllib.parse.urljoin(safe_url, href)
+                full = urllib.parse.urljoin(final_url, href)
+                try:
+                    full = _validate_public_http_url(full)
+                except ToolError:
+                    continue
                 key = (text, full)
                 if key in seen:
                     continue
@@ -1863,11 +1915,8 @@ class ToolExecutor:
         except ToolError as exc:
             return ToolResult(ok=False, output=str(exc))
         try:
-            import urllib.request
-            req = urllib.request.Request(safe_url, headers={'User-Agent': 'Mozilla/5.0 (AI Computer Agent)'})
-            with urllib.request.urlopen(req, timeout=10) as response:
-                # Cap body to ~1 MB to avoid blowing memory on adversarial servers
-                raw = response.read(1_000_000)
+            # Cap body to ~1 MB to avoid blowing memory on adversarial servers
+            raw, final_url = _read_public_http_url(safe_url, max_bytes=1_000_000)
             try:
                 html = raw.decode('utf-8')
             except UnicodeDecodeError:
@@ -1877,7 +1926,10 @@ class ToolExecutor:
             text = re.sub(r'<style[^>]*>.*?</style>', '', text, flags=re.DOTALL|re.IGNORECASE)
             text = re.sub(r'<[^>]+>', ' ', text)
             text = ' '.join(text.split())
-            return ToolResult(ok=True, output=text[:20000])
+            return ToolResult(
+                ok=True,
+                output=wrap_untrusted_web_content(text[:20000], source=final_url, kind="web_fetch"),
+            )
         except Exception as e:
             return ToolResult(ok=False, output=str(e))
 
@@ -1890,11 +1942,11 @@ class ToolExecutor:
 
             encoded = urllib.parse.quote_plus(query)
             url = f"https://html.duckduckgo.com/html/?q={encoded}"
-            req = urllib.request.Request(url, headers={"User-Agent": "Mozilla/5.0 (AI Computer Agent)"})
-            with urllib.request.urlopen(req, timeout=10) as response:
-                page = response.read().decode("utf-8", errors="replace")
+            raw, _final_url = _read_public_http_url(url, max_bytes=1_000_000)
+            page = raw.decode("utf-8", errors="replace")
 
             results = []
+            ddg_base = "https://duckduckgo.com/"
             pattern = re.compile(
                 r'<a[^>]*class="result__a"[^>]*href="(?P<href>[^"]+)"[^>]*>(?P<title>.*?)</a>.*?'
                 r'<a[^>]*class="result__snippet"[^>]*>(?P<snippet>.*?)</a>',
@@ -1904,6 +1956,17 @@ class ToolExecutor:
                 href = html.unescape(re.sub(r"<.*?>", "", match.group("href"))).strip()
                 title = html.unescape(re.sub(r"<.*?>", "", match.group("title"))).strip()
                 snippet = html.unescape(re.sub(r"<.*?>", "", match.group("snippet"))).strip()
+                full_href = urllib.parse.urljoin(ddg_base, href)
+                parsed_href = urllib.parse.urlsplit(full_href)
+                if parsed_href.netloc.lower().endswith("duckduckgo.com") and parsed_href.path.startswith("/l/"):
+                    redirect_params = urllib.parse.parse_qs(parsed_href.query)
+                    uddg = redirect_params.get("uddg", [""])[0]
+                    if uddg:
+                        full_href = urllib.parse.unquote(uddg)
+                try:
+                    href = _validate_public_http_url(full_href)
+                except ToolError:
+                    continue
                 if href and title:
                     results.append(f"{title}\n{href}\n{snippet}")
                 if len(results) >= max_results:
@@ -1911,7 +1974,10 @@ class ToolExecutor:
 
             if not results:
                 return ToolResult(ok=False, output=f"No search results found for: {query}")
-            return ToolResult(ok=True, output="\n\n".join(results))
+            return ToolResult(
+                ok=True,
+                output=wrap_untrusted_web_content("\n\n".join(results), source=url, kind="web_search"),
+            )
         except Exception as e:
             return ToolResult(ok=False, output=str(e))
 
@@ -1984,16 +2050,26 @@ class ToolExecutor:
 
     def git(self, command: str, args: str = ""):
         """Run a git command safely inside the workspace."""
+        import re
+        import shlex
         import subprocess
         BLOCKED = {"push", "reset --hard", "clean -f", "rm -rf"}
-        cmd_lower = (command + " " + args).strip().lower()
+        command_text = (command + " " + args).strip()
+        if not command_text:
+            return ToolResult(ok=False, output="git error: command is required")
+        if re.search(r"[&|;<>`\r\n]", command_text):
+            return ToolResult(ok=False, output="Blocked: shell metacharacters are not allowed in git commands.")
+        cmd_lower = command_text.lower()
         for b in BLOCKED:
             if b in cmd_lower:
                 return ToolResult(ok=False, output=f"Blocked: '{b}' requires explicit user approval.")
-        full_cmd = f"git {command} {args}".strip()
+        try:
+            argv = ["git", *shlex.split(command_text, posix=True)]
+        except ValueError as e:
+            return ToolResult(ok=False, output=f"git parse error: {e}")
         try:
             r = subprocess.run(
-                full_cmd, shell=True, capture_output=True, text=True,
+                argv, capture_output=True, text=True,
                 timeout=30, cwd=str(self.workspace)
             )
             out = (r.stdout + r.stderr).strip()
@@ -2190,7 +2266,11 @@ class ToolExecutor:
         """Structured top-level app bounds for the capsule overlay."""
         try:
             from .widget.desktop_features import app_window_rect
-            r = app_window_rect(app or "")
+            r = (
+                app_window_rect(app)
+                if app
+                else app_window_rect("", fallback_foreground=True)
+            )
             return _rect_payload(r)
         except Exception:
             pass
@@ -2724,7 +2804,14 @@ class ToolExecutor:
             return ToolResult(ok=False, output=str(exc))
         try:
             import httpx
-            resp = httpx.request(method, safe_url, headers=headers or {}, json=body, timeout=15.0)
+            resp = httpx.request(
+                method,
+                safe_url,
+                headers=headers or {},
+                json=body,
+                timeout=15.0,
+                follow_redirects=False,
+            )
             return ToolResult(ok=resp.is_success, output=resp.text[:20000])
         except Exception as e:
             return ToolResult(ok=False, output=f"api_call failed: {e}")
@@ -2929,7 +3016,6 @@ class ToolExecutor:
                 a.args.get("action", "type"),
                 **{k: v for k, v in a.args.items() if k != "action"},
             ),
-            # request_permission is normally intercepted by the agent, but stub
             # request_permission is normally intercepted by the agent, but stub
             # it here so ActionType enum coverage is complete.
             ActionType.request_permission: lambda a: ToolResult(ok=True, output=f"Permission request for '{a.args.get('scope','')}' noted."),

@@ -658,15 +658,66 @@ def test_permission_endpoint_records_scope_grants(monkeypatch):
     listed = client.get("/api/permissions/perm-task", headers={"Authorization": "Bearer testtoken"})
     assert listed.status_code == 200
     assert listed.json()["granted"] == ["shell"]
+    assert listed.json()["denied"] == []
 
     deny = client.post(
         "/api/permissions",
         headers={"Authorization": "Bearer testtoken"},
-        json={"task_id": "perm-task", "action_id": "a2", "grant": False, "scope": "shell"},
+        json={"task_id": "perm-task", "action_id": "a2", "grant": False, "scope": "screen"},
     )
     assert deny.status_code == 200
     listed = client.get("/api/permissions/perm-task", headers={"Authorization": "Bearer testtoken"})
-    assert listed.json()["granted"] == []
+    assert listed.json()["granted"] == ["shell"]
+    assert listed.json()["denied"] == ["screen"]
+    _m.service.permissions.clear("perm-task")
+
+
+def test_trust_report_summarizes_runtime_trust_state(monkeypatch):
+    from app.models import AgentContext, TaskRecord
+
+    running = TaskRecord(
+        id="trust-running",
+        status="running",
+        context=AgentContext(goal="use the desktop"),
+        goal="use the desktop",
+        mode="computer",
+        model="tier:uia",
+    )
+    monkeypatch.setattr(_m, "_tasks", {"trust-running": running})
+    class PendingWait:
+        def done(self):
+            return False
+
+    _m.service._approvals["trust-running:approve-1"] = PendingWait()
+    _m.service._permission_waits["trust-running:perm-1"] = PendingWait()
+    _m.service.permissions.grant("trust-running", "filesystem")
+    _m.service.permissions.deny("trust-running", "screen")
+    client = _client(monkeypatch)
+
+    unauth = client.get("/api/trust/report")
+    resp = client.get("/api/trust/report", headers={"Authorization": "Bearer testtoken"})
+
+    assert unauth.status_code == 401
+    assert resp.status_code == 200
+    body = resp.json()
+    try:
+        assert body["overall"] == "attention"
+        assert body["pending_trust"]["count"] == 2
+        assert body["pending_trust"]["approvals"] == [{"task_id": "trust-running", "action_id": "approve-1"}]
+        assert body["pending_trust"]["permissions"] == [{"task_id": "trust-running", "action_id": "perm-1"}]
+        assert body["active_tasks"][0]["id"] == "trust-running"
+        assert body["consent_ledger"] == [{
+            "task_id": "trust-running",
+            "granted": ["filesystem"],
+            "denied": ["screen"],
+        }]
+        assert body["kill_switch"]["available"] is True
+        assert body["audit"]["permission_ledger"] is True
+        assert any(item["key"] == "logs" for item in body["readiness"]["trust_checks"])
+    finally:
+        _m.service._approvals.pop("trust-running:approve-1", None)
+        _m.service._permission_waits.pop("trust-running:perm-1", None)
+        _m.service.permissions.clear("trust-running")
 
 
 @pytest.mark.asyncio

@@ -2,6 +2,8 @@
 vision). Plus uia_type post-action verification. These exercise the fallback
 wiring with the OCR + UIA layers mocked, so they run without a real desktop."""
 from pathlib import Path
+import sys
+import types
 
 import app.tools as tools_mod
 from app.tools import ToolExecutor
@@ -129,6 +131,57 @@ def test_ocr_phrase_match_requires_word_boundary(monkeypatch):
     screen2 = [{"text": "Review", "x": 50, "y": 40}, {"text": "codebase", "x": 120, "y": 40}]
     monkeypatch.setattr(df, "win_ocr_words", lambda l, t, w, h: screen2)
     assert df.ocr_find_in_app("review codebase", "Notepad")["score"] >= 100
+
+
+def test_app_window_rect_uses_ranked_uia_root_not_first_title_match(monkeypatch):
+    import app.widget.desktop_features as df
+
+    class Rect:
+        def __init__(self, left, top, right, bottom):
+            self.left = left
+            self.top = top
+            self.right = right
+            self.bottom = bottom
+
+    class Ctrl:
+        def __init__(self, name, rect, *, control_type="WindowControl", children=None, hwnd=0):
+            self.Name = name
+            self.BoundingRectangle = rect
+            self.ControlTypeName = control_type
+            self.NativeWindowHandle = hwnd
+            self._children = children or []
+
+        def GetChildren(self):
+            return list(self._children)
+
+    real = Ctrl(
+        "Settings",
+        Rect(100, 120, 900, 760),
+        children=[Ctrl("System", Rect(120, 150, 220, 190))],
+        hwnd=10,
+    )
+    noise = Ctrl(
+        "Activate Windows - Go to Settings",
+        Rect(1, 1, 20, 20),
+        control_type="PaneControl",
+        children=[],
+        hwnd=99,
+    )
+    root = Ctrl("Desktop", Rect(0, 0, 1920, 1080), children=[noise, real])
+    fake_uia = types.SimpleNamespace(
+        GetRootControl=lambda: root,
+        GetForegroundControl=lambda: real,
+    )
+
+    monkeypatch.setitem(sys.modules, "uiautomation", fake_uia)
+    monkeypatch.setattr(df, "_uia_configured", True)
+
+    assert df.app_window_rect("Settings") == {
+        "left": 100,
+        "top": 120,
+        "width": 800,
+        "height": 640,
+    }
 
 
 def test_reuse_existing_window_for_single_instance_app(monkeypatch, tmp_path):

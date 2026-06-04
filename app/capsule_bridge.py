@@ -11,9 +11,10 @@ import base64
 import io
 import json
 import logging
-import os
 from pathlib import Path
 from typing import Any
+
+from .local_auth import local_auth_headers
 
 _log = logging.getLogger(__name__)
 
@@ -73,7 +74,7 @@ def build_list_widget(
     
     This constructs the JSON that DynamicWidget can render.
     """
-    total_bytes = sum(item.get("size_bytes", 0) for item in items)
+    total_bytes = sum(item.get("size_bytes", item.get("bytes", 0)) for item in items)
     total_str = _format_bytes(total_bytes)
     
     formatted_items = [
@@ -151,6 +152,7 @@ def push_widget(spec: dict, api_base: str = "http://127.0.0.1:8000") -> bool:
         r = httpx.post(
             f"{api_base}/api/capsule/widget",
             json=spec,
+            headers=local_auth_headers(),
             timeout=5,
         )
         return r.status_code < 400

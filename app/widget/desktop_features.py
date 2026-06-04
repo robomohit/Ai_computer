@@ -82,6 +82,45 @@ def list_visible_windows() -> list[dict]:
     return results
 
 
+def foreground_window_info() -> dict:
+    """Return title/exe/rect for the current foreground top-level window."""
+    try:
+        import uiautomation as uia
+    except ImportError:
+        return {}
+    _ensure_uia_config(uia)
+    try:
+        ctrl = uia.GetForegroundControl()
+        if ctrl is None:
+            return {}
+        hwnd = int(getattr(ctrl, "NativeWindowHandle", 0) or 0)
+        title = (getattr(ctrl, "Name", "") or "").strip()
+        exe = ""
+        if hwnd:
+            try:
+                user32 = ctypes.windll.user32
+                kernel32 = ctypes.windll.kernel32
+                pid = wintypes.DWORD(0)
+                user32.GetWindowThreadProcessId(wintypes.HWND(hwnd), ctypes.byref(pid))
+                h = kernel32.OpenProcess(0x1000, False, pid.value)
+                if h:
+                    ebuf = ctypes.create_unicode_buffer(1024)
+                    size = wintypes.DWORD(1024)
+                    kernel32.QueryFullProcessImageNameW(h, 0, ebuf, ctypes.byref(size))
+                    exe = ebuf.value
+                    kernel32.CloseHandle(h)
+            except Exception:
+                exe = ""
+        return {
+            "hwnd": hwnd,
+            "title": title,
+            "exe": exe,
+            "rect": _onscreen_rect(ctrl),
+        }
+    except Exception:
+        return {}
+
+
 def primary_workarea() -> tuple[int, int, int, int]:
     """Returns (x, y, width, height) of the primary monitor work-area
     (excludes taskbar)."""
@@ -602,7 +641,13 @@ def _is_chrome_control(name: str) -> bool:
     return False
 
 
-def survey_app_controls(app_hint: str, cap: int = 90, max_names: int = 28) -> Dict[str, Any]:
+def survey_app_controls(
+    app_hint: str,
+    cap: int = 90,
+    max_names: int = 28,
+    *,
+    fallback_foreground: bool = False,
+) -> Dict[str, Any]:
     """ONE UIA tree walk that returns both the control COUNT and the NAMES of the
     interactive controls (buttons, tabs, list items, menu items, links, fields)
     the agent can click/type by name. Handing the model this 'menu' up front stops
@@ -615,7 +660,7 @@ def survey_app_controls(app_hint: str, cap: int = 90, max_names: int = 28) -> Di
         return out
     _ensure_uia_config(uia)
     try:
-        root = _uia_root(app_hint, fallback_foreground=False) if app_hint else None
+        root = _uia_root(app_hint, fallback_foreground=fallback_foreground) if (app_hint or fallback_foreground) else None
         if root is None:
             return out
         n = [0]
@@ -836,26 +881,18 @@ def _find_uia_control(query: str, app_hint: str = ""):
         return None, {"ok": False, "error": str(exc)}
 
 
-def app_window_rect(app_hint: str) -> dict:
+def app_window_rect(app_hint: str, *, fallback_foreground: bool = False) -> dict:
     """On-screen bounds of the top-level window matching app_hint (its title
     substring). Used to draw a glowing edge around the whole app the agent is
-    working in. Falls back to the foreground window. Zeros if unavailable."""
+    working in. Uses the same ranked top-level-window resolver as UIA find/click
+    so overlays and OCR crops follow the real target window. Zeros if unavailable."""
     try:
         import uiautomation as uia  # noqa: F401
     except ImportError:
         return {"left": 0, "top": 0, "width": 0, "height": 0}
     _ensure_uia_config(uia)
     try:
-        top = None
-        hint = (app_hint or "").lower()
-        if hint:
-            for w in uia.GetRootControl().GetChildren():
-                try:
-                    if hint in (w.Name or "").lower():
-                        top = w
-                        break
-                except Exception:
-                    continue
+        top = _uia_root(app_hint, fallback_foreground=fallback_foreground) if (app_hint or fallback_foreground) else None
         if top is None:
             return {"left": 0, "top": 0, "width": 0, "height": 0}
         return _onscreen_rect(top)

@@ -6,9 +6,13 @@ from typing import Dict, Set
 
 class PermissionScope(str, Enum):
     browser = "browser"
+    clipboard = "clipboard"
     google_sheets = "google_sheets"
     filesystem = "filesystem"
     shell = "shell"
+    mcp = "mcp"
+    screen = "screen"
+    system = "system"
 
 
 _BROWSER_ACTIONS = {
@@ -25,6 +29,13 @@ _BROWSER_ACTIONS = {
 }
 
 _FS_ACTIONS = {
+    "analyze_folder",
+    "diff_files",
+    "file_glob",
+    "file_grep",
+    "list_directory",
+    "read_file",
+    "text_view",
     "write_file",
     "move_file",
     "text_editor",
@@ -34,7 +45,39 @@ _FS_ACTIONS = {
     "text_undo_edit",
 }
 
-_SHELL_ACTIONS = {"run_command", "bash"}
+_SHELL_ACTIONS = {"run_command", "bash", "run_tests", "run_and_watch", "git", "lint_code"}
+
+_MCP_ACTIONS = {"list_mcp_servers", "list_mcp_tools", "mcp_tool"}
+
+_CLIPBOARD_ACTIONS = {"get_clipboard", "set_clipboard"}
+
+_SCREEN_ACTIONS = {
+    "find_on_screen",
+    "ocr_image",
+    "pixel_color_at",
+    "screen_context",
+    "screenshot",
+    "ui_critique",
+}
+
+_SYSTEM_ACTIONS = {"list_processes", "system_info"}
+
+_COMPUTER_SCREEN_SUBACTIONS = {"screenshot"}
+
+_EXPLICIT_GRANT_SCOPES = {
+    PermissionScope.clipboard,
+    PermissionScope.mcp,
+    PermissionScope.screen,
+    PermissionScope.system,
+}
+
+
+def can_auto_grant_scope(scope: PermissionScope | str) -> bool:
+    try:
+        normalized = PermissionScope(scope)
+    except ValueError:
+        return False
+    return normalized not in _EXPLICIT_GRANT_SCOPES
 
 
 def scope_for_action(action_type: str, args: dict | None = None) -> PermissionScope | None:
@@ -53,6 +96,18 @@ def scope_for_action(action_type: str, args: dict | None = None) -> PermissionSc
         return PermissionScope.filesystem
     if action_type in _SHELL_ACTIONS:
         return PermissionScope.shell
+    if action_type in _MCP_ACTIONS:
+        return PermissionScope.mcp
+    if action_type in _CLIPBOARD_ACTIONS:
+        return PermissionScope.clipboard
+    if action_type in _SCREEN_ACTIONS:
+        return PermissionScope.screen
+    if action_type == "computer":
+        subaction = str(args.get("action") or "").strip().lower()
+        if subaction in _COMPUTER_SCREEN_SUBACTIONS:
+            return PermissionScope.screen
+    if action_type in _SYSTEM_ACTIONS:
+        return PermissionScope.system
     return None
 
 
@@ -86,6 +141,12 @@ class PermissionStore:
 
     def granted_scopes(self, task_id: str) -> list[str]:
         return sorted(self._granted.get(task_id, set()))
+
+    def denied_scopes(self, task_id: str) -> list[str]:
+        return sorted(self._denied.get(task_id, set()))
+
+    def task_ids(self) -> list[str]:
+        return sorted(set(self._granted) | set(self._denied))
 
     def clear(self, task_id: str) -> None:
         self._granted.pop(task_id, None)

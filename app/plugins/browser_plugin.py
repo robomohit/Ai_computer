@@ -3,6 +3,7 @@ import base64
 import json
 import os
 from typing import Optional
+from ..untrusted_content import wrap_untrusted_web_content
 
 _pw = None
 _browser = None
@@ -87,7 +88,7 @@ async def browser_get_text() -> str:
     text = (text or "").strip()
     if len(text) > 4000:
         text = text[:4000] + "\n...(truncated)"
-    return f"URL: {url}\n\n{text}"
+    return wrap_untrusted_web_content(f"URL: {url}\n\n{text}", source=url, kind="browser_get_text")
 
 
 def _flatten_ax_tree(node: dict, depth: int = 0, lines: list | None = None, max_lines: int = 120) -> list:
@@ -128,7 +129,8 @@ async def browser_accessibility_tree() -> str:
         raw = await _page.aria_snapshot()
         if raw:
             lines = raw.splitlines()[:120]
-            return f"URL: {url}\nTitle: {title}\n\n" + "\n".join(lines)
+            content = f"URL: {url}\nTitle: {title}\n\n" + "\n".join(lines)
+            return wrap_untrusted_web_content(content, source=url, kind="browser_accessibility_tree")
     except Exception:
         pass
 
@@ -140,7 +142,8 @@ async def browser_accessibility_tree() -> str:
 
     if snap:
         lines = _flatten_ax_tree(snap)
-        return f"URL: {url}\nTitle: {title}\n\n" + "\n".join(lines)
+        content = f"URL: {url}\nTitle: {title}\n\n" + "\n".join(lines)
+        return wrap_untrusted_web_content(content, source=url, kind="browser_accessibility_tree")
 
     # Last resort: body text
     try:
@@ -148,7 +151,8 @@ async def browser_accessibility_tree() -> str:
         text = (text or "").strip()[:3000]
     except Exception as e:
         text = f"(Could not read page: {e})"
-    return f"URL: {url}\nTitle: {title}\n\n{text}"
+    content = f"URL: {url}\nTitle: {title}\n\n{text}"
+    return wrap_untrusted_web_content(content, source=url, kind="browser_accessibility_tree")
 
 
 async def browser_navigate_back() -> str:

@@ -42,6 +42,7 @@ def scan_folder(folder_path: str | None = None) -> dict:
         folder_path = str(Path.home() / "Downloads")
 
     files: list[dict] = []
+    errors: list[dict] = []
     total_bytes = 0
 
     try:
@@ -59,8 +60,8 @@ def scan_folder(folder_path: str | None = None) -> dict:
                     total_bytes += st.st_size
                 except OSError:
                     pass
-    except PermissionError:
-        pass
+    except OSError as e:
+        errors.append({"path": folder_path, "error": str(e)})
 
     files.sort(key=lambda f: f["bytes"], reverse=True)
 
@@ -70,6 +71,7 @@ def scan_folder(folder_path: str | None = None) -> dict:
         "files": files,
         "total_size": _human_size(total_bytes),
         "total_bytes": total_bytes,
+        "errors": errors,
     }
 
 
@@ -206,23 +208,32 @@ def restore_trashed(items: list[dict | str]) -> dict:
     manifest = _load_trash_manifest()
     by_trash = {str(item.get("trash_path")): item for item in manifest
                 if isinstance(item, dict) and item.get("trash_path")}
+    trash_root = _trash_root().resolve()
     restored: list[dict] = []
     errors: list[dict] = []
 
     for item in items:
         if isinstance(item, str):
             trash_path = item
-            original = by_trash.get(trash_path, {}).get("original")
         else:
             trash_path = str(item.get("trash_path", ""))
-            original = item.get("original") or by_trash.get(trash_path, {}).get("original")
 
-        if not trash_path or not original:
-            errors.append({"item": item, "error": "Missing trash_path or original"})
+        manifest_entry = by_trash.get(trash_path)
+        original = manifest_entry.get("original") if manifest_entry else None
+
+        if not trash_path:
+            errors.append({"item": item, "error": "Missing trash_path"})
+            continue
+        if not manifest_entry or not original:
+            errors.append({"trash_path": trash_path, "error": "Trash item is not in AI Computer trash manifest"})
             continue
 
         try:
             src = Path(trash_path)
+            src_resolved = src.resolve()
+            if src_resolved == trash_root or trash_root not in src_resolved.parents:
+                errors.append({"trash_path": trash_path, "error": "Trash item is outside AI Computer trash"})
+                continue
             if not src.exists():
                 errors.append({"trash_path": trash_path, "error": "Trash item does not exist"})
                 continue

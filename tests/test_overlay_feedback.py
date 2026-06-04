@@ -88,6 +88,26 @@ def test_uia_wait_returns_ready_overlay(monkeypatch, tmp_path):
     assert overlay["rect"] == {"left": 100, "top": 200, "width": 50, "height": 24}
 
 
+def test_blank_app_rect_payload_uses_foreground_window(monkeypatch):
+    import app.widget.desktop_features as desktop_features
+
+    calls = []
+
+    def fake_app_window_rect(app, **kwargs):
+        calls.append((app, kwargs))
+        return {"left": 40, "top": 50, "width": 700, "height": 500}
+
+    monkeypatch.setattr(desktop_features, "app_window_rect", fake_app_window_rect)
+
+    assert ToolExecutor._app_rect_payload("") == {
+        "left": 40,
+        "top": 50,
+        "width": 700,
+        "height": 500,
+    }
+    assert calls == [("", {"fallback_foreground": True})]
+
+
 def test_uia_failure_explains_visual_fallback_context(monkeypatch, tmp_path):
     import app.widget.desktop_features as desktop_features
 

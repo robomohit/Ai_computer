@@ -8,6 +8,11 @@ import pytest
 import httpx
 
 from app.agent import AgentService
+from app.agent import (
+    _desktop_control_profile,
+    _desktop_control_profile_status,
+    _desktop_control_profile_text,
+)
 from app.agent import _overlay_for_action_start
 from app.log_emitter import LogEmitter
 from app.models import Action, ActionType, HierarchicalPlan, SubTask, ToolResult
@@ -168,6 +173,265 @@ async def test_desktop_control_profile_is_injected_before_first_model_turn(monke
     assert profile_events
     assert profile_events[-1]["primary_route"] == "Electron unlock"
     assert profile_events[-1]["electron_hint"]["exe"].endswith("Discord.exe")
+
+
+def test_full_desktop_control_profile_surveys_foreground_window(monkeypatch):
+    import app.widget.desktop_features as df
+
+    rect_calls = []
+    survey_calls = []
+
+    def fake_rect(app, **kwargs):
+        rect_calls.append((app, kwargs))
+        return {"left": 20, "top": 30, "width": 640, "height": 480}
+
+    def fake_survey(app, cap=90, **kwargs):
+        survey_calls.append((app, cap, kwargs))
+        return {"count": 4, "controls": ["File", "Edit", "Search"]}
+
+    monkeypatch.setattr(df, "app_window_rect", fake_rect)
+    monkeypatch.setattr(df, "survey_app_controls", fake_survey)
+    monkeypatch.setattr(df, "foreground_window_info", lambda: {
+        "title": "Untitled - Notepad",
+        "exe": r"C:\Windows\System32\notepad.exe",
+        "hwnd": 77,
+    })
+    monkeypatch.setattr(df, "ocr_available", lambda: True)
+    monkeypatch.setattr(df, "electron_hint_for_app", lambda app: None)
+
+    profile = _desktop_control_profile("", isolated=False, model_sees=False)
+
+    assert rect_calls == [("", {"fallback_foreground": True})]
+    assert survey_calls == [("", 90, {"fallback_foreground": True})]
+    assert profile["window_found"] is True
+    assert profile["app_rect"] == {"left": 20, "top": 30, "width": 640, "height": 480}
+    assert profile["uia_control_count"] == 4
+    assert profile["controls"] == ["File", "Edit", "Search"]
+    assert profile["primary_route"] == "UIA exact"
+    assert profile["foreground_window"]["title"] == "Untitled - Notepad"
+    assert "Target app: Untitled - Notepad" in _desktop_control_profile_text(profile)
+    assert "Foreground window: Untitled - Notepad" in _desktop_control_profile_text(profile)
+    assert "for Untitled - Notepad" in _desktop_control_profile_status(profile)
+
+
+@pytest.mark.asyncio
+async def test_force_close_window_requires_approval_even_when_computer_auto_approves(
+    monkeypatch, workspace
+):
+    import app.widget.desktop_features as df
+
+    service = AgentService(workspace, log_emitter=DummyLogEmitter())
+    events = []
+    finalizations = []
+
+    monkeypatch.setattr(df, "ocr_available", lambda: False)
+    monkeypatch.setattr(df, "electron_hint_for_app", lambda app: None)
+    monkeypatch.setattr(df, "foreground_window_info", lambda: {})
+    monkeypatch.setattr(
+        df,
+        "app_window_rect",
+        lambda app, *, fallback_foreground=False: {
+            "left": 0,
+            "top": 0,
+            "width": 300,
+            "height": 200,
+        },
+    )
+    monkeypatch.setattr(
+        df,
+        "survey_app_controls",
+        lambda app, cap=90, fallback_foreground=False: {"count": 0, "controls": []},
+    )
+    monkeypatch.setattr("app.agent.classify_task_complexity", lambda goal: "atomic")
+    monkeypatch.setattr("app.agent.is_vision_model", lambda model: True)
+    monkeypatch.setattr("app.agent._capture_screenshot_b64", lambda sw, sh: "vision-shot")
+    monkeypatch.setattr("app.agent._get_active_window_rect", lambda sw, sh: None)
+    monkeypatch.setattr(service.memory, "search", lambda goal, limit=5: [])
+    monkeypatch.setattr(service.memory, "recall_sessions", lambda goal, limit=5: [])
+
+    class FakeProvider:
+        model = "vision-test"
+        total_tokens = 0
+
+        async def stream_chat_with_tools(
+            self, system, messages, tools, screenshot_b64=None
+        ):
+            yield {
+                "type": "tool_call",
+                "id": "close-1",
+                "name": "force_close_window",
+                "args": {"title": "Notepad", "force": True},
+                "thought": "close it",
+            }
+
+    async def capture_emit(task_id, event, data):
+        events.append((event, data))
+        if event == "approval_required":
+            service.submit_approval(task_id, data["action_id"], False)
+
+    async def noop_reasoning(*args, **kwargs):
+        return None
+
+    async def fail_run_action(*args, **kwargs):
+        raise AssertionError("force_close_window executed before approval")
+
+    monkeypatch.setattr("app.agent.PlannerProvider", lambda model=None: FakeProvider())
+    monkeypatch.setattr(service, "_emit", capture_emit)
+    monkeypatch.setattr(service, "_emit_reasoning", noop_reasoning)
+    monkeypatch.setattr(
+        service, "_finalize", lambda *args, **kwargs: finalizations.append(args)
+    )
+    monkeypatch.setattr(service.tools, "run_action", fail_run_action)
+
+    await service.run_task(
+        "task-force-close-approval",
+        "Close Notepad",
+        mode="computer",
+        model="vision-test",
+    )
+
+    approval_events = [data for event, data in events if event == "approval_required"]
+    assert approval_events
+    assert approval_events[0]["action"]["type"] == "force_close_window"
+    assert approval_events[0]["danger"] == "high"
+    assert "terminates" in approval_events[0]["reason"]
+    assert finalizations
+    assert finalizations[-1][1] == "cancelled"
+    assert "Action rejected" in finalizations[-1][2]
+
+
+@pytest.mark.asyncio
+async def test_mcp_tool_requires_approval_even_when_coding_auto_approves(
+    monkeypatch, workspace
+):
+    service = AgentService(workspace, log_emitter=DummyLogEmitter())
+    events = []
+    finalizations = []
+
+    monkeypatch.setattr("app.agent.classify_task_complexity", lambda goal: "atomic")
+    monkeypatch.setattr(service.memory, "search", lambda goal, limit=5: [])
+    monkeypatch.setattr(service.memory, "recall_sessions", lambda goal, limit=5: [])
+
+    class FakeProvider:
+        model = "coding-test"
+        total_tokens = 0
+
+        async def stream_chat_with_tools(
+            self, system, messages, tools, screenshot_b64=None
+        ):
+            yield {
+                "type": "tool_call",
+                "id": "mcp-1",
+                "name": "mcp_tool",
+                "args": {
+                    "server_name": "notes",
+                    "tool_name": "delete_note",
+                    "tool_args": {"id": "abc"},
+                },
+                "thought": "use integration",
+            }
+
+    async def capture_emit(task_id, event, data):
+        events.append((event, data))
+        if event == "approval_required":
+            service.submit_approval(task_id, data["action_id"], False)
+
+    async def noop_reasoning(*args, **kwargs):
+        return None
+
+    async def fail_run_action(*args, **kwargs):
+        raise AssertionError("mcp_tool executed before approval")
+
+    monkeypatch.setattr("app.agent.PlannerProvider", lambda model=None: FakeProvider())
+    monkeypatch.setattr(service, "_emit", capture_emit)
+    monkeypatch.setattr(service, "_emit_reasoning", noop_reasoning)
+    monkeypatch.setattr(
+        service, "_finalize", lambda *args, **kwargs: finalizations.append(args)
+    )
+    monkeypatch.setattr(service.tools, "run_action", fail_run_action)
+
+    await service.run_task(
+        "task-mcp-approval",
+        "Delete the note via MCP",
+        mode="coding",
+        model="coding-test",
+    )
+
+    approval_events = [data for event, data in events if event == "approval_required"]
+    permission_events = [data for event, data in events if event == "permission_required"]
+    assert approval_events
+    assert approval_events[0]["action"]["type"] == "mcp_tool"
+    assert approval_events[0]["danger"] == "high"
+    assert "notes.delete_note" in approval_events[0]["reason"]
+    assert permission_events == []
+    assert finalizations
+    assert finalizations[-1][1] == "cancelled"
+    assert "Action rejected" in finalizations[-1][2]
+
+
+@pytest.mark.asyncio
+async def test_mcp_discovery_requires_approval_before_starting_servers(
+    monkeypatch, workspace
+):
+    service = AgentService(workspace, log_emitter=DummyLogEmitter())
+    events = []
+    finalizations = []
+
+    monkeypatch.setattr("app.agent.classify_task_complexity", lambda goal: "atomic")
+    monkeypatch.setattr(service.memory, "search", lambda goal, limit=5: [])
+    monkeypatch.setattr(service.memory, "recall_sessions", lambda goal, limit=5: [])
+
+    class FakeProvider:
+        model = "coding-test"
+        total_tokens = 0
+
+        async def stream_chat_with_tools(
+            self, system, messages, tools, screenshot_b64=None
+        ):
+            yield {
+                "type": "tool_call",
+                "id": "mcp-list-1",
+                "name": "list_mcp_tools",
+                "args": {"server_name": "notes"},
+                "thought": "inspect integration tools",
+            }
+
+    async def capture_emit(task_id, event, data):
+        events.append((event, data))
+        if event == "approval_required":
+            service.submit_approval(task_id, data["action_id"], False)
+
+    async def noop_reasoning(*args, **kwargs):
+        return None
+
+    async def fail_run_action(*args, **kwargs):
+        raise AssertionError("list_mcp_tools executed before approval")
+
+    monkeypatch.setattr("app.agent.PlannerProvider", lambda model=None: FakeProvider())
+    monkeypatch.setattr(service, "_emit", capture_emit)
+    monkeypatch.setattr(service, "_emit_reasoning", noop_reasoning)
+    monkeypatch.setattr(
+        service, "_finalize", lambda *args, **kwargs: finalizations.append(args)
+    )
+    monkeypatch.setattr(service.tools, "run_action", fail_run_action)
+
+    await service.run_task(
+        "task-mcp-discovery-approval",
+        "List the available MCP tools",
+        mode="coding",
+        model="coding-test",
+    )
+
+    approval_events = [data for event, data in events if event == "approval_required"]
+    permission_events = [data for event, data in events if event == "permission_required"]
+    assert approval_events
+    assert approval_events[0]["action"]["type"] == "list_mcp_tools"
+    assert approval_events[0]["danger"] == "high"
+    assert "configured MCP server processes" in approval_events[0]["reason"]
+    assert permission_events == []
+    assert finalizations
+    assert finalizations[-1][1] == "cancelled"
+    assert "Action rejected" in finalizations[-1][2]
 
 
 @pytest.mark.asyncio
@@ -332,6 +596,8 @@ async def test_screen_context_emits_screenshot_and_updates_vision_context(monkey
 
     async def capture_event(task_id, event_type, data):
         events.append((event_type, data))
+        if event_type == "permission_required":
+            service.submit_permission(task_id, data["action_id"], True)
 
     async def noop_emit(*args, **kwargs):
         return None
@@ -340,9 +606,20 @@ async def test_screen_context_emits_screenshot_and_updates_vision_context(monkey
     monkeypatch.setattr(service, "_emit_reasoning", noop_emit)
     monkeypatch.setattr(service, "_finalize", lambda *args, **kwargs: None)
 
-    await service.run_task("task-screen-context-vision", "Look at my screen and explain what is open", mode="computer", model="openrouter/openai/gpt-4o")
+    await asyncio.wait_for(
+        service.run_task(
+            "task-screen-context-vision",
+            "Look at my screen and explain what is open",
+            mode="computer",
+            model="openrouter/openai/gpt-4o",
+        ),
+        timeout=10,
+    )
 
     assert provider.screenshots_seen == ["initial-shot", "context-shot"]
+    permission_events = [data for event, data in events if event == "permission_required"]
+    assert permission_events
+    assert permission_events[0]["scope"] == "screen"
     screenshots = [data["data"] for event, data in events if event == "screenshot"]
     assert "initial-shot" in screenshots
     assert "context-shot" in screenshots

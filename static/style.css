@@ -720,6 +720,131 @@
   #readiness-score[data-status='warning'] { color: var(--warn); }
   #readiness-score[data-status='blocked'] { color: var(--danger); }
 
+  .trust-grid {
+    display: grid;
+    grid-template-columns: repeat(auto-fit, minmax(148px, 1fr));
+    gap: 8px;
+  }
+  .trust-card {
+    min-height: 78px;
+    display: grid;
+    align-content: space-between;
+    gap: 7px;
+    padding: 10px;
+    border-radius: 8px;
+    border: 1px solid var(--line-2);
+    background: var(--bg-2);
+    box-shadow: var(--shadow-inset);
+  }
+  .trust-card-label {
+    font-size: var(--fs-micro);
+    font-weight: 700;
+    letter-spacing: var(--track-cap);
+    text-transform: uppercase;
+    color: var(--muted-2);
+  }
+  .trust-card-value {
+    font-family: var(--font-mono);
+    font-size: 18px;
+    font-weight: 650;
+    color: var(--ink);
+    letter-spacing: 0;
+    line-height: 1.1;
+  }
+  .trust-card-detail {
+    font-size: var(--fs-label);
+    color: var(--muted);
+    line-height: 1.35;
+    overflow-wrap: anywhere;
+  }
+  .trust-card.ready .trust-card-value { color: var(--ok); }
+  .trust-card.attention .trust-card-value,
+  .trust-card.warning .trust-card-value { color: var(--warn); }
+  .trust-card.blocked .trust-card-value { color: var(--danger); }
+  .trust-lists {
+    display: grid;
+    grid-template-columns: repeat(auto-fit, minmax(210px, 1fr));
+    gap: 8px;
+    margin-top: 8px;
+  }
+  .trust-panel {
+    min-width: 0;
+    border: 1px solid var(--line-2);
+    border-radius: 8px;
+    background: var(--bg-2);
+    overflow: hidden;
+  }
+  .trust-panel-head {
+    display: flex;
+    align-items: center;
+    justify-content: space-between;
+    gap: 10px;
+    padding: 8px 10px;
+    border-bottom: 1px solid var(--line);
+    color: var(--muted-2);
+    font-size: var(--fs-micro);
+    font-weight: 700;
+    letter-spacing: var(--track-cap);
+    text-transform: uppercase;
+  }
+  .trust-panel-head span:last-child {
+    font-family: var(--font-mono);
+    letter-spacing: 0;
+  }
+  .trust-list {
+    display: grid;
+    gap: 1px;
+  }
+  .trust-row {
+    display: grid;
+    grid-template-columns: minmax(0, 1fr) auto;
+    gap: 8px;
+    padding: 8px 10px;
+    border-top: 1px solid transparent;
+    color: var(--ink-2);
+    font-size: var(--fs-label);
+  }
+  .trust-row + .trust-row { border-top-color: var(--line); }
+  .trust-row-main {
+    min-width: 0;
+    display: grid;
+    gap: 2px;
+  }
+  .trust-row-title {
+    color: var(--ink);
+    font-weight: 600;
+    white-space: nowrap;
+    overflow: hidden;
+    text-overflow: ellipsis;
+  }
+  .trust-row-detail {
+    color: var(--muted);
+    overflow-wrap: anywhere;
+  }
+  .trust-row-badge {
+    align-self: start;
+    padding: 2px 6px;
+    border-radius: 99px;
+    border: 1px solid var(--line);
+    color: var(--muted-2);
+    background: var(--bg-1);
+    font-family: var(--font-mono);
+    font-size: var(--fs-micro);
+    letter-spacing: 0;
+  }
+  .trust-empty {
+    padding: 10px;
+    color: var(--muted);
+    font-size: var(--fs-label);
+  }
+  .trust-updated {
+    margin-top: 8px;
+  }
+  #trust-status[data-status='ready'] { color: var(--ok); }
+  #trust-status[data-status='attention'],
+  #trust-status[data-status='warning'] { color: var(--warn); }
+  #trust-status[data-status='blocked'] { color: var(--danger); }
+
   /* ---------------- main column ---------------- */
 
   .main {
