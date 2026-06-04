@@ -867,13 +867,24 @@ def main(port: int = 8000) -> int:
                 if recipe_mode == "computer_isolated":
                     payload["model"] = self.VISION_MODEL
             else:
-                # If the prompt sounds like a real action ("open Chrome and
-                # do X", "clean my downloads"), switch to `computer` so the
-                # agent uses its mouse/keyboard tools instead of just chatting.
-                low = goal.lower()
-                if any(v in low for v in ACTION_VERBS):
+                # Decide the mode with the SAME detector the backend uses, so
+                # the two agree. The old crude `any(verb in goal)` substring
+                # match mis-routed innocent chat into desktop control — "clean
+                # eating tips", "should I buy a Tesla", "book recommendations",
+                # "how do I move on" all matched a verb (clean/buy/book/move)
+                # and forced `computer` mode. detect_task_mode is precise.
+                try:
+                    from app.providers import detect_task_mode as _dtm
+                    detected = _dtm(goal)
+                except Exception:
+                    detected = "auto"
+                if detected in ("computer", "computer_isolated"):
                     payload["mode"] = "computer"
+                elif detected == "computer_use":
+                    payload["mode"] = "computer_use"
                 else:
+                    # coding / chat → let the backend confirm (it auto-detects
+                    # the same way and answers chat directly).
                     payload["mode"] = "auto"
 
             # Apply desktop-control hardening for computer / computer_use
@@ -883,19 +894,13 @@ def main(port: int = 8000) -> int:
                                        "computer_isolated"):
                 payload["goal"] = self.DESKTOP_HARDENING + payload["goal"]
 
-            # Tell the agent which connectors (surfaces) are linked & available.
-            # The detailed per-connector MANUAL is injected server-side by the
-            # agent (connectors.relevant_briefs) for whichever ones this goal
-            # actually needs, so it works for the dashboard path too.
-            linked = self._fetch_linked_connectors()
-            web_connectors = [c for c in linked
-                              if c.get("auth_kind") == "browser"]
-            if web_connectors:
-                names = ", ".join(c["label"] for c in web_connectors)
-                payload["goal"] = (
-                    f"[Linked & available services you may use when relevant: "
-                    f"{names}.]\n\n" + payload["goal"]
-                )
+            # NOTE: the connector picker was removed from the product, so the
+            # capsule no longer prepends a "[Linked & available services …]"
+            # banner to the goal. That banner also broke mode detection — its
+            # phrasing ("you may use when relevant: …") made the auto-router
+            # extract a bogus isolated app ("When Relevant"), forcing innocent
+            # chat questions into desktop control. The agent still pulls in any
+            # relevant browser skill server-side when a goal actually needs it.
 
             return payload
 

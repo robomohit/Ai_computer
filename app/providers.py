@@ -168,6 +168,24 @@ _CODING_KEYWORDS = [
     ".c", ".h", ".rb", ".php", ".swift", ".kt", ".sh", ".bash",
 ]
 
+# A strongly TECHNICAL subset — these unambiguously mean programming. The
+# generic verbs in _CODING_KEYWORDS (write/create/build/fix/test/app/file/
+# model/state/hook…) also appear in everyday requests ("write a haiku",
+# "build a habit", "fix my posture"), so coding now requires either a strong
+# signal here OR two coding keywords; anything else is treated as plain chat
+# (just answer it) rather than spinning up a coding workflow.
+_STRONG_CODING_KEYWORDS = {
+    "code", "script", "function", "class", "refactor", "debug", "compile",
+    "lint", "pip", "npm", "python", "javascript", "typescript", "react",
+    "node", "sql", "dockerfile", "git", "commit", "repository", "repo",
+    "endpoint", "middleware", "reducer", "schema", "migration", "makefile",
+    "cmake", "cargo", "gradle", "maven", "webpack", "vite", "algorithm",
+    "data structure", "scaffold", "boilerplate", "stack trace", "regex",
+    "codebase", "syntax error", "traceback", "unit test",
+    ".py", ".js", ".ts", ".jsx", ".tsx", ".go", ".rs", ".java", ".cpp",
+    ".c", ".h", ".rb", ".php", ".swift", ".kt", ".sh", ".bash",
+}
+
 _COMPUTER_KEYWORDS = [
     "open", "click", "type into", "browser", "screenshot", "mouse", "scroll",
     "desktop", "window", "drag", "notepad", "chrome", "firefox", "visual",
@@ -289,7 +307,14 @@ def detect_task_mode(goal: str, explicit_mode: Optional[str] = None) -> str:
         return "computer_use"
     if computer_score >= 2 and computer_score > coding_score:
         return "computer_isolated" if isolated_app else "computer"
-    return "coding"
+    # Coding requires a STRONG technical signal (or several coding keywords).
+    # Otherwise this is a general request — answer it in chat rather than
+    # spinning up a coding workflow (so "write a haiku" / "give me focus tips"
+    # don't get mis-routed to coding, and never to desktop control).
+    strong_coding = any(kw in g for kw in _STRONG_CODING_KEYWORDS)
+    if strong_coding or coding_score >= 2:
+        return "coding"
+    return "chat"
 
 
 def infer_isolated_app_name(goal: str) -> Optional[str]:
@@ -314,6 +339,18 @@ def infer_isolated_app_name(goal: str) -> Optional[str]:
     candidate = match.group(1).strip(" .,!?:;\"'")
     candidate_lower = candidate.lower()
     if candidate_lower in {"desktop", "screen", "window", "app", "application", "browser"}:
+        return None
+    # Reject common English filler that follows a weak trigger like "use"/"in"
+    # ("use it when relevant", "in order to", "in the morning") — these are not
+    # app names. Without this, "you may use when relevant" yielded the bogus
+    # app "When Relevant" and forced chat into isolated desktop control.
+    if candidate_lower.split()[0] in {
+        "when", "where", "how", "why", "order", "this", "that", "your", "my",
+        "our", "their", "his", "her", "its", "some", "any", "each", "all",
+        "relevant", "case", "general", "mind", "fact", "front", "addition",
+        "short", "particular", "it", "them", "him", "you", "me", "us", "here",
+        "there", "between", "regards", "terms", "place",
+    }:
         return None
     # A domain / URL is a website, not a desktop app to isolate.
     if re.search(r"\.[a-z]{2,}\b", candidate_lower) or candidate_lower.startswith(("http", "www.")):
