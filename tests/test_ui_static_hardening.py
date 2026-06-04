@@ -42,6 +42,8 @@ def test_terminal_and_subtask_dynamic_values_use_textcontent():
     assert "title.textContent = command || 'Command output'" in html
     assert "channelEl.textContent = channel" in html
     assert "row.querySelector('.subtask-text').innerHTML +=" not in html
+    assert "row.innerHTML = `<div class=\"subtask-icon\">" not in html
+    assert "text.textContent = subtask.description" in html
     assert "tag.textContent = event.worker_id" in html
 
 
@@ -51,6 +53,20 @@ def test_command_palette_rows_do_not_interpolate_model_labels_as_html():
     assert 'row.innerHTML = `<span class="cmdk-icon">' not in html
     assert "label.textContent = c.label" in html
     assert "hint.textContent = c.hint" in html
+
+
+def test_plan_mermaid_graph_escapes_model_provided_labels():
+    js = (_STATIC / "app.js").read_text(encoding="utf-8", errors="replace")
+
+    assert "const safeMermaidId" in js
+    assert "const safeMermaidLabel" in js
+    assert ".replace(/[<>{}\\[\\]()\"`'\\\\|;:\\n\\r]/g, ' ')" in js
+    assert "const safeId = safeMermaidId(subtask.id, `task${index}`)" in js
+    assert "const label = safeMermaidLabel(subtask.description)" in js
+    assert "const safeDep = safeMermaidId(dep, '')" in js
+    assert "if (!safeDep) return;" in js
+    assert "const prevSafeId = safeMermaidId(planSubtasks[index-1].id, `task${index - 1}`)" in js
+    assert 'subtask.description.replace(/"/g' not in js
 
 
 def test_mode_selection_is_persisted_client_side():
@@ -171,6 +187,35 @@ def test_settings_modal_surfaces_readiness_preflight():
     assert ".readiness-grid" in css
     assert ".readiness-item" in css
     assert "#readiness-score[data-status='ready']" in css
+
+
+def test_settings_modal_surfaces_trust_center():
+    html = STATIC_HTML.read_text(encoding="utf-8")
+    js = (_STATIC / "app.js").read_text(encoding="utf-8")
+    css = (_STATIC / "style.css").read_text(encoding="utf-8")
+
+    for dom_id in (
+        'id="trust-section"',
+        'id="trust-grid"',
+        'id="trust-status"',
+        'id="trust-pending-list"',
+        'id="trust-ledger-list"',
+    ):
+        assert dom_id in html
+
+    assert "loadTrustReport" in js
+    assert "renderTrustReport" in js
+    assert "/api/trust/report" in js
+    assert "grid.replaceChildren(" in js
+    assert "pendingList.replaceChildren" in js
+    assert "ledgerList.replaceChildren" in js
+    assert "titleEl.textContent = title" in js
+    assert "detailEl.textContent = detail" in js
+    assert "badgeEl.textContent = badge" in js
+    assert ".trust-grid" in css
+    assert ".trust-card" in css
+    assert ".trust-row" in css
+    assert "#trust-status[data-status='attention']" in css
 
 
 def test_task_start_is_gated_by_readiness_preflight():
@@ -551,8 +596,14 @@ def test_qt_capsule_prefers_task_event_stream_with_poll_fallback():
     qt_shell = (root / "app" / "widget" / "qt_shell.py").read_text(encoding="utf-8")
 
     assert "def _stream_task_events" in qt_shell
-    assert "keepalive_timeout_seconds=15" in qt_shell
-    assert 'client.stream("GET", url, timeout=None)' in qt_shell
+    assert "keepalive_timeout_seconds=8" in qt_shell
+    # The stream must use a finite read timeout (not None) so a stalled
+    # connection raises and falls back to polling instead of hanging forever.
+    assert "timeout=None" not in qt_shell.split("def _stream_task_events", 1)[1][:1500]
+    assert "httpx.Timeout(" in qt_shell
+    # And a safety net: if the backend goes terminal without the 'done' event
+    # arriving over the stream, bail to the poll fallback.
+    assert "self._is_terminal_status(st)" in qt_shell
     assert 'line.startswith("data:")' in qt_shell
     assert "json.loads(line[5:].strip())" in qt_shell
     assert "cursor = max(cursor, int(ev.get(\"seq\")) + 1)" in qt_shell
@@ -589,6 +640,23 @@ def test_qt_capsule_dynamic_labels_are_plain_text_and_links_are_safe():
     assert "body = _plain_label(body_text)" in capsule_widgets
     assert "_set_plain_text(self._status, msg)" in capsule_widgets
     assert "url = _safe_external_url(payload_obj.get(\"url\", \"\"))" in capsule_widgets
+    assert "def _safe_local_folder_path" in capsule_widgets
+    assert "path = _safe_local_folder_path(payload_obj.get(\"path\", payload_obj.get(\"folder_path\", \"\")))" in capsule_widgets
+
+
+def test_qt_capsule_open_folder_payload_is_local_directory_only(tmp_path):
+    from app.widget.capsule_widgets import _safe_local_folder_path
+
+    folder = tmp_path / "folder"
+    folder.mkdir()
+    file_path = tmp_path / "file.txt"
+    file_path.write_text("not a folder", encoding="utf-8")
+
+    assert _safe_local_folder_path(str(folder)) == str(folder.resolve())
+    assert _safe_local_folder_path(str(file_path)) == ""
+    assert _safe_local_folder_path(str(tmp_path / "missing")) == ""
+    assert _safe_local_folder_path("https://example.com/folder") == ""
+    assert _safe_local_folder_path(f"{folder}\n--bad") == ""
 
 
 def test_desktop_dashboard_launch_stays_native_not_browser_fallback():

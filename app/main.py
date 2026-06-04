@@ -17,6 +17,7 @@ from fastapi.responses import FileResponse, StreamingResponse
 from fastapi.security import HTTPAuthorizationCredentials, HTTPBearer
 from .agent import AgentService
 from .log_emitter import log_emitter
+from .local_auth import local_api_key
 from .models import AgentContext, TaskRecord
 from .providers import detect_task_mode, infer_isolated_app_name
 from .premium_features import (
@@ -30,8 +31,8 @@ from .premium_features import (
 from .skills import skill_manager
 
 def _load_or_create_api_key() -> str:
-    if env_key := os.environ.get("AGENT_API_KEY"):
-        return env_key
+    if existing_key := local_api_key():
+        return existing_key
     config_dir = Path(os.environ.get("XDG_CONFIG_HOME", str(Path.home() / ".config"))) / "ai_computer"
     key_file = config_dir / ".api_key"
     if key_file.exists():
@@ -44,7 +45,7 @@ def _load_or_create_api_key() -> str:
     return new_key
 
 API_KEY = _load_or_create_api_key()
-print(f"[AI_Computer] Agent API key configured: {bool(os.environ.get('AGENT_API_KEY'))}", flush=True)
+print(f"[AI_Computer] Agent API key configured: {bool(API_KEY)}", flush=True)
 SESSION_COOKIE_NAME = "ai_computer_session"
 SESSION_TTL_SECONDS = int(os.environ.get("SESSION_TTL_SECONDS", "43200"))
 _sessions: Dict[str, datetime] = {}
@@ -160,8 +161,9 @@ _capsule_queues: list[asyncio.Queue] = []
 
 
 @app.get("/api/capsule/events")
-async def capsule_events():
+async def capsule_events(request: Request):
     """SSE stream for the floating capsule to receive widget spawn events."""
+    await verify_token(request, None)
     q: asyncio.Queue = asyncio.Queue()
     _capsule_queues.append(q)
 
@@ -186,6 +188,7 @@ async def capsule_events():
 @app.post("/api/capsule/widget")
 async def push_capsule_widget(request: Request):
     """Push a widget event to all connected capsules."""
+    await verify_token(request, None)
     payload = await request.json()
     payload.setdefault("type", "widget")
     for q in _capsule_queues:
@@ -201,7 +204,7 @@ async def organize_capsule_files(request: Request):
     from .clutter_scanner import organize_files
     body = await request.json()
     folder_path = body.get("folder_path", "")
-    if not folder_path or not os.path.isdir(folder_path):
+    if not isinstance(folder_path, str) or not folder_path or not os.path.isdir(folder_path):
         raise HTTPException(400, "Invalid folder_path")
     result = await asyncio.to_thread(organize_files, folder_path)
     return result
@@ -214,10 +217,13 @@ async def delete_capsule_files(request: Request):
     from .clutter_scanner import delete_files
     body = await request.json()
     file_paths = body.get("file_paths", [])
-    if not file_paths:
+    if (
+        not isinstance(file_paths, list)
+        or not file_paths
+        or not all(isinstance(path, str) and path.strip() for path in file_paths)
+    ):
         raise HTTPException(400, "No file_paths provided")
-    result = await asyncio.to_thread(
-        delete_files, file_paths, permanent=bool(body.get("permanent", False)))
+    result = await asyncio.to_thread(delete_files, file_paths, permanent=False)
     return result
 
 
@@ -228,7 +234,7 @@ async def restore_capsule_files(request: Request):
     from .clutter_scanner import restore_trashed
     body = await request.json()
     items = body.get("items", [])
-    if not items:
+    if not isinstance(items, list) or not items:
         raise HTTPException(400, "No items provided")
     return await asyncio.to_thread(restore_trashed, items)
 
@@ -240,6 +246,10 @@ async def scan_capsule_folder(request: Request):
     from .clutter_scanner import scan_folder
     body = await request.json()
     folder_path = body.get("folder_path", None)
+    if folder_path in ("", None):
+        folder_path = None
+    elif not isinstance(folder_path, str) or not os.path.isdir(folder_path):
+        raise HTTPException(400, "Invalid folder_path")
     result = await asyncio.to_thread(scan_folder, folder_path)
     return result
 
@@ -933,6 +943,80 @@ def _readiness_checks_by_key(readiness: Dict[str, Any]) -> Dict[str, Dict[str, A
     }
 
 
+def _split_task_action_key(value: str) -> tuple[str, str]:
+    task_id, _, action_id = str(value).partition(":")
+    return task_id, action_id
+
+
+def _pending_waits(waiters: Dict[str, asyncio.Future]) -> List[Dict[str, str]]:
+    pending: List[Dict[str, str]] = []
+    for key, fut in sorted(waiters.items()):
+        if fut.done():
+            continue
+        task_id, action_id = _split_task_action_key(key)
+        if task_id and action_id:
+            pending.append({"task_id": task_id, "action_id": action_id})
+    return pending
+
+
+def _build_trust_report() -> Dict[str, Any]:
+    readiness_payload = _build_readiness_payload()
+    trust_checks = [
+        item for item in readiness_payload.get("checks", [])
+        if isinstance(item, dict) and item.get("category") == "trust"
+    ]
+    active_records = [
+        _serialize_task_record(record)
+        for record in _tasks.values()
+        if not _is_terminal_status(record.status)
+    ]
+    active_records.sort(key=lambda item: str(item.get("created_at") or ""), reverse=True)
+
+    approvals = _pending_waits(service._approvals)
+    permissions = _pending_waits(service._permission_waits)
+    task_ids = sorted(set(service.permissions.task_ids()) | {item["task_id"] for item in approvals + permissions})
+    consent_ledger = [
+        {
+            "task_id": task_id,
+            "granted": service.permissions.granted_scopes(task_id),
+            "denied": service.permissions.denied_scopes(task_id),
+        }
+        for task_id in task_ids
+        if service.permissions.granted_scopes(task_id) or service.permissions.denied_scopes(task_id)
+    ]
+
+    blocked_trust = sum(1 for item in trust_checks if item.get("status") == "blocked")
+    pending_count = len(approvals) + len(permissions)
+    overall = "attention" if pending_count else ("blocked" if blocked_trust else readiness_payload.get("overall", "ready"))
+    return {
+        "overall": overall,
+        "readiness": {
+            "overall": readiness_payload.get("overall"),
+            "score": readiness_payload.get("score"),
+            "summary": readiness_payload.get("summary"),
+            "trust_checks": trust_checks,
+        },
+        "active_tasks": active_records[:25],
+        "pending_trust": {
+            "approvals": approvals,
+            "permissions": permissions,
+            "count": pending_count,
+        },
+        "consent_ledger": consent_ledger,
+        "kill_switch": {
+            "available": True,
+            "routes": ["/api/tasks/{task_id}/kill", "/api/tasks/{task_id}/pause"],
+        },
+        "audit": {
+            "task_logs": True,
+            "control_trace": True,
+            "permission_ledger": True,
+            "capsule_events_authenticated": True,
+        },
+        "generated_at": datetime.now(timezone.utc).isoformat(),
+    }
+
+
 def _preflight_issue(check: Optional[Dict[str, Any]], severity: str, detail: str = "") -> Dict[str, str]:
     check = check or {}
     return {
@@ -1258,6 +1342,11 @@ async def healthz():
 @app.get("/api/readiness", dependencies=[Depends(verify_token)])
 async def readiness():
     return _build_readiness_payload()
+
+
+@app.get("/api/trust/report", dependencies=[Depends(verify_token)])
+async def trust_report():
+    return _build_trust_report()
 
 
 @app.post("/api/tasks/preflight", dependencies=[Depends(verify_token)])
@@ -2413,31 +2502,46 @@ async def stream_task(task_id: str, request: Request, since: int = 0, keepalive_
         raise HTTPException(status_code=400, detail="keepalive_timeout_seconds must be between 5 and 300")
 
     async def event_generator():
-        # Replay persisted events first so fast-completing tasks aren't missed
-        log_path = log_emitter.log_path(task_id)
-        terminal_seen = False
-        total_events = log_emitter.count_events(task_id)
-        for ev in log_emitter.read_log(task_id, since=max(0, since)):
-            event_id = ev.get("seq")
-            prefix = f"id: {event_id}\n" if event_id is not None else ""
-            yield f"{prefix}data: {json.dumps(ev)}\n\n"
-            if ev.get("type") in ("done", "error", "cancelled"):
-                terminal_seen = True
-        if terminal_seen:
-            return
-
-        record = _get_task_record(task_id)
-        if record and _is_terminal_status(record.status) and since >= total_events:
-            return
-
+        # IMPORTANT: subscribe to the live queue BEFORE replaying the persisted
+        # log. Otherwise any event emitted in the gap between replay and
+        # subscribe is lost — which is exactly what stranded fast-finishing
+        # tasks: the terminal "done" event fell into that gap, so the client
+        # only ever saw keepalives and hung until its 10-minute deadline,
+        # never showing the answer. Subscribing first queues those events;
+        # we dedup by seq so anything also present in the replay isn't sent twice.
         q = log_emitter.subscribe(task_id)
         try:
+            terminal_seen = False
+            last_seq = (int(since) - 1) if since else -1
+            for ev in log_emitter.read_log(task_id, since=max(0, since)):
+                event_id = ev.get("seq")
+                if isinstance(event_id, int):
+                    last_seq = max(last_seq, event_id)
+                prefix = f"id: {event_id}\n" if event_id is not None else ""
+                yield f"{prefix}data: {json.dumps(ev)}\n\n"
+                if ev.get("type") in ("done", "error", "cancelled"):
+                    terminal_seen = True
+            if terminal_seen:
+                return
+
+            # Already terminal and nothing newer queued? Don't hang on keepalives.
+            record = _get_task_record(task_id)
+            total_events = log_emitter.count_events(task_id)
+            if (record and _is_terminal_status(record.status)
+                    and q.empty() and last_seq + 1 >= total_events):
+                return
+
             while True:
                 if await request.is_disconnected():
                     break
                 try:
                     msg = await asyncio.wait_for(q.get(), timeout=float(keepalive_timeout_seconds))
                     event_id = msg.get("seq")
+                    # Skip anything already covered by the replay above.
+                    if isinstance(event_id, int):
+                        if event_id <= last_seq:
+                            continue
+                        last_seq = event_id
                     prefix = f"id: {event_id}\n" if event_id is not None else ""
                     yield f"{prefix}data: {json.dumps(msg)}\n\n"
                     if msg.get("type") in ("done", "error", "cancelled"):
@@ -2470,7 +2574,11 @@ async def permissions(body: PermissionIn):
 
 @app.get("/api/permissions/{task_id}", dependencies=[Depends(verify_token)])
 async def list_permissions(task_id: str):
-    return {"task_id": task_id, "granted": service.permissions.granted_scopes(task_id)}
+    return {
+        "task_id": task_id,
+        "granted": service.permissions.granted_scopes(task_id),
+        "denied": service.permissions.denied_scopes(task_id),
+    }
 
 
 # ── Automation (Watch & Act slice 1, AI-7) ────────────────────────────────────

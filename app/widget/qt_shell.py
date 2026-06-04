@@ -1261,8 +1261,14 @@ def main(port: int = 8000) -> int:
             cursor = max(0, int(since or 0))
             deadline = time.time() + 600
             try:
-                url = f"{BASE}/api/tasks/{tid}/stream?since={cursor}&keepalive_timeout_seconds=15"
-                with client.stream("GET", url, timeout=None) as response:
+                import httpx
+                url = f"{BASE}/api/tasks/{tid}/stream?since={cursor}&keepalive_timeout_seconds=8"
+                # Read timeout (> the 8s server keepalive) so a stalled stream
+                # raises instead of blocking forever — we then fall back to
+                # polling /log, which always carries the terminal event.
+                stream_timeout = httpx.Timeout(20.0, connect=10.0, read=20.0)
+                last_status_check = time.time()
+                with client.stream("GET", url, timeout=stream_timeout) as response:
                     if response.status_code >= 400:
                         self.statusChanged.emit("Live stream unavailable - falling back...")
                         return "fallback", tid, cursor
@@ -1273,6 +1279,18 @@ def main(port: int = 8000) -> int:
                             return "terminal", tid, cursor
                         line = raw_line.decode("utf-8", "replace") if isinstance(raw_line, bytes) else str(raw_line or "")
                         if not line or line.startswith(":") or not line.startswith("data:"):
+                            # Keepalive / blank line. Safety net: if the backend
+                            # has gone terminal but we never received the 'done'
+                            # event over the stream (a delivery race), bail to the
+                            # poll fallback, which reads /log and always finds it.
+                            if time.time() - last_status_check >= 3.0:
+                                last_status_check = time.time()
+                                try:
+                                    st = client.get(f"{BASE}/api/tasks/{tid}", timeout=5.0).json().get("status", "")
+                                except Exception:
+                                    st = ""
+                                if self._is_terminal_status(st):
+                                    return "fallback", tid, cursor
                             continue
                         try:
                             ev = json.loads(line[5:].strip())
@@ -1543,12 +1561,14 @@ def main(port: int = 8000) -> int:
         def _listen(self):
             try:
                 import httpx
+                from ..local_auth import local_auth_headers
             except ImportError:
                 return
+            headers = local_auth_headers()
             while self._running:
                 try:
                     with httpx.stream("GET", f"{self._base}/api/capsule/events",
-                                      timeout=None) as r:
+                                      headers=headers, timeout=None) as r:
                         for line in r.iter_lines():
                             if not self._running:
                                 break
