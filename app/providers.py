@@ -346,8 +346,13 @@ def infer_isolated_app_name(goal: str) -> Optional[str]:
         if re.search(rf"(?<!\w){re.escape(alias)}(?!\w)", lowered):
             return title
 
+    # Only STRONG app-opening verbs trigger the inference for an UNKNOWN app
+    # (known apps are matched by alias above, regardless of verb). The weak
+    # triggers "use"/"in"/"inside"/"within" produced false positives like
+    # "what time is it IN tokyo" -> app "Tokyo" and "USE async await" -> an app,
+    # forcing chat questions into desktop control.
     match = re.search(
-        r"\b(?:open|launch|use|inside|within|in)\s+([A-Za-z][A-Za-z0-9.&()'/-]*(?:\s+[A-Za-z][A-Za-z0-9.&()'/-]*){0,3})",
+        r"\b(?:open|launch|switch to|bring up)\s+([A-Za-z][A-Za-z0-9.&()'/-]*(?:\s+[A-Za-z][A-Za-z0-9.&()'/-]*){0,3})",
         raw_goal,
         flags=re.IGNORECASE,
     )

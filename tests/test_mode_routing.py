@@ -24,6 +24,11 @@ CHAT = [
     "how do I sort a dict by value in python",
     "show me a bubble sort in javascript",
     "give me a regex for email validation",
+    # weak "in X" / "use X" phrasing must NOT extract a bogus desktop app
+    "what time is it in tokyo",
+    "show me how to use async await in js",
+    "do it in python",
+    "translate this to spanish",
 ]
 
 CODING = [
