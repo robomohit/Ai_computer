@@ -14,18 +14,8 @@
 /* ── 1. Ambient aurora behind the main panel ─────────────────────────────── */
 .main { isolation: isolate; }
 .main::before {
-  content: "";
-  position: absolute;
-  inset: -25%;
-  z-index: 0;
-  pointer-events: none;
-  background:
-    radial-gradient(38% 48% at 22% 28%, hsla(var(--accent-h), var(--accent-s), var(--accent-l), 0.14), transparent 70%),
-    radial-gradient(44% 52% at 80% 26%, hsla(calc(var(--accent-h) + 42), 82%, 60%, 0.10), transparent 72%),
-    radial-gradient(52% 50% at 62% 96%, hsla(calc(var(--accent-h) - 34), 86%, 60%, 0.09), transparent 75%);
-  filter: blur(46px) saturate(1.12);
-  opacity: 0.9;
-  animation: dyn-aurora 28s var(--ease-out, ease-in-out) infinite alternate;
+  display: none;
+  content: none;
 }
 /* keep all real content above the aurora */
 .main > * { position: relative; z-index: 1; }
@@ -38,14 +28,8 @@
 
 /* A faint second, slower veil for depth (very subtle) */
 .main::after {
-  content: "";
-  position: absolute;
-  inset: 0;
-  z-index: 0;
-  pointer-events: none;
-  background: radial-gradient(60% 60% at 50% 40%,
-              hsla(var(--accent-h), var(--accent-s), 60%, 0.05), transparent 80%);
-  animation: dyn-breathe 9s ease-in-out infinite;
+  display: none;
+  content: none;
 }
 @keyframes dyn-breathe {
   0%, 100% { opacity: 0.45; }
@@ -92,21 +76,13 @@
               background 0.22s ease;
 }
 .example-btn::after {
-  content: "";
-  position: absolute;
-  top: 0; left: -120%;
-  width: 80%; height: 100%;
-  background: linear-gradient(100deg, transparent,
-              hsla(var(--accent-h), var(--accent-s), 70%, 0.14), transparent);
-  transform: skewX(-18deg);
-  transition: left 0.55s var(--ease-out, ease);
-  pointer-events: none;
+  display: none;
+  content: none;
 }
 .example-btn:hover {
-  transform: translateY(-2px);
-  border-color: hsla(var(--accent-h), var(--accent-s), var(--accent-l), 0.55);
-  box-shadow: 0 10px 26px -14px hsla(var(--accent-h), var(--accent-s), 50%, 0.55),
-              0 0 0 1px hsla(var(--accent-h), var(--accent-s), var(--accent-l), 0.18) inset;
+  transform: none;
+  border-color: var(--line-2);
+  box-shadow: none;
 }
 .example-btn:hover::after { left: 130%; }
 .example-btn:active { transform: translateY(0) scale(0.99); }
@@ -133,17 +109,11 @@
 .send-btn {
   position: relative;
   overflow: hidden;
-  animation: dyn-cta-glow 3.4s ease-in-out infinite;
+  animation: none;
 }
 .send-btn::before {
-  content: "";
-  position: absolute;
-  inset: 0;
-  background: linear-gradient(115deg, transparent 30%,
-              hsla(0, 0%, 100%, 0.28) 50%, transparent 70%);
-  transform: translateX(-130%);
-  animation: dyn-cta-sweep 4.2s ease-in-out 1.2s infinite;
-  pointer-events: none;
+  display: none;
+  content: none;
 }
 @keyframes dyn-cta-glow {
   0%, 100% { box-shadow: 0 0 0 0 hsla(var(--accent-h), var(--accent-s), 50%, 0.0),
@@ -172,9 +142,8 @@
 /* The composer gets a subtle focus-within accent ring that animates in */
 .composer { transition: border-color 0.25s ease, box-shadow 0.25s ease; }
 .composer:focus-within {
-  border-color: hsla(var(--accent-h), var(--accent-s), var(--accent-l), 0.45);
-  box-shadow: 0 0 0 3px hsla(var(--accent-h), var(--accent-s), 50%, 0.12),
-              0 10px 30px -18px hsla(var(--accent-h), var(--accent-s), 45%, 0.55);
+  border-color: var(--line-3);
+  box-shadow: 0 8px 28px -22px rgba(0,0,0,0.32);
 }
 
 /* New-session button: brand-tinted hover with a soft glow */
@@ -194,5 +163,386 @@
   .welcome .hello-eye, .welcome h3, .welcome > p, .welcome .example-grid,
   .welcome .example-btn, .sidebar .sidebar-controls, .composer-wrap {
     animation: none !important;
+  }
+}
+
+/* Focused dashboard pass: Codex-like quiet chrome, minimal idle state. */
+.app-shell {
+  grid-template-columns: 244px minmax(0, 1fr);
+}
+
+.main,
+.feed-scroll {
+  background: var(--bg-1);
+}
+
+.feed {
+  width: min(740px, 100%);
+}
+
+.sidebar {
+  background: color-mix(in oklab, var(--bg-1) 96%, var(--bg-0));
+}
+
+.sidebar-controls {
+  padding: 10px 12px 8px;
+}
+
+.sidebar-button,
+.project-folder-trigger,
+.history-search input,
+.sidebar-settings-btn {
+  border-radius: 8px;
+}
+
+.sidebar-button {
+  min-height: 34px;
+}
+
+.project-folder-trigger {
+  padding: 9px 10px;
+}
+
+.project-folder-path {
+  max-height: 0;
+  opacity: 0;
+  transform: translateY(-2px);
+  transition: max-height .16s var(--ease-out), opacity .14s var(--ease-out), transform .16s var(--ease-out);
+}
+
+.project-folder-trigger:hover .project-folder-path,
+.project-folder-trigger:focus-visible .project-folder-path {
+  max-height: 16px;
+  opacity: 1;
+  transform: translateY(0);
+}
+
+.history-search {
+  padding: 0 12px 10px;
+}
+
+.history-list {
+  padding-inline: 8px;
+}
+
+#history-count,
+.history-header span:last-child,
+.history-group-count {
+  opacity: 0;
+  transition: opacity .14s var(--ease-out);
+}
+
+.sidebar:hover #history-count,
+.sidebar:focus-within #history-count,
+.sidebar:hover .history-header span:last-child,
+.sidebar:focus-within .history-header span:last-child,
+.sidebar:hover .history-group-count,
+.sidebar:focus-within .history-group-count,
+.history-group-head:hover .history-group-count,
+.history-group:focus-within .history-group-count {
+  opacity: .62;
+}
+
+.history-item {
+  gap: 0;
+}
+
+.history-list .history-item:hover {
+  transform: none;
+  box-shadow: none;
+}
+
+.history-dot {
+  width: 0;
+  min-width: 0;
+  opacity: 0;
+  margin-right: 0;
+  box-shadow: none !important;
+}
+
+.history-dot.running,
+.history-dot.paused,
+.history-dot.failed {
+  width: 6px;
+  min-width: 6px;
+  opacity: 1;
+  margin-right: 9px;
+}
+
+body:not(.task-active) .feed-scroll {
+  margin-top: auto;
+}
+
+body:not(.task-active) .welcome {
+  max-width: 560px;
+  padding-bottom: 12px;
+}
+
+body:not(.task-active) .welcome h3 {
+  font-size: 24px;
+  letter-spacing: 0;
+  line-height: 1.22;
+  margin-bottom: 0;
+}
+
+body:not(.task-active) .welcome p {
+  display: none;
+}
+
+body:not(.task-active) .example-grid {
+  margin-top: 16px;
+  gap: 6px;
+}
+
+.example-btn {
+  padding: 6px 12px;
+  border-radius: 999px;
+  background: transparent;
+  box-shadow: none;
+}
+
+.example-btn .ex-body strong {
+  font-size: 11px;
+}
+
+.composer-wrap {
+  padding: 4px 22px 26px;
+}
+
+body:not(.task-active) .composer-wrap {
+  margin-bottom: auto;
+}
+
+body:not(.task-active) .app-shell.sb-on .main {
+  grid-row: 1 / 3;
+}
+
+body:not(.task-active) .app-shell.sb-on .statusbar {
+  display: none;
+}
+
+body:not(.task-active) .topbar {
+  position: absolute;
+  inset: 0 0 auto;
+  z-index: 5;
+  padding: 12px clamp(14px, 3vw, 20px);
+  border-bottom-color: transparent;
+  background: transparent;
+  pointer-events: none;
+}
+
+body:not(.task-active) .topbar .nav-toggle {
+  pointer-events: auto;
+}
+
+body:not(.task-active) .topbar .safety-strip {
+  pointer-events: none;
+}
+
+body[data-glass="on"]:not(.widget-shell):not(.task-active) .topbar {
+  border-color: transparent !important;
+  background: transparent !important;
+  background-image: none !important;
+  box-shadow: none !important;
+  backdrop-filter: none;
+  -webkit-backdrop-filter: none;
+}
+
+.statusbar {
+  height: 22px;
+  padding-inline: 8px;
+  background: color-mix(in oklab, var(--bg-0) 88%, transparent);
+}
+
+.statusbar .sb-item {
+  border-right: 0;
+  padding-inline: 8px;
+}
+
+.statusbar .sb-elapsed .sb-label,
+.statusbar .sb-budget .sb-label {
+  display: none;
+}
+
+.statusbar .sb-budget-bar {
+  width: 36px;
+}
+
+.composer {
+  max-width: 680px;
+  border-radius: 20px;
+  padding: 10px 12px 8px;
+  box-shadow: 0 1px 2px rgba(0,0,0,0.04);
+}
+
+.composer textarea {
+  display: block;
+  height: 24px;
+  min-height: 22px;
+  max-height: 180px;
+  overflow: hidden;
+  line-height: 1.45;
+}
+
+.composer-bottom {
+  margin-top: 4px;
+}
+
+.composer-actions {
+  gap: 4px;
+  /* Span the row so utility icons sit left and Send docks bottom-right (Codex). */
+  flex: 1 1 auto;
+}
+
+.composer-actions .send-btn {
+  margin-left: auto;
+}
+
+.composer-icon-btn {
+  width: 28px;
+  height: 28px;
+}
+
+.send-btn {
+  width: 32px;
+  height: 32px;
+  min-width: 32px;
+}
+
+.send-btn:hover {
+  transform: none;
+}
+
+.feed-card::before,
+.feed-card.is-active::before,
+.turn-summary::before,
+.status-row::before {
+  display: none !important;
+  content: none !important;
+}
+
+.feed-card,
+.turn-summary,
+.status-row {
+  padding-left: 0;
+}
+
+.feed-card.is-active::after {
+  inset: -2px 0;
+}
+
+.card-head {
+  padding-inline: 0;
+}
+
+.topbar .control-btn {
+  min-height: 28px;
+  padding: 5px 9px;
+  background: transparent;
+}
+
+.topbar .control-btn:hover {
+  background: var(--bg-2);
+}
+
+.topbar .controls {
+  align-items: center;
+  flex-wrap: nowrap;
+}
+
+.topbar #btn-control-report,
+.topbar #btn-copy-log,
+.topbar #btn-download-log {
+  max-width: 0;
+  min-width: 0;
+  width: 0;
+  padding-inline: 0;
+  border-color: transparent;
+  opacity: 0;
+  overflow: hidden;
+  visibility: hidden;
+  white-space: nowrap;
+  transition: max-width .18s var(--ease-out), width .18s var(--ease-out), padding .18s var(--ease-out), opacity .14s var(--ease-out), border-color .18s var(--ease-out);
+}
+
+.topbar:hover #btn-control-report,
+.topbar:hover #btn-copy-log,
+.topbar:hover #btn-download-log,
+.topbar:focus-within #btn-control-report,
+.topbar:focus-within #btn-copy-log,
+.topbar:focus-within #btn-download-log {
+  max-width: 140px;
+  width: auto;
+  padding-inline: 9px;
+  border-color: var(--line-2);
+  opacity: 1;
+  visibility: visible;
+}
+
+.sidebar-foot {
+  gap: 0;
+}
+
+.provider-chips {
+  gap: 8px;
+  height: 0;
+  margin-top: 0;
+  opacity: 0;
+  overflow: hidden;
+  padding: 0 2px;
+  transform: translateY(2px);
+  transition: height .16s var(--ease-out), margin .16s var(--ease-out), opacity .14s var(--ease-out), transform .16s var(--ease-out);
+}
+
+.sidebar-foot:hover .provider-chips,
+.sidebar-foot:focus-within .provider-chips {
+  height: 8px;
+  margin-top: 8px;
+  opacity: 1;
+  transform: translateY(0);
+}
+
+.provider-chip {
+  width: 8px;
+  height: 8px;
+  padding: 0;
+  border: 0;
+  background: transparent;
+  box-shadow: none;
+}
+
+.provider-chip .chip-dot {
+  width: 7px;
+  height: 7px;
+}
+
+.provider-chip span:not(.chip-dot) {
+  display: none;
+}
+
+body[data-glass="on"]:not(.widget-shell) .composer {
+  border-radius: 20px !important;
+}
+
+body[data-glass="on"]:not(.widget-shell) .composer-wrap {
+  background: transparent;
+  backdrop-filter: none;
+  -webkit-backdrop-filter: none;
+}
+
+[data-theme="light"] body[data-glass="on"]:not(.widget-shell) .composer {
+  background: rgba(255,255,255,0.84) !important;
+  box-shadow: 0 10px 40px -34px rgba(0,0,0,0.5), 0 1px 0 rgba(255,255,255,0.84) inset;
+}
+
+@media (max-width: 960px) {
+  .app-shell {
+    grid-template-columns: minmax(0, 1fr);
+  }
+  body:not(.task-active) .welcome h3 {
+    font-size: 21px;
+  }
+  .composer-wrap {
+    padding-inline: 14px;
   }
 }

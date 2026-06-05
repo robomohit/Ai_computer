@@ -1230,7 +1230,7 @@
         const more = document.createElement('button');
         more.type = 'button';
         more.className = 'history-seemore';
-        more.textContent = expanded ? 'Show less' : `See ${matches.length - HISTORY_GROUP_LIMIT} more`;
+        more.textContent = expanded ? 'Show less' : 'Show more';
         more.addEventListener('click', () => {
           if (historyExpandedGroups.has(g.key)) historyExpandedGroups.delete(g.key);
           else historyExpandedGroups.add(g.key);
@@ -3797,7 +3797,7 @@
     return empty;
   };
 
-  const makeTrustRow = ({ title, detail, badge }) => {
+  const makeTrustRow = ({ title, detail, badge, actions = [] }) => {
     const row = document.createElement('div');
     row.className = 'trust-row';
 
@@ -3815,8 +3815,41 @@
     badgeEl.className = 'trust-row-badge';
     badgeEl.textContent = badge;
 
-    row.append(main, badgeEl);
+    if (actions.length) {
+      const actionWrap = document.createElement('div');
+      actionWrap.className = 'trust-row-actions';
+      actionWrap.appendChild(badgeEl);
+      actions.forEach((action) => {
+        const btn = document.createElement('button');
+        btn.type = 'button';
+        btn.className = `trust-action-btn${action.danger ? ' danger' : ''}`;
+        btn.textContent = action.label;
+        btn.addEventListener('click', action.onClick);
+        actionWrap.appendChild(btn);
+      });
+      row.append(main, actionWrap);
+    } else {
+      row.append(main, badgeEl);
+    }
     return row;
+  };
+
+  const trustTaskControl = async (taskId, action) => {
+    const id = String(taskId || '').trim();
+    if (!id) return;
+    const encoded = encodeURIComponent(id);
+    const label = action === 'kill' ? 'killed' : action === 'cancel' ? 'cancelled' : action === 'pause' ? 'paused' : 'resumed';
+    try {
+      if (action === 'cancel') await api(`/api/tasks/${encoded}`, 'DELETE');
+      else await api(`/api/tasks/${encoded}/${action}`, 'POST');
+      toast(`Task ${label}.`, action === 'kill' || action === 'cancel' ? 'warn' : 'info', 2200);
+      await loadTrustReport();
+      if (typeof recoverActiveTask === 'function') recoverActiveTask().catch(() => {});
+    } catch (err) {
+      const detail = typeof err?.detail === 'string' ? err.detail : `Could not ${action} task.`;
+      toast(detail, 'warn', 2600);
+      await loadTrustReport();
+    }
   };
 
   const renderTrustReport = () => {
@@ -3847,6 +3880,8 @@
     if (pendingCountEl) pendingCountEl.textContent = String(pendingCount);
     const ledgerCountEl = $('trust-ledger-count');
     if (ledgerCountEl) ledgerCountEl.textContent = String(ledger.length);
+    const activeCountEl = $('trust-active-count');
+    if (activeCountEl) activeCountEl.textContent = String(activeTasks.length);
     const updatedEl = $('trust-updated');
     if (updatedEl) {
       const age = report.generated_at ? relTime(report.generated_at) : '';
@@ -3915,6 +3950,31 @@
         });
       });
       ledgerList.replaceChildren(...(rows.length ? rows : [makeTrustEmpty('No task-scoped permissions recorded.')]));
+    }
+
+    const activeList = $('trust-active-list');
+    if (activeList) {
+      const rows = activeTasks.map((item) => {
+        const taskId = item.id || item.task_id || '';
+        const status = String(item.status || (item.paused ? 'paused' : 'running')).toLowerCase();
+        const paused = status === 'paused' || item.paused === true;
+        const queued = status === 'queued' || status === 'pending';
+        const modeBits = [item.mode, item.model].filter(Boolean).join(' | ');
+        const detail = [item.goal || 'Untitled task', modeBits].filter(Boolean).join(' - ');
+        const actions = queued
+          ? [{ label: 'Cancel', danger: true, onClick: () => trustTaskControl(taskId, 'cancel') }]
+          : [
+              { label: paused ? 'Resume' : 'Pause', onClick: () => trustTaskControl(taskId, paused ? 'resume' : 'pause') },
+              { label: 'Kill', danger: true, onClick: () => trustTaskControl(taskId, 'kill') },
+            ];
+        return makeTrustRow({
+          title: taskId || 'Task',
+          detail,
+          badge: status || 'live',
+          actions,
+        });
+      });
+      activeList.replaceChildren(...(rows.length ? rows : [makeTrustEmpty('No active tasks.')]));
     }
   };
 

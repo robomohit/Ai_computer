@@ -23,21 +23,12 @@
 
 /* ---------- dashboard app surfaces ---------- */
 body[data-glass="on"]:not(.widget-shell) {
-  background:
-    linear-gradient(135deg, #101216 0%, #0b0b0d 48%, #151216 100%),
-    var(--bg-0);
+  background: var(--bg-0);
 }
 
 body[data-glass="on"]:not(.widget-shell)::before {
-  content: "";
-  position: fixed;
-  inset: 0;
-  pointer-events: none;
-  z-index: 0;
-  background:
-    linear-gradient(180deg, rgba(255,255,255,0.07), transparent 26%),
-    linear-gradient(120deg, rgba(70,190,170,0.10), transparent 34%, rgba(190,90,120,0.08) 100%);
-  opacity: 0.78;
+  display: none;
+  content: none;
 }
 
 body[data-glass="on"]:not(.widget-shell) .titlebar,
@@ -112,7 +103,7 @@ body[data-glass="on"]:not(.widget-shell) .onb-card {
 }
 
 body[data-glass="on"]:not(.widget-shell) .composer {
-  border-radius: 10px;
+  border-radius: 20px;
 }
 
 body[data-glass="on"]:not(.widget-shell) .nav-toggle,
@@ -152,16 +143,12 @@ body[data-glass="on"]:not(.widget-shell) .onb-card {
 }
 
 [data-theme="light"] body[data-glass="on"]:not(.widget-shell) {
-  background:
-    linear-gradient(135deg, #f7f8f7 0%, #edf2f0 52%, #f4eff2 100%),
-    var(--bg-0);
+  background: var(--bg-0);
 }
 
 [data-theme="light"] body[data-glass="on"]:not(.widget-shell)::before {
-  background:
-    linear-gradient(180deg, rgba(255,255,255,0.64), transparent 34%),
-    linear-gradient(120deg, rgba(56,159,145,0.12), transparent 36%, rgba(168,86,118,0.08) 100%);
-  opacity: 0.72;
+  display: none;
+  content: none;
 }
 
 [data-theme="light"] body[data-glass="on"]:not(.widget-shell) .titlebar,

@@ -200,6 +200,7 @@ def test_settings_modal_surfaces_trust_center():
         'id="trust-status"',
         'id="trust-pending-list"',
         'id="trust-ledger-list"',
+        'id="trust-active-list"',
     ):
         assert dom_id in html
 
@@ -209,12 +210,20 @@ def test_settings_modal_surfaces_trust_center():
     assert "grid.replaceChildren(" in js
     assert "pendingList.replaceChildren" in js
     assert "ledgerList.replaceChildren" in js
+    assert "activeList.replaceChildren" in js
+    assert "trustTaskControl" in js
+    assert "`/api/tasks/${encoded}/${action}`" in js
+    assert "`/api/tasks/${encoded}`, 'DELETE'" in js
     assert "titleEl.textContent = title" in js
     assert "detailEl.textContent = detail" in js
     assert "badgeEl.textContent = badge" in js
+    assert "btn.textContent = action.label" in js
+    assert "btn.addEventListener('click', action.onClick)" in js
     assert ".trust-grid" in css
     assert ".trust-card" in css
     assert ".trust-row" in css
+    assert ".trust-row-actions" in css
+    assert ".trust-action-btn.danger" in css
     assert "#trust-status[data-status='attention']" in css
 
 
@@ -740,6 +749,64 @@ def test_liquid_glass_styles_dashboard_surfaces():
         ".cmdk-panel",
     ):
         assert f"body[data-glass=\"on\"]:not(.widget-shell) {selector}" in css
+
+
+def test_focused_dashboard_idle_state_is_minimal():
+    html = STATIC_HTML.read_text(encoding="utf-8")
+    css = (_STATIC / "dynamic.css").read_text(encoding="utf-8")
+    glass = (_STATIC / "liquid-glass.css").read_text(encoding="utf-8")
+
+    assert 'placeholder="Message AI Computer"' in html
+    assert 'rows="1"' in html
+    assert "body:not(.task-active) .welcome p" in css
+    assert "display: none;" in css
+    assert ".app-shell {\n  grid-template-columns: 244px minmax(0, 1fr);" in css
+    assert "body:not(.task-active) .app-shell.sb-on .main {\n  grid-row: 1 / 3;" in css
+    assert "body:not(.task-active) .app-shell.sb-on .statusbar {\n  display: none;" in css
+    assert "body:not(.task-active) .topbar {\n  position: absolute;" in css
+    assert "body:not(.task-active) .topbar .nav-toggle {\n  pointer-events: auto;" in css
+    assert "body[data-glass=\"on\"]:not(.widget-shell):not(.task-active) .topbar {\n  border-color: transparent !important;" in css
+    assert "background-image: none !important;" in css
+    assert ".composer textarea {\n  display: block;" in css
+    assert "overflow: hidden;" in css
+    assert ".main::before {\n  display: none;" in css
+    assert "body[data-glass=\"on\"]:not(.widget-shell) {\n  background: var(--bg-0);" in glass
+    assert "body[data-glass=\"on\"]:not(.widget-shell)::before {\n  display: none;" in glass
+
+
+def test_focused_dashboard_active_stream_is_single_column():
+    css = (_STATIC / "dynamic.css").read_text(encoding="utf-8")
+
+    assert ".feed {\n  width: min(740px, 100%);" in css
+    assert ".feed-card::before,\n.feed-card.is-active::before,\n.turn-summary::before,\n.status-row::before" in css
+    assert "display: none !important;\n  content: none !important;" in css
+    assert ".feed-card,\n.turn-summary,\n.status-row {\n  padding-left: 0;" in css
+    assert ".topbar .control-btn" in css
+
+
+def test_focused_dashboard_chrome_hides_secondary_noise():
+    css = (_STATIC / "dynamic.css").read_text(encoding="utf-8")
+    js = (_STATIC / "app.js").read_text(encoding="utf-8", errors="replace")
+
+    assert ".topbar #btn-control-report,\n.topbar #btn-copy-log,\n.topbar #btn-download-log" in css
+    assert "visibility: hidden;" in css
+    assert ".topbar:hover #btn-control-report" in css
+    assert ".topbar:focus-within #btn-control-report" in css
+    assert ".history-item {\n  gap: 0;" in css
+    assert ".history-list .history-item:hover {\n  transform: none;\n  box-shadow: none;" in css
+    assert ".history-dot {\n  width: 0;\n  min-width: 0;\n  opacity: 0;" in css
+    assert ".history-dot.running,\n.history-dot.paused,\n.history-dot.failed" in css
+    assert ".project-folder-path {\n  max-height: 0;\n  opacity: 0;" in css
+    assert ".project-folder-trigger:hover .project-folder-path,\n.project-folder-trigger:focus-visible .project-folder-path" in css
+    assert "#history-count,\n.history-header span:last-child,\n.history-group-count {\n  opacity: 0;" in css
+    assert ".sidebar:hover .history-header span:last-child" in css
+    assert ".sidebar:hover .history-group-count" in css
+    assert ".provider-chips {\n  gap: 8px;\n  height: 0;" in css
+    assert ".sidebar-foot:hover .provider-chips,\n.sidebar-foot:focus-within .provider-chips" in css
+    assert "opacity: 1;\n  transform: translateY(0);" in css
+    assert ".provider-chip span:not(.chip-dot) {\n  display: none;" in css
+    assert ".provider-chip {\n  width: 8px;\n  height: 8px;" in css
+    assert "more.textContent = expanded ? 'Show less' : 'Show more';" in js
 
 
 def test_ai15_voice_widget_v2_drag_strip_hotkey():
