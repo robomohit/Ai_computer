@@ -4640,5 +4640,123 @@
   body.task-active .feed-scroll { padding-top: 18px; }
   body.task-active .feed { padding-bottom: 8px; }
 
-  /* — Sidebar: lighter, airier section headers. — */
+  /* — No timeline "spine" rail. Real Codex streams a clean flowing narrative
+       with NO vertical line. Drop the rail, the per-event dots, and the user
+       accent bar; keep the YOU/AGENT eyebrows. — */
+  .feed::before,
+  .feed.has-events::before { display: none !important; content: none; }
+  .message::before { display: none; }
+  .message.user::after { display: none; }
+  .message.system-success::before,
+  .message.system-error::before,
+  .message.system-cancelled::before,
+  .message.system-note::before { left: 6px; }
+
+  /* — CRITICAL: let the feed SCROLL instead of growing past the viewport and
+       shoving the composer off the bottom of the screen. A flex child needs
+       min-height:0 to shrink below its content and scroll. — */
+  .feed-scroll { min-height: 0; }
+  .composer-wrap { flex: 0 0 auto; }
+
+  /* — Send: a clean circular arrow (Codex), not a labelled pill. — */
+  .send-btn {
+    width: 34px; height: 34px; min-width: 34px;
+    padding: 0;
+    border-radius: 50%;
+    display: inline-grid;
+    place-items: center;
+    background: var(--accent);
+    color: var(--accent-on);
+  }
+  .send-btn kbd, .send-btn span { display: none; }
+  .send-btn svg { display: block; }
+  .send-btn:disabled { opacity: .4; }
+
+  /* — Suggestion chips: ghost pills (transparent → fill on hover). — */
+  .example-btn {
+    background: transparent;
+    border-color: var(--line);
+    color: var(--muted);
+  }
+  .example-btn:hover { background: var(--bg-3); color: var(--ink); }
+
+  /* — Composer icon buttons: smaller, calmer (the send circle is the accent). — */
+  .composer-icon-btn { color: var(--muted-2); }
+  .composer-icon-btn:hover { color: var(--ink); }
+
+  /* — Sidebar: quieter chrome. — */
   .sidebar { background: var(--bg-1); }
+  /* loud session count → a faint muted number */
+  #history-count {
+    color: var(--muted-2);
+    font-size: var(--fs-micro);
+    font-variant-numeric: tabular-nums;
+    opacity: .65;
+  }
+  .history-header {
+    text-transform: uppercase;
+    letter-spacing: .06em;
+    font-size: var(--fs-micro);
+    color: var(--muted-2);
+    padding: 6px 12px 4px;
+  }
+  /* project/mode card: borderless until hover */
+  .project-folder-trigger {
+    border-color: transparent;
+    background: transparent;
+  }
+  .project-folder-trigger:hover { background: var(--bg-2); border-color: var(--line); }
+  .project-folder-label { opacity: .7; }
+  /* new-session button: lighter */
+  .sidebar-button { background: var(--bg-2); border-color: var(--line); }
+  .sidebar-button:hover { background: var(--bg-3); }
+  /* search field: borderless, fills on focus */
+  .history-search input {
+    background: var(--bg-2);
+    border: 1px solid transparent;
+  }
+  .history-search input:focus { border-color: var(--line-2); background: var(--bg-1); }
+
+  /* ════ Chat thread — make it read like an SMS conversation (Codex). ════ */
+
+  /* Your prompt = a small right-aligned grey bubble, not a big page title. */
+  .message.user {
+    width: auto;
+    max-width: 74%;
+    margin: 6px 0 18px auto;     /* margin-left:auto → pushes the bubble right */
+    padding: 9px 14px;
+    border: none;
+    border-bottom: none;
+    border-radius: 16px 16px 5px 16px;
+    background: var(--bg-3);
+    color: var(--ink);
+    font-size: var(--fs-md);
+    font-weight: 400;
+    letter-spacing: 0;
+    line-height: 1.5;
+    white-space: pre-wrap;
+  }
+  .message.user::before,
+  .message.user::after { display: none !important; content: none; }
+
+  /* Agent reply = clean left-aligned narrative (normal body size, no rail). */
+  .message.assistant {
+    padding-left: 0;
+    font-size: var(--fs-md);
+    line-height: 1.6;
+  }
+  .message.assistant::before {
+    margin-left: 0;
+    color: var(--muted-2);
+  }
+
+  /* Thinking = ONE soft breathing dot + a single word. No model name, no
+     second dot, no "—" age. */
+  .status-row { padding-left: 20px; }
+  .status-title::after { display: none !important; }
+  .status-subtitle { display: none !important; }
+  .status-age { display: none !important; }
+  .status-title { color: var(--muted); font-weight: 500; }
+
+  /* Composer floats with room above the window edge (was touching the bottom). */
+  body.task-active .composer-wrap { padding-bottom: 22px; }

@@ -2569,11 +2569,10 @@
     }
 
     if (event.type === 'provider_info') {
-      const label = event.local ? `Local: ${event.model}` : (event.tier ? `${event.tier} tier: ${event.model}` : event.model);
-      if (label) {
-        setLiveStatus('Model', label);
-        const sbm = $('sb-model-val'); if (sbm) sbm.textContent = event.tier || event.model || sbm.textContent;
-      }
+      // Don't surface the raw model id in the thread — just a calm "Thinking".
+      // The model still shows in the status bar / Settings for the curious.
+      setLiveStatus('Thinking');
+      const sbm = $('sb-model-val'); if (sbm) sbm.textContent = event.tier || event.model || sbm.textContent;
       return;
     }
 
