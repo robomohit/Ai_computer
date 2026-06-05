@@ -262,6 +262,9 @@
 
   let historyItems = [];
   let activeHistoryItem = null;
+  const historyExpandedGroups = new Set();   // folder keys whose "see more" is expanded
+  const HISTORY_GROUP_LIMIT = 5;             // show 5 most recent per folder before "See more"
+  let suppressHistoryReflow = false;         // batch flag: skip per-item reflow during bulk load
   let activePlanCard = null;
   let liveStatusCard = null;
   let liveStatusMessage = '';
@@ -1154,10 +1157,89 @@
       inp.dispatchEvent(new Event('input'));
       inp.focus();
     });
-    $('task-history').prepend(item);
+    // Tag the item so reflow can group it by working folder and sort by recency.
+    item.dataset.folder = historyGroupKey(taskRecord);
+    item.dataset.created = String(Date.parse(taskRecord.created_at || taskRecord.timestamp || taskRecord.finished_at || '') || Date.now());
     historyItems.unshift(item);
     bindHistoryItem(item, taskRecord.id);
+    reflowHistoryGroups();
     return item;
+  };
+
+  // ----- Codex-style sidebar: group sessions by the folder they ran in, show
+  // only the 5 most recent per folder, and tuck the rest behind "See more". -----
+  const historyGroupKey = (rec = {}) => (rec.context && rec.context.project_folder) || rec.project_folder || '';
+  const historyGroupLabel = (key) => (key ? pathLeaf(key) : 'General');
+
+  const reflowHistoryGroups = () => {
+    if (suppressHistoryReflow) return;
+    const container = $('task-history');
+    if (!container) return;
+    const query = ($('history-search')?.value || '').trim().toLowerCase();
+    // Drop only the group wrappers / empty placeholder; the item nodes live in
+    // historyItems and get re-appended below, so their state (active, dot) survives.
+    container.querySelectorAll('.history-group, .history-empty, .history-seemore').forEach((el) => el.remove());
+    if (!historyItems.length) {
+      const empty = document.createElement('div');
+      empty.className = 'history-empty';
+      empty.textContent = 'Recent runs appear here. Click any session to replay the full stream.';
+      container.appendChild(empty);
+      return;
+    }
+    // Bucket items by folder key, remembering each group's most-recent timestamp.
+    const groups = new Map();
+    historyItems.forEach((item) => {
+      const key = item.dataset.folder || '';
+      if (!groups.has(key)) groups.set(key, { key, items: [], recent: 0 });
+      const g = groups.get(key);
+      g.items.push(item);
+      g.recent = Math.max(g.recent, Number(item.dataset.created) || 0);
+    });
+    // Most recently active folder first.
+    const ordered = [...groups.values()].sort((a, b) => b.recent - a.recent);
+    ordered.forEach((g) => {
+      g.items.sort((a, b) => (Number(b.dataset.created) || 0) - (Number(a.dataset.created) || 0));
+      // When searching, ignore the cap and only show matches.
+      const matches = query
+        ? g.items.filter((it) => (it.querySelector('.history-goal')?.textContent || '').toLowerCase().includes(query))
+        : g.items;
+      if (!matches.length) return;
+      const expanded = historyExpandedGroups.has(g.key) || !!query;
+      const wrap = document.createElement('div');
+      wrap.className = 'history-group';
+      wrap.dataset.folder = g.key;
+      const head = document.createElement('div');
+      head.className = 'history-group-head';
+      const name = document.createElement('span');
+      name.className = 'history-group-name';
+      name.textContent = historyGroupLabel(g.key);
+      name.title = g.key || 'General mode · Desktop + Home';
+      const count = document.createElement('span');
+      count.className = 'history-group-count';
+      count.textContent = String(matches.length);
+      head.append(name, count);
+      const list = document.createElement('div');
+      list.className = 'history-group-items';
+      matches.forEach((it, idx) => {
+        it.classList.toggle('history-overflow', !expanded && idx >= HISTORY_GROUP_LIMIT);
+        list.appendChild(it);
+      });
+      wrap.append(head, list);
+      // "See more / Show less" only when a folder has more than the cap (never while searching).
+      if (!query && matches.length > HISTORY_GROUP_LIMIT) {
+        const more = document.createElement('button');
+        more.type = 'button';
+        more.className = 'history-seemore';
+        more.textContent = expanded ? 'Show less' : `See ${matches.length - HISTORY_GROUP_LIMIT} more`;
+        more.addEventListener('click', () => {
+          if (historyExpandedGroups.has(g.key)) historyExpandedGroups.delete(g.key);
+          else historyExpandedGroups.add(g.key);
+          reflowHistoryGroups();
+        });
+        wrap.appendChild(more);
+      }
+      container.appendChild(wrap);
+    });
   };
 
   const refreshHistoryCount = () => { $('history-count').textContent = String(historyItems.length); };
@@ -1175,19 +1257,16 @@
     };
   };
 
-  const filterHistory = () => {
-    const q = $('history-search').value.trim().toLowerCase();
-    historyItems.forEach((item) => {
-      const goal = item.querySelector('.history-goal')?.textContent.toLowerCase() || '';
-      item.style.display = !q || goal.includes(q) ? '' : 'none';
-    });
-  };
+  const filterHistory = () => { reflowHistoryGroups(); };
 
   const addActiveHistoryItem = (goal) => {
     const empty = $('task-history').querySelector('.history-empty');
     if (empty) empty.remove();
     historyItems.forEach((item) => item.classList.remove('active'));
-    const item = renderHistoryItem({ id: task, goal, status: 'running', created_at: new Date().toISOString() }, true);
+    const item = renderHistoryItem({
+      id: task, goal, status: 'running', created_at: new Date().toISOString(),
+      context: { project_folder: projectFolderState.selectedPath || null },
+    }, true);
     activeHistoryItem = item;
     refreshHistoryCount();
     return item;
@@ -3205,6 +3284,7 @@
         created_at: record.created_at,
         mode: record.mode,
         model: record.model,
+        context: record.context,
       }, true);
       refreshHistoryCount();
     }
@@ -3517,10 +3597,13 @@
       refreshProviderChips();
       await api(`/api/tasks?cb=${Date.now()}`).then((r) => {
         const tasks = [...(r.tasks || [])].reverse();
-        if (tasks.length) $('task-history').innerHTML = '';
+        if (tasks.length) { $('task-history').innerHTML = ''; historyItems = []; historyExpandedGroups.clear(); }
+        suppressHistoryReflow = true;
         tasks.forEach((it) => renderHistoryItem(it));
+        suppressHistoryReflow = false;
+        reflowHistoryGroups();
         refreshHistoryCount();
-      }).catch(() => {});
+      }).catch(() => { suppressHistoryReflow = false; });
       await recoverActiveTask();
       loadSkills();
       loadReadiness();
