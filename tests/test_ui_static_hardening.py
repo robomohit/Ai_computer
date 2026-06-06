@@ -665,18 +665,18 @@ def test_qt_capsule_dynamic_labels_are_plain_text_and_links_are_safe():
 
 
 def test_qt_capsule_open_folder_payload_is_local_directory_only(tmp_path):
-    from app.widget.capsule_widgets import _safe_local_folder_path
+    from app.markdown_render import safe_local_folder_path
 
     folder = tmp_path / "folder"
     folder.mkdir()
     file_path = tmp_path / "file.txt"
     file_path.write_text("not a folder", encoding="utf-8")
 
-    assert _safe_local_folder_path(str(folder)) == str(folder.resolve())
-    assert _safe_local_folder_path(str(file_path)) == ""
-    assert _safe_local_folder_path(str(tmp_path / "missing")) == ""
-    assert _safe_local_folder_path("https://example.com/folder") == ""
-    assert _safe_local_folder_path(f"{folder}\n--bad") == ""
+    assert safe_local_folder_path(str(folder)) == str(folder.resolve())
+    assert safe_local_folder_path(str(file_path)) == ""
+    assert safe_local_folder_path(str(tmp_path / "missing")) == ""
+    assert safe_local_folder_path("https://example.com/folder") == ""
+    assert safe_local_folder_path(f"{folder}\n--bad") == ""
 
 
 def test_desktop_dashboard_launch_stays_native_not_browser_fallback():
