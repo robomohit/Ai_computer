@@ -1,14 +1,14 @@
 # Packaging AI Computer for distribution
 
-This builds AI Computer into a **runnable app that does not include your source
-code** - so you can hand people the product while your repository stays private.
+This builds AI Computer into a **runnable Windows app bundle** that people can
+launch without installing Python first. The project is source-available under
+the PolyForm Noncommercial license, so packaging is about making installation
+friendlier - not replacing the license or hiding that this repository exists.
 
-> **Why this works:** users download and run a compiled app. The Python source
-> (the engine, the UIA resolver, your heuristics) is bundled in a form they
-> install and *run*, not *read*. It is the same way you use Spotify or Discord
-> without ever seeing their code. A determined expert could decompile a Python
-> build, so treat it as "hard to copy," not "impossible." For maximum secrecy,
-> run the engine as a hosted service instead (see "Going further" below).
+> **Important:** PyInstaller packages Python bytecode and dependencies into a
+> convenient app folder. It is not a security boundary and it does not change
+> the source-available license terms. A determined expert can inspect or
+> decompile a Python build, so do not rely on packaging to protect secrets.
 
 ---
 
@@ -71,16 +71,16 @@ folder (Desktop, Documents) just works.
 
 ---
 
-## 5. Going further (maximum source protection)
+## 5. Going further
 
-PyInstaller hides the source well but is not bulletproof. If you want the engine
-to be *truly* unreadable:
+If you need a commercial build, stronger tamper resistance, or a hosted variant,
+these are separate engineering and licensing decisions:
 
-- **Hosted engine:** keep the UIA resolver on a server and have the shipped app
-  call it over the network. Strongest protection, but needs internet + infra and
-  weakens the "fully local & free" pitch.
-- **Closed binary module:** compile the sensitive modules (e.g. the resolver)
-  with Cython/Nuitka into native `.pyd` files and ship those instead of `.py`.
-  Much harder to decompile than plain PyInstaller bytecode.
+- **Commercial license:** the public repository is PolyForm Noncommercial. Get a
+  separate license before shipping AI Computer or derivatives commercially.
+- **Hosted engine:** move selected execution behind a service boundary if you
+  need centralized updates, policy enforcement, or enterprise audit storage.
+- **Native modules:** compile sensitive modules with Cython/Nuitka if you want
+  stronger tamper resistance in a distributed app.
 
 Either can layer on top of this build when you are ready.

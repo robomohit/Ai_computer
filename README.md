@@ -23,6 +23,24 @@ Most computer-use agents take a **screenshot every step** and guess pixel coordi
 - **Uses your browser** - for web tasks (Gmail, Maps, GitHub, and more) it drives Chrome the way you would, with no extra accounts to connect.
 - **Watch it work** - live action ticker and an aqua glow around the app it is touching.
 
+### Privacy and control
+
+AI Computer is designed for local, inspectable automation rather than a hosted
+black box. It still calls whichever LLM provider you configure, so read your
+provider's data policy before pasting sensitive data, but the app itself gives
+you these controls:
+
+- **Permission scopes per task** - browser, filesystem, shell, screen,
+  clipboard, system, and MCP access are tracked separately.
+- **Approval gates for risky actions** - shell commands, file writes, process
+  termination, dynamic MCP tools, and other high-risk actions pause for review.
+- **Untrusted-content boundaries** - web pages, snippets, and accessibility
+  trees are wrapped as untrusted input before they reach the model.
+- **Local auth by default** - the local API uses bearer auth and the dashboard
+  is intended for localhost or trusted private networks only.
+- **Stop control** - running tasks can be killed from the UI when you need to
+  take back the wheel.
+
 ---
 
 ## Requirements
