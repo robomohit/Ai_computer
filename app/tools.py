@@ -1147,8 +1147,6 @@ class ToolExecutor:
     _SINGLE_INSTANCE_APPS = {"Notepad", "Calculator", "Paint"}
 
     def _reuse_existing_window(self, command: str) -> Optional[ToolResult]:
-        if win32gui is None:
-            return None
         title = self._guess_launch_target_title(command)
         if title not in self._SINGLE_INSTANCE_APPS:
             return None
