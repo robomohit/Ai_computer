@@ -9,6 +9,7 @@
   }/*EDITMODE-END*/;
 
   const tweakState = { ...TWEAK_DEFAULTS };
+  const MAX_FEED_CHILDREN = 260;
 
   const applyTweaks = () => {
     document.documentElement.setAttribute('data-theme', tweakState.theme);
@@ -642,6 +643,20 @@
     document.body.classList.add('task-active');
   };
 
+  const pruneFeed = () => {
+    const feed = $('feed');
+    if (!feed) return;
+    while (feed.children.length > MAX_FEED_CHILDREN) {
+      const victim = Array.from(feed.children).find((child) => (
+        child !== lastActiveCard
+        && child !== activePlanCard
+        && child.id !== 'welcome'
+      ));
+      if (!victim) break;
+      victim.remove();
+    }
+  };
+
   const removeWelcome = () => {
     const w = $('welcome');
     if (w) w.remove();
@@ -818,6 +833,7 @@
       el.textContent = text;
     }
     $('feed').appendChild(el);
+    pruneFeed();
     scrollFeed();
     return el;
   };
@@ -876,6 +892,7 @@
     const card = document.createElement('div');
     card.className = `feed-card ${className}`.trim();
     $('feed').appendChild(card);
+    pruneFeed();
     setActiveCard(card);
     scrollFeed();
     return card;

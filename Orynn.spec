@@ -95,7 +95,7 @@ exe = EXE(
     bootloader_ignore_signals=False,
     strip=False,
     upx=False,            # UPX can trip antivirus heuristics — leave off for trust
-    console=True,         # TEMP DEBUG
+    console=False,
     disable_windowed_traceback=False,
     icon=_icon,
 )
