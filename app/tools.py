@@ -1168,13 +1168,21 @@ class ToolExecutor:
         if reuse is not None:
             return reuse
         try:
+            popen_kwargs = {
+                "shell": True,
+                "cwd": cwd,
+                "stdout": subprocess.DEVNULL,
+                "stderr": subprocess.DEVNULL,
+            }
+            creationflags = (
+                getattr(subprocess, "DETACHED_PROCESS", 0)
+                | getattr(subprocess, "CREATE_NEW_PROCESS_GROUP", 0)
+            )
+            if creationflags:
+                popen_kwargs["creationflags"] = creationflags
             subprocess.Popen(
                 command,
-                shell=True,
-                cwd=cwd,
-                stdout=subprocess.DEVNULL,
-                stderr=subprocess.DEVNULL,
-                creationflags=subprocess.DETACHED_PROCESS | subprocess.CREATE_NEW_PROCESS_GROUP,
+                **popen_kwargs,
             )
         except Exception as e:
             return ToolResult(ok=False, output=f"Launch failed: {e}")

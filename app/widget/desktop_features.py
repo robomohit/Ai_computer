@@ -17,12 +17,16 @@ import os
 import re
 import sys
 import time
-import winreg
 from ctypes import wintypes
 from pathlib import Path
 from typing import Optional
 
 from ..state_store import read_json, workspace_state_path, write_json
+
+try:
+    import winreg
+except ImportError:  # pragma: no cover - exercised on non-Windows CI hosts.
+    winreg = None
 
 
 # ─────────────────────────────────────────────────────────────────────────────
@@ -229,6 +233,8 @@ _AUTOSTART_NAME = "AI_Computer"
 
 
 def is_autostart_enabled() -> bool:
+    if winreg is None:
+        return False
     try:
         with winreg.OpenKey(winreg.HKEY_CURRENT_USER, _RUN_KEY) as k:
             try:
@@ -243,6 +249,8 @@ def is_autostart_enabled() -> bool:
 def set_autostart(enable: bool, launch_cmd: Optional[str] = None) -> bool:
     """Toggle autostart. `launch_cmd` defaults to `pythonw run_desktop.py`
     in the current Ai_computer folder."""
+    if winreg is None:
+        return False
     if launch_cmd is None:
         # Use pythonw to launch without a console window
         py = sys.executable
