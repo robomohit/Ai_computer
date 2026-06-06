@@ -11,16 +11,15 @@
 [![Python](https://img.shields.io/badge/python-3.10%2B-3776AB?logo=python&logoColor=white)](https://python.org/downloads)
 [![Stars](https://img.shields.io/github/stars/robomohit/Orynn?style=social)](https://github.com/robomohit/Orynn/stargazers)
 
-[**Download**](https://github.com/robomohit/Orynn/releases) · [Quick Start](#quick-start-3-steps) · [Why Orynn?](#why-orynn) · [Modes](#modes) · [Security](SECURITY.md)
+[**Download**](https://github.com/robomohit/Orynn/releases) · [Quick Start](#quick-start-3-steps) · [Why Orynn?](#why-orynn) · [Demo Script](docs/DEMO_SCRIPT.md) · [Benchmarks](docs/BENCHMARKS.md) · [Roadmap](docs/ROADMAP.md)
 
 </div>
 
 > **An autonomous AI agent that controls your computer using plain English.** Give it a goal - it plans, acts, and shows you exactly what it is doing in real time, in a floating glass capsule that sits on top of your desktop.
 
-<!-- TODO: drop a demo GIF here — it's the single biggest driver of stars.
-     Record the capsule completing a real task and save as docs/demo.gif, then:
-     <p align="center"><img src="docs/demo.gif" alt="Orynn demo" width="720"></p> -->
-
+<p align="center">
+  <img src="docs/hero.svg" alt="Orynn controls Windows apps by UI Automation control names instead of screenshots" width="820">
+</p>
 
 > Free to run on [OpenRouter](https://openrouter.ai)'s free-tier models (subject to their limits). Coding and browser modes work on Windows, macOS, and Linux; native desktop control is Windows-only.
 
