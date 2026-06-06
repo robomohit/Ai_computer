@@ -1,11 +1,10 @@
 # -*- mode: python ; coding: utf-8 -*-
-"""PyInstaller build spec for AI Computer.
+"""PyInstaller build spec for Kynvoq.
 
-Produces a self-contained desktop app (dist/AI Computer/AI Computer.exe) that
-bundles the engine + UI so it runs WITHOUT the source code — that's how you
-distribute the app while keeping the repo private.
+Produces a self-contained desktop app (dist/Kynvoq/Kynvoq.exe) that
+bundles the engine + UI into a runnable Windows desktop app.
 
-Build:  python -m PyInstaller AI-Computer.spec --noconfirm
+Build:  python -m PyInstaller Kynvoq.spec --noconfirm
 (or just run build.bat)
 
 Notes:
@@ -51,7 +50,7 @@ for _pkg in _COLLECT:
 
 # App icon (optional)
 _icon = None
-for _cand in ("app_icon.ico", "ai_computer_app_icon_1777005021291.png"):
+for _cand in ("app_icon.ico", "kynvoq_app_icon.png"):
     if os.path.exists(_cand):
         _icon = _cand
         break
@@ -91,7 +90,7 @@ exe = EXE(
     a.scripts,
     [],
     exclude_binaries=True,
-    name="AI Computer",
+    name="Kynvoq",
     debug=False,
     bootloader_ignore_signals=False,
     strip=False,
@@ -108,5 +107,5 @@ coll = COLLECT(
     strip=False,
     upx=False,
     upx_exclude=[],
-    name="AI Computer",
+    name="Kynvoq",
 )

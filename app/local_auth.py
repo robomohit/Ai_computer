@@ -4,19 +4,36 @@ import os
 from pathlib import Path
 
 
+def _config_home() -> Path:
+    return Path(os.environ.get("XDG_CONFIG_HOME", str(Path.home() / ".config")))
+
+
+def _key_file_candidates() -> list[Path]:
+    base = _config_home()
+    return [
+        base / "kynvoq" / ".api_key",
+        base / "ai_computer" / ".api_key",
+    ]
+
+
 def local_api_key() -> str:
     """Return the local API key used by the backend, without generating one."""
-    env_key = os.environ.get("AGENT_API_KEY") or os.environ.get("AI_COMPUTER_API_KEY")
+    env_key = (
+        os.environ.get("AGENT_API_KEY")
+        or os.environ.get("KYNVOQ_API_KEY")
+        or os.environ.get("AI_COMPUTER_API_KEY")
+    )
     if env_key:
         return env_key.strip()
 
-    config_dir = Path(os.environ.get("XDG_CONFIG_HOME", str(Path.home() / ".config"))) / "ai_computer"
-    key_file = config_dir / ".api_key"
-    try:
-        if key_file.exists():
-            return key_file.read_text(encoding="utf-8").strip()
-    except OSError:
-        return ""
+    for key_file in _key_file_candidates():
+        try:
+            if key_file.exists():
+                key = key_file.read_text(encoding="utf-8").strip()
+                if key:
+                    return key
+        except OSError:
+            continue
     return ""
 
 

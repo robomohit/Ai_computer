@@ -85,7 +85,7 @@ def test_capsule_events_requires_bearer_auth(monkeypatch):
 def test_local_auth_prefers_environment_key(monkeypatch, tmp_path):
     from app.local_auth import local_api_key, local_auth_headers
 
-    key_dir = tmp_path / "ai_computer"
+    key_dir = tmp_path / "kynvoq"
     key_dir.mkdir()
     (key_dir / ".api_key").write_text("filekey456", encoding="utf-8")
     monkeypatch.setenv("XDG_CONFIG_HOME", str(tmp_path))
@@ -95,29 +95,57 @@ def test_local_auth_prefers_environment_key(monkeypatch, tmp_path):
     assert local_auth_headers() == {"Authorization": "Bearer envkey123"}
 
 
-def test_local_auth_accepts_ai_computer_api_key(monkeypatch, tmp_path):
+def test_local_auth_accepts_kynvoq_api_key(monkeypatch, tmp_path):
     from app.local_auth import local_api_key, local_auth_headers
 
     monkeypatch.delenv("AGENT_API_KEY", raising=False)
-    monkeypatch.setenv("AI_COMPUTER_API_KEY", "alternate123")
+    monkeypatch.setenv("KYNVOQ_API_KEY", "alternate123")
     monkeypatch.setenv("XDG_CONFIG_HOME", str(tmp_path))
 
     assert local_api_key() == "alternate123"
     assert local_auth_headers() == {"Authorization": "Bearer alternate123"}
 
 
+def test_local_auth_accepts_legacy_ai_computer_api_key(monkeypatch, tmp_path):
+    from app.local_auth import local_api_key, local_auth_headers
+
+    monkeypatch.delenv("AGENT_API_KEY", raising=False)
+    monkeypatch.delenv("KYNVOQ_API_KEY", raising=False)
+    monkeypatch.setenv("AI_COMPUTER_API_KEY", "legacy123")
+    monkeypatch.setenv("XDG_CONFIG_HOME", str(tmp_path))
+
+    assert local_api_key() == "legacy123"
+    assert local_auth_headers() == {"Authorization": "Bearer legacy123"}
+
+
 def test_local_auth_reads_generated_config_key(monkeypatch, tmp_path):
     from app.local_auth import local_api_key, local_auth_headers
 
-    key_dir = tmp_path / "ai_computer"
+    key_dir = tmp_path / "kynvoq"
     key_dir.mkdir()
     (key_dir / ".api_key").write_text("filekey456", encoding="utf-8")
     monkeypatch.delenv("AGENT_API_KEY", raising=False)
+    monkeypatch.delenv("KYNVOQ_API_KEY", raising=False)
     monkeypatch.delenv("AI_COMPUTER_API_KEY", raising=False)
     monkeypatch.setenv("XDG_CONFIG_HOME", str(tmp_path))
 
     assert local_api_key() == "filekey456"
     assert local_auth_headers() == {"Authorization": "Bearer filekey456"}
+
+
+def test_local_auth_reads_legacy_generated_config_key(monkeypatch, tmp_path):
+    from app.local_auth import local_api_key, local_auth_headers
+
+    key_dir = tmp_path / "ai_computer"
+    key_dir.mkdir()
+    (key_dir / ".api_key").write_text("legacyfile456", encoding="utf-8")
+    monkeypatch.delenv("AGENT_API_KEY", raising=False)
+    monkeypatch.delenv("KYNVOQ_API_KEY", raising=False)
+    monkeypatch.delenv("AI_COMPUTER_API_KEY", raising=False)
+    monkeypatch.setenv("XDG_CONFIG_HOME", str(tmp_path))
+
+    assert local_api_key() == "legacyfile456"
+    assert local_auth_headers() == {"Authorization": "Bearer legacyfile456"}
 
 
 def test_task_id_rejects_path_traversal(monkeypatch):
@@ -159,7 +187,7 @@ def test_cors_reject(monkeypatch):
 
 
 def test_sensitive_utility_routes_require_auth(monkeypatch, tmp_path):
-    monkeypatch.setenv("AI_COMPUTER_WORKSPACE", str(tmp_path))
+    monkeypatch.setenv("KYNVOQ_WORKSPACE", str(tmp_path))
     client, _ = _client(monkeypatch)
     victim = tmp_path / "victim.txt"
     victim.write_text("keep me", encoding="utf-8")
@@ -211,7 +239,7 @@ def test_mutating_api_routes_have_auth_or_explicit_public_exception(monkeypatch)
 
 
 def test_capsule_delete_is_reversible_by_default(monkeypatch, tmp_path):
-    monkeypatch.setenv("AI_COMPUTER_WORKSPACE", str(tmp_path))
+    monkeypatch.setenv("KYNVOQ_WORKSPACE", str(tmp_path))
     client, _ = _client(monkeypatch)
     victim = tmp_path / "victim.txt"
     victim.write_text("restore me", encoding="utf-8")
@@ -243,7 +271,7 @@ def test_capsule_delete_is_reversible_by_default(monkeypatch, tmp_path):
 
 
 def test_capsule_delete_api_ignores_permanent_delete_requests(monkeypatch, tmp_path):
-    monkeypatch.setenv("AI_COMPUTER_WORKSPACE", str(tmp_path))
+    monkeypatch.setenv("KYNVOQ_WORKSPACE", str(tmp_path))
     client, _ = _client(monkeypatch)
     victim = tmp_path / "victim.txt"
     victim.write_text("trash me reversibly", encoding="utf-8")
@@ -265,7 +293,7 @@ def test_capsule_delete_api_ignores_permanent_delete_requests(monkeypatch, tmp_p
 
 
 def test_capsule_filesystem_endpoints_reject_malformed_paths(monkeypatch, tmp_path):
-    monkeypatch.setenv("AI_COMPUTER_WORKSPACE", str(tmp_path))
+    monkeypatch.setenv("KYNVOQ_WORKSPACE", str(tmp_path))
     client, _ = _client(monkeypatch)
     headers = {"Authorization": "Bearer token123"}
 
@@ -357,10 +385,11 @@ def test_capsule_push_widget_uses_generated_config_key(monkeypatch, tmp_path):
 
         return Response()
 
-    key_dir = tmp_path / "ai_computer"
+    key_dir = tmp_path / "kynvoq"
     key_dir.mkdir()
     (key_dir / ".api_key").write_text("filekey456", encoding="utf-8")
     monkeypatch.delenv("AGENT_API_KEY", raising=False)
+    monkeypatch.delenv("KYNVOQ_API_KEY", raising=False)
     monkeypatch.delenv("AI_COMPUTER_API_KEY", raising=False)
     monkeypatch.setenv("XDG_CONFIG_HOME", str(tmp_path))
     monkeypatch.setattr("httpx.post", fake_post)
@@ -378,7 +407,7 @@ def test_qt_capsule_event_listener_sends_bearer_token():
 
 
 def test_capsule_restore_rejects_unmanifested_paths(monkeypatch, tmp_path):
-    monkeypatch.setenv("AI_COMPUTER_WORKSPACE", str(tmp_path))
+    monkeypatch.setenv("KYNVOQ_WORKSPACE", str(tmp_path))
     client, _ = _client(monkeypatch)
     source = tmp_path / "source.txt"
     destination = tmp_path / "destination.txt"
@@ -393,13 +422,13 @@ def test_capsule_restore_rejects_unmanifested_paths(monkeypatch, tmp_path):
     assert response.status_code == 200
     body = response.json()
     assert body["count"] == 0
-    assert "not in AI Computer trash manifest" in body["errors"][0]["error"]
+    assert "not in Kynvoq trash manifest" in body["errors"][0]["error"]
     assert source.exists()
     assert not destination.exists()
 
 
 def test_capsule_restore_uses_manifest_destination_not_request_body(monkeypatch, tmp_path):
-    monkeypatch.setenv("AI_COMPUTER_WORKSPACE", str(tmp_path))
+    monkeypatch.setenv("KYNVOQ_WORKSPACE", str(tmp_path))
     client, _ = _client(monkeypatch)
     victim = tmp_path / "victim.txt"
     forged_destination = tmp_path / "forged.txt"

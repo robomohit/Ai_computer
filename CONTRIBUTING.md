@@ -1,4 +1,4 @@
-# Contributing to AI Computer
+# Contributing to Kynvoq
 
 Thanks for your interest! This is a **source-available** project under the
 [PolyForm Noncommercial](LICENSE) license - you are welcome to read, learn from,
@@ -7,8 +7,8 @@ fix, and extend it for any noncommercial purpose.
 ## Getting set up
 
 ```bash
-git clone https://github.com/robomohit/Ai_computer.git
-cd Ai_computer
+git clone https://github.com/robomohit/Kynvoq.git
+cd Kynvoq
 setup.bat            # Windows  (setup.sh on macOS/Linux)
 ```
 

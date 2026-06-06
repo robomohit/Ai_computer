@@ -57,7 +57,7 @@ def discover_project_rules(workspace: Path, *, max_chars: int = 12000) -> str:
             if text:
                 chunks.append(f"### {rel}\n{text}")
 
-    for rules_dir in (workspace / ".windsurf" / "rules", workspace / ".aicomputer" / "rules"):
+    for rules_dir in (workspace / ".windsurf" / "rules", workspace / ".kynvoq" / "rules", workspace / ".aicomputer" / "rules"):
         if not rules_dir.exists():
             continue
         for path in sorted(rules_dir.glob("*.md"))[:8]:
@@ -72,8 +72,8 @@ def discover_project_rules(workspace: Path, *, max_chars: int = 12000) -> str:
 def expand_workflow_goal(goal: str, workspace: Path) -> str:
     """Expand `/workflow rest of prompt` commands using local workflow files.
 
-    Local workflow files live at `.aicomputer/workflows/<name>.md`; a small set
-    of useful built-ins is provided so the feature works immediately.
+    Local workflow files live at `.kynvoq/workflows/<name>.md`; legacy
+    `.aicomputer/workflows/<name>.md` files are still accepted.
     """
     text = (goal or "").strip()
     match = re.match(r"^/(?P<name>[A-Za-z0-9_-]+)(?:\s+(?P<body>.*))?$", text, re.DOTALL)
@@ -81,8 +81,17 @@ def expand_workflow_goal(goal: str, workspace: Path) -> str:
         return goal
     name = match.group("name").lower()
     body = (match.group("body") or "").strip()
-    workflow_path = workspace.expanduser().resolve() / ".aicomputer" / "workflows" / f"{name}.md"
-    workflow = _safe_read_text(workflow_path, 6000) if workflow_path.exists() else DEFAULT_WORKFLOWS.get(name, "")
+    root = workspace.expanduser().resolve()
+    workflow_candidates = [
+        root / ".kynvoq" / "workflows" / f"{name}.md",
+        root / ".aicomputer" / "workflows" / f"{name}.md",
+    ]
+    workflow = ""
+    for workflow_path in workflow_candidates:
+        if workflow_path.exists():
+            workflow = _safe_read_text(workflow_path, 6000)
+            break
+    workflow = workflow or DEFAULT_WORKFLOWS.get(name, "")
     if not workflow:
         return goal
     return (
@@ -166,12 +175,16 @@ def detect_ollama(base_url: Optional[str] = None, *, timeout: float = 0.8) -> Di
 
 
 def run_task_hooks(workspace: Path, event: str, payload: Dict[str, Any], *, timeout: float = 60.0) -> List[Dict[str, Any]]:
-    """Run optional local hooks from `.aicomputer/hooks.json`.
+    """Run optional local hooks from `.kynvoq/hooks.json`.
 
     Shape:
       {"task_done": [{"name": "tests", "command": "pytest -q"}]}
     """
-    config_path = workspace.expanduser().resolve() / ".aicomputer" / "hooks.json"
+    root = workspace.expanduser().resolve()
+    config_path = root / ".kynvoq" / "hooks.json"
+    legacy_config_path = root / ".aicomputer" / "hooks.json"
+    if not config_path.exists() and legacy_config_path.exists():
+        config_path = legacy_config_path
     if not config_path.exists():
         return []
     try:
@@ -183,7 +196,9 @@ def run_task_hooks(workspace: Path, event: str, payload: Dict[str, Any], *, time
         return []
     results: List[Dict[str, Any]] = []
     env = os.environ.copy()
-    env.update({f"AI_COMPUTER_{k.upper()}": str(v) for k, v in payload.items() if isinstance(v, (str, int, float, bool))})
+    hook_values = {str(k).upper(): str(v) for k, v in payload.items() if isinstance(v, (str, int, float, bool))}
+    env.update({f"KYNVOQ_{k}": v for k, v in hook_values.items()})
+    env.update({f"AI_COMPUTER_{k}": v for k, v in hook_values.items()})
     for idx, hook in enumerate(hooks[:5]):
         if not isinstance(hook, dict) or not hook.get("command"):
             continue
@@ -225,7 +240,7 @@ def create_git_checkpoint(workspace: Path, task_id: str, message: str) -> Dict[s
     if status.returncode != 0 or not status.stdout.strip():
         return {"ok": True, "skipped": True, "reason": "no changes"}
     _git(workspace, ["add", "-A"])
-    commit_msg = f"AI Computer checkpoint: {message[:72] or task_id}\n\nTask: {task_id}"
+    commit_msg = f"Kynvoq checkpoint: {message[:72] or task_id}\n\nTask: {task_id}"
     commit = _git(workspace, ["commit", "-m", commit_msg])
     if commit.returncode != 0:
         return {"ok": False, "error": (commit.stderr or commit.stdout).strip()[:1000]}
@@ -246,7 +261,7 @@ def revert_git_checkpoint(workspace: Path, commit: str) -> Dict[str, Any]:
 
 def send_completion_notification(goal: str, status: str, reason: str) -> Dict[str, Any]:
     """Send best-effort completion notifications via common free channels."""
-    title = f"AI Computer task {status}"
+    title = f"Kynvoq task {status}"
     text = f"{title}\n\nGoal: {goal[:500]}\n\nResult: {reason[:1000]}"
     sent: List[str] = []
     errors: List[str] = []

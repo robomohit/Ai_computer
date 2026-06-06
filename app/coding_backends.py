@@ -1,6 +1,6 @@
 """Pluggable coding backends.
 
-AI Computer runs on cheap/free orchestration models. Those are weak at real
+Kynvoq runs on cheap/free orchestration models. Those are weak at real
 coding, so coding-heavy subtasks can be delegated to a stronger backend the
 user has connected — e.g. the Claude Code CLI.
 
@@ -25,7 +25,8 @@ from pathlib import Path
 from typing import Any, Dict, List, Optional
 
 # Where user-declared backends live. Mirrors the .acpxrc.json shape.
-DEFAULT_CONFIG_PATH = Path.home() / ".aicomputer" / "backends.json"
+DEFAULT_CONFIG_PATH = Path.home() / ".kynvoq" / "backends.json"
+LEGACY_CONFIG_PATH = Path.home() / ".aicomputer" / "backends.json"
 
 # A coding brief can run long (multi-file edits + tests). Hard ceiling.
 SUBMIT_TIMEOUT_SECONDS = 900
@@ -184,7 +185,12 @@ class BackendRegistry:
     def __init__(self, config_path: Optional[Path] = None):
         self.backends: Dict[str, CodingBackend] = {}
         self.default: str = ""
-        self._load(config_path or DEFAULT_CONFIG_PATH)
+        self._load(config_path or self._default_config_path())
+
+    def _default_config_path(self) -> Path:
+        if DEFAULT_CONFIG_PATH.exists() or not LEGACY_CONFIG_PATH.exists():
+            return DEFAULT_CONFIG_PATH
+        return LEGACY_CONFIG_PATH
 
     def _load(self, config_path: Path) -> None:
         cfg: Dict[str, Any] = {}

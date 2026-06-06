@@ -3,7 +3,7 @@ setlocal enabledelayedexpansion
 
 echo.
 echo  ============================================
-echo    AI Computer - Setup
+echo    Kynvoq - Setup
 echo  ============================================
 echo.
 

@@ -1,6 +1,6 @@
-# AI Computer Design System Spec (Stitch-Ready)
+# Kynvoq Design System Spec (Stitch-Ready)
 
-This document specifies the design system for **AI Computer**, an autonomous agentic workspace. The aesthetic is inspired by the "Claude Desktop" and "Cursor" design language: clean, minimalist, high-fidelity, and focused on clarity and speed.
+This document specifies the design system for **Kynvoq**, an autonomous agentic workspace. The aesthetic is inspired by the "Claude Desktop" and "Cursor" design language: clean, minimalist, high-fidelity, and focused on clarity and speed.
 
 ## 1. Brand Identity
 - **Personality**: Professional, precise, minimalist, and intelligent.

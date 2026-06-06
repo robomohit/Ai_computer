@@ -3,7 +3,7 @@
 QtWebEngine (like WebView2) cannot render a transparent background on
 Windows — Chromium's compositor surface is opaque. So the floating widget
 is built from *native* Qt widgets, which DO support per-pixel window
-transparency + Windows Acrylic. It funnels tasks to the local AI Computer
+transparency + Windows Acrylic. It funnels tasks to the local Kynvoq
 server over HTTP.
 
 Launched by `run_desktop.py` (default mode).
@@ -160,9 +160,9 @@ def _clip_region(hwnd: int, w: int, h: int, radius: int) -> None:
 
 
 # ─────────────────────────────────────────────────────────────────────────────
-# RECIPES — the agent's "what can it do for me" entry points.
+# RECIPES - the agent's "what can it do for me" entry points.
 # Each recipe is a high-value action workflow the agent will execute.
-# (Built from research on Perplexity Comet, Manus, Operator, OpenInterpreter.)
+# Built from research on modern computer-use assistants and local automation.
 # ─────────────────────────────────────────────────────────────────────────────
 RECIPES = [
     {
@@ -174,7 +174,7 @@ RECIPES = [
             "Research the topic below across at least 6 reputable web sources. "
             "Use web_search and web_fetch tools. Build a Markdown brief with: "
             "TL;DR (3 bullets), Key facts (5-10), Source links. Save the brief "
-            "to %USERPROFILE%/Documents/AI_Computer_Briefs/<slug>.md and open "
+            "to %USERPROFILE%/Documents/Kynvoq_Briefs/<slug>.md and open "
             "it in Notepad.\n\nTopic: "),
         "mode": "computer_use",
         "verb": "Researching",
@@ -230,7 +230,7 @@ RECIPES = [
             "screenshot, identify the repeating items, and extract each into "
             "a row with columns: title, subtitle, link, any visible price or "
             "metric. Scroll once to capture more rows if obvious. Save as "
-            "%USERPROFILE%\\Documents\\AI_Computer_Scrapes\\<timestamp>.csv "
+            "%USERPROFILE%\\Documents\\Kynvoq_Scrapes\\<timestamp>.csv "
             "and report the row count."),
         "mode": "computer",
         "verb": "Scraping",
@@ -660,7 +660,7 @@ _ICONS = {
     "send": '<path d="M12 19V5"/><path d="M5 12l7-7 7 7"/>',
     "close": '<path d="M6 6l12 12"/><path d="M18 6L6 18"/>',
     "plus": '<line x1="12" y1="5" x2="12" y2="19"/><line x1="5" y1="12" x2="19" y2="12"/>',
-    # Capability row icons (Perplexity-style, thin monochrome strokes)
+    # Capability row icons (thin monochrome strokes)
     "apps":     '<rect x="3" y="3" width="7" height="7" rx="1.2"/><rect x="14" y="3" width="7" height="7" rx="1.2"/><rect x="3" y="14" width="7" height="7" rx="1.2"/><rect x="14" y="14" width="7" height="7" rx="1.2"/>',
     "folder":   '<path d="M3 7.5a2 2 0 0 1 2-2h4l2 2h8a2 2 0 0 1 2 2V17a2 2 0 0 1-2 2H5a2 2 0 0 1-2-2z"/>',
     "image":    '<rect x="3" y="3" width="18" height="18" rx="2.2"/><circle cx="8.5" cy="9" r="1.6"/><path d="m21 16-5-5L5 21"/>',
@@ -1895,11 +1895,11 @@ def main(port: int = 8000) -> int:
 
         def __init__(self) -> None:
             super().__init__()
-            self.setWindowTitle("AI Computer Sidekick")
+            self.setWindowTitle("Kynvoq Sidekick")
             flags = Qt.FramelessWindowHint
-            if os.getenv("AI_COMPUTER_TOOL_WINDOW", "1").lower() not in {"0", "false", "no"}:
+            if (os.getenv("KYNVOQ_TOOL_WINDOW") or os.getenv("AI_COMPUTER_TOOL_WINDOW", "1")).lower() not in {"0", "false", "no"}:
                 flags |= Qt.Tool
-            if os.getenv("AI_COMPUTER_TOPMOST", "1").lower() not in {"0", "false", "no"}:
+            if (os.getenv("KYNVOQ_TOPMOST") or os.getenv("AI_COMPUTER_TOPMOST", "1")).lower() not in {"0", "false", "no"}:
                 flags |= Qt.WindowStaysOnTopHint
             self.setWindowFlags(flags)
             self.setAttribute(Qt.WA_TranslucentBackground, True)
@@ -1980,7 +1980,7 @@ def main(port: int = 8000) -> int:
             pill_row.setContentsMargins(18, 0, 8, 0)
             pill_row.setSpacing(12)
 
-            # Logo inside the pill (Perplexity puts brand mark left-of-input)
+            # Logo inside the pill, left of the input.
             logo = QLabel()
             logo.setPixmap(_icon("logo", 20, "#1A1D24", 1.9).pixmap(20, 20))
             logo.setFixedSize(24, 24)
@@ -2356,8 +2356,8 @@ def main(port: int = 8000) -> int:
 
             # =========================================================
             # ROW 3 — dynamic area: horizontal scroll of app thumbnails
-            # (hidden until Apps is toggled). No bg — the thumbnails float
-            # below the capsule like the Perplexity reference.
+            # (hidden until Apps is toggled). No background - thumbnails float
+            # below the capsule.
             # =========================================================
             self.apps_scroll = QScrollArea()
             self.apps_scroll.setWidgetResizable(True)
@@ -2382,7 +2382,7 @@ def main(port: int = 8000) -> int:
             self.apps_scroll.hide()
             outer.addWidget(self.apps_scroll)
 
-            # ── FOLDER PANEL — Perplexity-style native folder cards
+            # FOLDER PANEL - native folder cards
             # Click the folder cap icon to toggle. Shows the user's main
             # folders with their actual Windows folder icons + item counts.
             self.folder_panel = QFrame()
@@ -2645,7 +2645,7 @@ def main(port: int = 8000) -> int:
             self._scoped_window = win if btn.isChecked() else None
             self._refresh_placeholder()
 
-        # ── Folder panel — Perplexity-style inline cards ──────────────
+        # Folder panel - inline cards
         def _pick_folder(self) -> None:
             """Toggle the inline folder panel showing Downloads/Documents/etc.
             A "Choose Folder" button opens the native dialog for custom paths."""
@@ -3072,7 +3072,7 @@ def main(port: int = 8000) -> int:
             self.input.setPlaceholderText(
                 "Paste your free OpenRouter key, then press Enter…")
             self._spawn_widget({
-                "title": "Welcome to AI Computer",
+                "title": "Welcome to Kynvoq",
                 "icon": "sparkles",
                 "text": ("Let's get you set up. Paste a free OpenRouter API key "
                          "below and press Enter — that's it.\n\n"
@@ -3172,7 +3172,7 @@ def main(port: int = 8000) -> int:
             self._recipe_hint = None
 
             # Multi-turn: KEEP previous answer cards on screen so the capsule
-            # reads as a conversation thread, just like Perplexity.
+            # reads as a conversation thread.
             self.reply.hide()
             self._answer_card = None
             self._answer_text_buf = ""
@@ -3939,7 +3939,7 @@ def main(port: int = 8000) -> int:
 
         def _adjust(self) -> None:
             # Compute the target height from the layout, then SMOOTHLY animate
-            # the capsule to it (Perplexity-style dynamic growth) instead of
+            # the capsule to it with dynamic growth instead of
             # snapping. NOTE: do NOT call adjustSize() here — it resizes the
             # window instantly, which makes cur_h == target_h so the animation
             # below is skipped (the abrupt "snap" expand). layout().activate()
@@ -4520,7 +4520,7 @@ def main(port: int = 8000) -> int:
         _tp.drawLine(16, 21, 16, 23)
         _tp.end()
         tray = QSystemTrayIcon(_QIcon(tray_pm))
-        tray.setToolTip("AI Computer — click to toggle")
+        tray.setToolTip("Kynvoq — click to toggle")
         menu = QMenu()
         act_show = QAction("Show / Hide capsule", menu)
         act_show.triggered.connect(on_toggle)
@@ -4565,7 +4565,7 @@ def main(port: int = 8000) -> int:
         menu.addAction(act_autostart)
 
         menu.addSeparator()
-        act_quit = QAction("Quit AI Computer", menu)
+        act_quit = QAction("Quit Kynvoq", menu)
         act_quit.triggered.connect(app.quit)
         menu.addAction(act_quit)
         tray.setContextMenu(menu)
@@ -4589,4 +4589,4 @@ def main(port: int = 8000) -> int:
 
 
 if __name__ == "__main__":
-    sys.exit(main(int(os.getenv("AI_COMPUTER_PORT", "8000"))))
+    sys.exit(main(int(os.getenv("KYNVOQ_PORT") or os.getenv("AI_COMPUTER_PORT", "8000"))))

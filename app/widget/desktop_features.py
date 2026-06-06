@@ -1,4 +1,4 @@
-"""Desktop-native features that round out the AI Computer widget into a
+"""Desktop-native features that round out the Kynvoq widget into a
 shippable product.
 
 Implements (from research-deferred list):
@@ -161,7 +161,7 @@ LAYOUTS = {
             ("left",  ("code.exe", "cursor.exe", "windsurf.exe",
                        "antigravity.exe", "devenv.exe")),
             ("right", ("chrome.exe", "msedge.exe", "firefox.exe",
-                       "brave.exe", "comet.exe")),
+                       "brave.exe", "arc.exe")),
         ],
     },
     "research": {
@@ -172,7 +172,7 @@ LAYOUTS = {
         },
         "targets": [
             ("main", ("chrome.exe", "msedge.exe", "firefox.exe", "brave.exe",
-                      "comet.exe")),
+                      "arc.exe")),
             ("side", ("notepad.exe", "notion.exe", "obsidian.exe")),
         ],
     },
@@ -229,7 +229,8 @@ def apply_layout(layout_name: str) -> dict:
 # AUTOSTART (HKCU\Software\Microsoft\Windows\CurrentVersion\Run)
 # ─────────────────────────────────────────────────────────────────────────────
 _RUN_KEY = r"Software\Microsoft\Windows\CurrentVersion\Run"
-_AUTOSTART_NAME = "AI_Computer"
+_AUTOSTART_NAME = "Kynvoq"
+_AUTOSTART_LEGACY_NAMES = ("AI_Computer",)
 
 
 def is_autostart_enabled() -> bool:
@@ -237,18 +238,20 @@ def is_autostart_enabled() -> bool:
         return False
     try:
         with winreg.OpenKey(winreg.HKEY_CURRENT_USER, _RUN_KEY) as k:
-            try:
-                winreg.QueryValueEx(k, _AUTOSTART_NAME)
-                return True
-            except FileNotFoundError:
-                return False
+            for value_name in (_AUTOSTART_NAME, *_AUTOSTART_LEGACY_NAMES):
+                try:
+                    winreg.QueryValueEx(k, value_name)
+                    return True
+                except FileNotFoundError:
+                    continue
+            return False
     except Exception:
         return False
 
 
 def set_autostart(enable: bool, launch_cmd: Optional[str] = None) -> bool:
     """Toggle autostart. `launch_cmd` defaults to `pythonw run_desktop.py`
-    in the current Ai_computer folder."""
+    in the current Kynvoq folder."""
     if winreg is None:
         return False
     if launch_cmd is None:
@@ -266,10 +269,11 @@ def set_autostart(enable: bool, launch_cmd: Optional[str] = None) -> bool:
                 winreg.SetValueEx(k, _AUTOSTART_NAME, 0, winreg.REG_SZ,
                                   launch_cmd)
             else:
-                try:
-                    winreg.DeleteValue(k, _AUTOSTART_NAME)
-                except FileNotFoundError:
-                    pass
+                for value_name in (_AUTOSTART_NAME, *_AUTOSTART_LEGACY_NAMES):
+                    try:
+                        winreg.DeleteValue(k, value_name)
+                    except FileNotFoundError:
+                        pass
         return True
     except Exception as exc:
         print(f"[desktop_features] autostart toggle failed: {exc}", flush=True)
@@ -505,7 +509,7 @@ def find_ui_element(query: str, app_hint: str = "") -> dict:
 # ELECTRON ACCESSIBILITY UNLOCK
 #
 # Chromium-based desktop apps (VS Code, Slack, Discord, Teams, Notion, Spotify,
-# Cursor, Antigravity, Comet, etc.) ship with their UI Automation tree empty
+# editors, AI browsers, and similar shells) ship with their UI Automation tree empty
 # until an "assistive technology" is detected. Our UIA agent looks like nothing
 # to them. The fix is a documented Chromium command-line switch:
 #
@@ -529,7 +533,7 @@ ELECTRON_EXES = {
     "slack.exe", "discord.exe", "teams.exe", "ms-teams.exe",
     "notion.exe", "spotify.exe", "obsidian.exe", "github desktop.exe",
     "1password.exe", "figma.exe", "linear.exe", "raycast.exe",
-    "trello.exe", "whatsapp.exe", "signal.exe", "comet.exe",
+    "trello.exe", "whatsapp.exe", "signal.exe", "arc.exe",
 }
 
 
@@ -1714,9 +1718,9 @@ def rag_index_folder(folder: str, name: str = "default") -> dict:
     except ImportError:
         return {"ok": False, "error": "chromadb not installed"}
     try:
+        workspace = os.environ.get("KYNVOQ_WORKSPACE") or os.environ.get("AI_COMPUTER_WORKSPACE", ".")
         client = chromadb.PersistentClient(
-            path=str(Path(os.environ.get(
-                "AI_COMPUTER_WORKSPACE", ".")).resolve() / "rag_db"))
+            path=str(Path(workspace).resolve() / "rag_db"))
         try:
             coll = client.get_collection(name)
         except Exception:
@@ -1751,9 +1755,9 @@ def rag_index_folder(folder: str, name: str = "default") -> dict:
 def rag_query(name: str, query: str, top_k: int = 5) -> dict:
     try:
         import chromadb
+        workspace = os.environ.get("KYNVOQ_WORKSPACE") or os.environ.get("AI_COMPUTER_WORKSPACE", ".")
         client = chromadb.PersistentClient(
-            path=str(Path(os.environ.get(
-                "AI_COMPUTER_WORKSPACE", ".")).resolve() / "rag_db"))
+            path=str(Path(workspace).resolve() / "rag_db"))
         coll = client.get_collection(name)
         res = coll.query(query_texts=[query], n_results=top_k)
         return {"ok": True, "hits": [
