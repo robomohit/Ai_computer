@@ -1,9 +1,26 @@
+<div align="center">
+
 # Orynn
 
-[![CI](https://github.com/robomohit/Orynn/actions/workflows/ci.yml/badge.svg)](https://github.com/robomohit/Orynn/actions/workflows/ci.yml)
-[![License: PolyForm NC](https://img.shields.io/badge/license-PolyForm%20NC%201.0.0-5BE0D0)](LICENSE)
+**The AI agent that actually _uses_ your computer — by control name, not screenshots.**
 
-**An autonomous AI agent that controls your computer using plain English.** Give it a goal - it plans, acts, and shows you exactly what it is doing in real time, in a floating glass capsule that sits on top of your desktop.
+[![CI](https://github.com/robomohit/Orynn/actions/workflows/ci.yml/badge.svg)](https://github.com/robomohit/Orynn/actions/workflows/ci.yml)
+[![Release](https://img.shields.io/github/v/release/robomohit/Orynn?color=5BE0D0&label=download)](https://github.com/robomohit/Orynn/releases)
+[![License: PolyForm NC](https://img.shields.io/badge/license-PolyForm%20NC%201.0.0-5BE0D0)](LICENSE)
+[![Platform](https://img.shields.io/badge/desktop-Windows%2010%2F11-0078D6?logo=windows)](#requirements)
+[![Python](https://img.shields.io/badge/python-3.10%2B-3776AB?logo=python&logoColor=white)](https://python.org/downloads)
+[![Stars](https://img.shields.io/github/stars/robomohit/Orynn?style=social)](https://github.com/robomohit/Orynn/stargazers)
+
+[**Download**](https://github.com/robomohit/Orynn/releases) · [Quick Start](#quick-start-3-steps) · [Why Orynn?](#why-orynn) · [Modes](#modes) · [Security](SECURITY.md)
+
+</div>
+
+> **An autonomous AI agent that controls your computer using plain English.** Give it a goal - it plans, acts, and shows you exactly what it is doing in real time, in a floating glass capsule that sits on top of your desktop.
+
+<!-- TODO: drop a demo GIF here — it's the single biggest driver of stars.
+     Record the capsule completing a real task and save as docs/demo.gif, then:
+     <p align="center"><img src="docs/demo.gif" alt="Orynn demo" width="720"></p> -->
+
 
 > Free to run on [OpenRouter](https://openrouter.ai)'s free-tier models (subject to their limits). Coding and browser modes work on Windows, macOS, and Linux; native desktop control is Windows-only.
 
@@ -22,6 +39,24 @@ Most computer-use agents take a **screenshot every step** and guess pixel coordi
 - **Runs free** - defaults to OpenRouter `:free` models end to end.
 - **Uses your browser** - for web tasks (Gmail, Maps, GitHub, and more) it drives Chrome the way you would, with no extra accounts to connect.
 - **Watch it work** - live action ticker and an aqua glow around the app it is touching.
+
+## Why Orynn?
+
+How it stacks up against the two common approaches - screenshot/pixel agents
+and hosted cloud agents:
+
+| | **Orynn** | Screenshot agents | Cloud agents |
+|---|:---:|:---:|:---:|
+| Desktop control | UIA control names (no screenshots) | pixel guessing from screenshots | screenshot streaming |
+| Cost per step | Low (text only) | High (vision tokens) | High (vision tokens) |
+| Runs 100% locally | Yes | Varies | No (hosted) |
+| Free to run | Yes - OpenRouter `:free` | Varies | No |
+| Floating always-on-top capsule | Yes | No | No |
+| Coding + browser + desktop | All three | Usually one | Varies |
+| Provider-agnostic | OpenRouter / OpenAI / Anthropic / Gemini / Groq / Ollama | Varies | Locked to vendor |
+| Permission scopes + approval gates | Yes | Rarely | Varies |
+
+---
 
 ### Privacy and control
 
@@ -48,6 +83,17 @@ you these controls:
 - **Windows 10 / 11** for the floating capsule and native desktop control. macOS/Linux get coding and browser modes via the web dashboard.
 - **Python 3.10 or newer** - [python.org/downloads](https://python.org/downloads) (tick *"Add python.exe to PATH"* during install).
 - One LLM API key - a **free** OpenRouter key is all you need.
+
+---
+
+## Download
+
+**Prefer a one-click app?** Grab the latest prebuilt Windows bundle from the
+**[Releases page](https://github.com/robomohit/Orynn/releases)** - no Python
+required, just unzip and run `Orynn.exe`. (Built automatically on every version
+tag; see [PACKAGING.md](PACKAGING.md).)
+
+Otherwise, run from source in 3 steps below.
 
 ---
 
