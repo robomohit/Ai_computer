@@ -915,8 +915,10 @@ class SubTaskWorker:
                                 shot_payload["window_rect"] = window_rect
                         await self._emit("screenshot", shot_payload)
 
-            # Reflection — skip when atomic OR all actions succeeded (C4: no extra LLM call on success)
-            _had_failures = self.consecutive_fails > 0 or (bool(results) and not actions_taken[-1].get("ok", True) if actions_taken else False)
+            # Reflection — skip when atomic OR all actions succeeded (C4: no extra LLM call on success).
+            # Detect ANY failed action, not just the last one: a failed step
+            # followed by a successful no-op must not mark the sub-task complete.
+            _had_failures = self.consecutive_fails > 0 or any(not a.get("ok", True) for a in actions_taken)
             if self.complexity != "atomic" and _had_failures:
                 reflect_screenshot = None if (is_coding or is_computer_use or not self.model_sees) else _capture_screenshot_b64(self.screen_width, self.screen_height)
                 reflect_excludes = _tool_excludes_for_control_route(self.mode, self.model_sees, self.goal)
@@ -1056,12 +1058,20 @@ class AgentService:
     def _get_task_tools(self, task_id: str) -> ToolExecutor:
         return self._task_tools.get(task_id, self.tools)
 
-    def kill_task(self, task_id: str):
-        """Mark a task for immediate termination."""
+    def kill_task(self, task_id: str) -> bool:
+        """Mark a task for immediate termination.
+
+        Always records the kill flag (so an in-flight worker loop stops at its
+        next checkpoint) and cancels the backing asyncio task when one is
+        registered. Returns True when the task was actively running.
+        """
         self._killed_tasks.add(task_id)
         task = self._active_tasks.get(task_id)
-        if task and not task.done():
-            task.cancel()
+        if task is not None:
+            if not task.done():
+                task.cancel()
+            return True
+        return False
 
     def is_killed(self, task_id: str) -> bool:
         """Check if a task has been killed."""
@@ -1523,11 +1533,12 @@ class AgentService:
             if runs_in_background or is_coding_mode or not _model_sees:
                 screenshot_b64 = None
             elif isolated_hwnd:
-                # Isolated mode: crop to just the target window so model isn't distracted
+                # Isolated mode: crop to just the target window so model isn't distracted.
+                # Capture off the event loop — GDI/mss capture is blocking.
                 from .providers import _capture_hwnd_screenshot_b64
-                screenshot_b64 = _capture_hwnd_screenshot_b64(isolated_hwnd)
+                screenshot_b64 = await asyncio.to_thread(_capture_hwnd_screenshot_b64, isolated_hwnd)
             else:
-                screenshot_b64 = _capture_screenshot_b64(screen_width, screen_height)
+                screenshot_b64 = await asyncio.to_thread(_capture_screenshot_b64, screen_width, screen_height)
 
             memories = await asyncio.to_thread(self.memory.search, goal, 5)
             mem_context = "\n".join(f"- {getattr(m, 'content', m)}" for m in memories) if memories else None
@@ -1545,10 +1556,13 @@ class AgentService:
                         packs = get_mode_packs(mode)
                         plan_tool_excludes = _tool_excludes_for_control_route(mode, _model_sees, goal)
                         prompt = f"Goal: {goal}\n\nReturn one concise JSON plan using only these tools:\n{get_tool_guidance(packs, exclude_actions=plan_tool_excludes)}"
-                        raw_plan = provider._call_llm("You are a fast-path planning agent. Return only JSON.", prompt, screenshot_b64)
+                        # Run the blocking (sync httpx) LLM call off the event loop so
+                        # SSE streams and other tasks are not frozen during planning.
+                        raw_plan = await asyncio.to_thread(provider._call_llm, "You are a fast-path planning agent. Return only JSON.", prompt, screenshot_b64)
                         plan = HierarchicalPlan.model_validate(_normalize_hierarchical_plan(_extract_json(raw_plan)))
                     else:
-                        plan = provider.plan_hierarchical(
+                        plan = await asyncio.to_thread(
+                            provider.plan_hierarchical,
                             goal,
                             latest_screenshot_b64=screenshot_b64,
                             memory_context=mem_context,

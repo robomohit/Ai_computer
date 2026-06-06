@@ -2083,7 +2083,9 @@ class PlannerProvider:
                 raise ValueError("Non-dict reflection result")
             return result
         except Exception:
-            return {"success": True, "reason": "Reflection parse failed; assuming success."}
+            # Fail closed: an unparseable reflection must not silently mark a
+            # failed sub-task complete. Let the caller retry / surface the error.
+            return {"success": False, "reason": "Reflection parse failed; could not confirm success."}
 
     def evaluate(
         self, goal: str, history: List[str], latest_screenshot_b64: Optional[str] = None,

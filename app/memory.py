@@ -626,30 +626,36 @@ class MemoryStore:
         return idx
 
     def search(self, prompt: str, limit: int = 5) -> List[MemoryItem]:
-        total = self.collection.count()
-        if total == 0:
-            return []
-        results = self.collection.query(
-            query_texts=[prompt],
-            n_results=min(limit, total),
-        )
-        items = []
-        for i, doc in enumerate(results["documents"][0]):
-            meta = results["metadatas"][0][i] or {}
-            try:
-                int_id = int(results["ids"][0][i])
-            except (TypeError, ValueError):
-                int_id = abs(hash(results["ids"][0][i])) % (10 ** 9)
-            items.append(
-                MemoryItem(
-                    id=int_id,
-                    kind=meta.get("kind", ""),
-                    content=doc,
-                    metadata={k: v for k, v in meta.items() if k not in ("kind", "created_at")},
-                    created_at=meta.get("created_at", ""),
-                )
+        # Fail soft: a backend error (Chroma schema drift, corrupt index, etc.)
+        # must degrade to "no memory" rather than crash task startup, which
+        # calls this on every run. Mirrors recall_sessions()'s guarded behavior.
+        try:
+            total = self.collection.count()
+            if total == 0:
+                return []
+            results = self.collection.query(
+                query_texts=[prompt],
+                n_results=min(limit, total),
             )
-        return items
+            items = []
+            for i, doc in enumerate(results["documents"][0]):
+                meta = results["metadatas"][0][i] or {}
+                try:
+                    int_id = int(results["ids"][0][i])
+                except (TypeError, ValueError):
+                    int_id = abs(hash(results["ids"][0][i])) % (10 ** 9)
+                items.append(
+                    MemoryItem(
+                        id=int_id,
+                        kind=meta.get("kind", ""),
+                        content=doc,
+                        metadata={k: v for k, v in meta.items() if k not in ("kind", "created_at")},
+                        created_at=meta.get("created_at", ""),
+                    )
+                )
+            return items
+        except Exception:
+            return []
 
     def recent(self, limit: int = 20) -> List[MemoryItem]:
         total = self.collection.count()

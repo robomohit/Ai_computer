@@ -2170,7 +2170,10 @@ async def cancel_task(task_id: str):
 @app.post("/api/tasks/{task_id}/kill", dependencies=[Depends(verify_token)])
 async def kill_task(task_id: str):
     _validate_task_id(task_id)
-    killed = service.cancel_task(task_id)
+    # kill_task sets the kill flag (so the worker loop stops at its next
+    # checkpoint) AND cancels the backing asyncio task. cancel_task alone never
+    # set the flag, so killed tasks kept running until their next await.
+    killed = service.kill_task(task_id)
     if not killed:
         raise HTTPException(status_code=404, detail="Task not found or already complete")
     if task_id in _tasks:
