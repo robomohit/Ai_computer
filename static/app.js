@@ -58,19 +58,6 @@
     return svg;
   };
 
-  const safeMermaidId = (value, fallback) => {
-    const cleaned = String(value || '').replace(/[^a-zA-Z0-9]/g, '');
-    return cleaned || fallback;
-  };
-
-  const safeMermaidLabel = (value) => {
-    const compact = String(value || '')
-      .replace(/[<>{}\[\]()"`'\\|;:\n\r]/g, ' ')
-      .replace(/\s+/g, ' ')
-      .trim();
-    return compact.slice(0, 30) + (compact.length > 30 ? '...' : '');
-  };
-
   /* ---------------- tweaks UI wiring ---------------- */
   const ACCENT_HUES = [220, 262, 300, 340, 10, 160, 40];
 
@@ -1729,8 +1716,19 @@
     return { head, eyebrowEl, titleEl, subtitleEl, stateEl };
   };
 
+  // Worker/agent labels (e.g. DESKTOP-1) are noise in a single-agent run, and
+  // no agent UI tags every row. Track distinct workers per task and only reveal
+  // the tags once a task actually fans out to more than one worker.
+  let taskWorkers = new Set();
+  const noteWorker = (id) => {
+    if (!id) return;
+    taskWorkers.add(String(id));
+    if (taskWorkers.size >= 2) $('feed')?.classList.add('multi-worker');
+  };
+
   const addWorkerTag = (eyebrowEl, workerId) => {
     if (!workerId) return;
+    noteWorker(workerId);
     const tag = document.createElement('span');
     const workerNum = workerId.split('-').pop();
     tag.className = `worker-tag worker-${workerNum}`;
@@ -1767,44 +1765,6 @@
 
   window.subtaskStates = {};
 
-  const updateMermaidGraph = () => {
-    if (!planSubtasks || planSubtasks.length === 0) return;
-    const container = document.getElementById('plan-mermaid-container');
-    if (!container) return;
-
-    let graphDef = 'graph TD\n';
-    planSubtasks.forEach((subtask, index) => {
-       const state = window.subtaskStates[subtask.id] || 'pending';
-       let color = '#334155'; // default/pending
-       let stroke = '#475569';
-       if (state === 'done') { color = '#065f46'; stroke = '#10b981'; } // green
-       else if (state === 'running') { color = '#1e3a8a'; stroke = '#3b82f6'; } // blue
-       else if (state === 'failed') { color = '#7f1d1d'; stroke = '#ef4444'; } // red
-
-       const safeId = safeMermaidId(subtask.id, `task${index}`);
-       const label = safeMermaidLabel(subtask.description);
-       graphDef += `  ${safeId}["${label}"]\n`;
-       graphDef += `  style ${safeId} fill:${color},color:#f8fafc,stroke:${stroke},stroke-width:2px,rx:6,ry:6\n`;
-
-       if (subtask.dependencies && subtask.dependencies.length > 0) {
-           subtask.dependencies.forEach(dep => {
-               const safeDep = safeMermaidId(dep, '');
-               if (!safeDep) return;
-               graphDef += `  ${safeDep} --> ${safeId}\n`;
-           });
-       } else if (index > 0 && !subtask.dependencies && planSubtasks[index-1]) {
-           // fallback sequential link if no deps explicitly defined
-            const prevSafeId = safeMermaidId(planSubtasks[index-1].id, `task${index - 1}`);
-            graphDef += `  ${prevSafeId} --> ${safeId}\n`;
-       }
-    });
-
-    const renderId = 'mermaid-' + Math.random().toString(36).substr(2, 9);
-    mermaid.render(renderId, graphDef).then(({svg}) => {
-       container.innerHTML = svg;
-    }).catch(e => console.error("Mermaid error:", e));
-  };
-
   const renderPlan = (plan) => {
     finalizeLiveStatus();
     const replacingPlan = !!(activePlanCard && activePlanCard.isConnected);
@@ -1835,11 +1795,6 @@
 
     activePlanCard.appendChild(headBits.head);
 
-    const mermaidContainer = document.createElement('div');
-    mermaidContainer.id = 'plan-mermaid-container';
-    mermaidContainer.style.cssText = 'width:100%; overflow-x:auto; margin-bottom:16px; padding:16px; background:var(--bg-deep); border-radius:8px; border:1px solid var(--border);';
-    inner.appendChild(mermaidContainer);
-
     const list = document.createElement('div');
     list.className = 'subtask-list';
     subtaskEls = {};
@@ -1865,14 +1820,10 @@
     inner.appendChild(list);
     activePlanCard.appendChild(body);
     scrollFeed();
-    
-    // Initial render
-    setTimeout(updateMermaidGraph, 100);
   };
 
   const markSubtask = (id, state) => {
     window.subtaskStates[id] = state;
-    updateMermaidGraph();
 
     const row = subtaskEls[id];
     if (!row) return;
@@ -2642,6 +2593,7 @@
     editedFiles.clear();
     Object.keys(actionCards).forEach((k) => delete actionCards[k]);
     lastActiveCard = null; activeTurnSummary = null;
+    taskWorkers = new Set(); $('feed')?.classList.remove('multi-worker');
 
     setStatus('ready');
     setMode($('mode-id').value || 'coding');
@@ -2797,6 +2749,7 @@
       if (event.status === 'running') {
         markSubtask(event.subtask_id, 'running');
         if (event.worker_id) {
+          noteWorker(event.worker_id);
           const row = subtaskEls[event.subtask_id];
           const textEl = row?.querySelector('.subtask-text');
           if (textEl && !textEl.querySelector('.worker-tag')) {

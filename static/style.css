@@ -2130,6 +2130,11 @@
   [data-theme='dark'] .worker-tag.worker-1 { background: hsl(225 60% 20%); color: hsl(225 90% 82%); border-color: hsl(225 50% 32%); }
   [data-theme='light'] .worker-tag.worker-1 { background: hsl(225 100% 96%); color: hsl(225 60% 38%); border-color: hsl(225 50% 86%); }
 
+  /* Single-agent runs: suppress per-row worker labels (Codex/Cursor don't tag
+     every row). They reappear only once a task fans out to more than one worker. */
+  #feed .worker-tag { display: none; }
+  #feed.multi-worker .worker-tag { display: inline-flex; }
+
   .worker-bg-1, .worker-bg-2, .worker-bg-3, .worker-bg-4, .worker-bg-5 { /* kept for JS compat */ }
 
   /* screenshots */
