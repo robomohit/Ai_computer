@@ -1753,6 +1753,17 @@
     liveStatusMessage = '';
   };
 
+  // Minimal stream: while a task runs, show ONE calm "Thinking…" with a moving
+  // glow instead of plan/working/reflection chrome.
+  const showThinking = () => {
+    const card = ensureStatusCard();
+    card.classList.add('thinking-min');
+    const t = card.querySelector('.status-title'); if (t) t.textContent = 'Thinking';
+    const s = card.querySelector('.status-subtitle'); if (s) s.textContent = '';
+    const a = card.querySelector('.status-age'); if (a) a.textContent = '';
+    scrollFeed();
+  };
+
   const fmtWorkDuration = (sec) => {
     sec = Math.max(0, Math.round(sec || 0));
     if (sec < 60) return `${sec}s`;
@@ -2859,6 +2870,13 @@
     return String(overlay.control_layer || '').trim();
   };
 
+  // Events that are pure planning/working/reflection noise — collapsed into the
+  // single "Thinking…" indicator in minimal-stream mode.
+  const _MIN_SUPPRESS = new Set([
+    'reasoning', 'plan', 'status', 'subtask', 'action_start', 'action_result',
+    'reflection', 'screenshot', 'file_change', 'file_commit', 'terminal_output',
+    'browser_event', 'control_profile', 'cowork_status', 'desktop_control', 'intent',
+  ]);
   const processTaskEvent = (event, { replay = false, taskId = task, suppressToasts = false } = {}) => {
     // Any real (non-heartbeat) event is forward progress — keep the stall
     // watchdog quiet. Heartbeats deliberately don't count, so a model stuck in a
@@ -2868,6 +2886,10 @@
     if (isTerminalStatus(currentStatus) && !['done', 'error', 'cancelled', 'token_usage', 'budget', 'usage_update'].includes(event.type)) {
       return;
     }
+    // Minimal stream: collapse planning/working/reflection events into one
+    // glowing "Thinking…" indicator (heartbeats keep it alive). The user message,
+    // the final answer, terminal states, and interactive prompts still render.
+    if (_MIN_SUPPRESS.has(event.type)) { if (!replay) showThinking(); return; }
 
     const agentTextTypes = new Set(['agent', 'agent_delta', 'assistant_delta', 'agentMessage/delta', 'item/agentMessage/delta']);
     if (agentTextTypes.has(event.type)) {
@@ -3301,10 +3323,7 @@
       clearLiveIndicators();
       if (event.complete) {
         setStatus('complete');
-        // Fold the working steps under a "Worked for Xm Ys ›" toggle (Codex).
-        const elapsed = startTime ? (Date.now() - startTime) / 1000 : 0;
-        summarizeWork(elapsed);
-        renderFilesChanged();  // Codex-style "N files changed" capstone (if any)
+        // Minimal stream: no work-fold / files-changed capstone — just the answer.
         // Show the model's actual final reply as a primary assistant message.
         // Fall back to the generic note only when there's no real answer.
         const reply = cleanFinalReplyText(event.reason);
@@ -3327,9 +3346,6 @@
       } else {
         setStatus('failed');
         finalizeAssistantDelta('', { taskId });
-        const elapsed = startTime ? (Date.now() - startTime) / 1000 : 0;
-        summarizeWork(elapsed);
-        renderFilesChanged();  // surface what was touched before the failure (if any)
         renderStatusNote('error', event.blocked ? `Request blocked: ${event.reason || 'This request could not be completed.'}` : `Task failed: ${event.reason || 'Unknown failure.'}`, [
           { label: 'Retry', onClick: () => retryTask() },
         ]);

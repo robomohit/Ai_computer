@@ -1456,6 +1456,39 @@
     display: none;
   }
   @keyframes caret-blink { 50% { opacity: 0; } }
+
+  /* Minimal stream: one calm "Thinking…" with a moving accent glow — no
+     plan/working/reflection chrome. The accent light sweeps across the word. */
+  .status-row.thinking-min {
+    border: 0;
+    background: transparent;
+    box-shadow: none;
+    padding: 12px 0 12px 24px;
+  }
+  .status-row.thinking-min .status-subtitle,
+  .status-row.thinking-min .status-age { display: none; }
+  .status-row.thinking-min .status-line { margin: 0; }
+  .status-row.thinking-min .status-title {
+    display: inline-block;
+    font-size: var(--fs-md);
+    font-weight: 500;
+    letter-spacing: 0.01em;
+    background: linear-gradient(100deg,
+      var(--muted-2) 0%, var(--muted-2) 38%,
+      var(--accent) 50%,
+      var(--muted-2) 62%, var(--muted-2) 100%);
+    background-size: 220% 100%;
+    -webkit-background-clip: text;
+    background-clip: text;
+    -webkit-text-fill-color: transparent;
+    animation: thinking-sweep 1.6s linear infinite;
+    filter: drop-shadow(0 0 calc(7px * var(--glow, 0.6)) var(--accent-glow-1));
+  }
+  .status-row.thinking-min .status-title::after { content: '…'; }
+  @keyframes thinking-sweep {
+    from { background-position: 200% 0; }
+    to   { background-position: -40% 0; }
+  }
   .message.assistant code.md-code {
     font-family: var(--font-mono);
     font-size: 0.86em;
