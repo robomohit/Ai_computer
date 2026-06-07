@@ -484,10 +484,18 @@ def _load_persisted_tasks() -> Dict[str, TaskRecord]:
             print(f"[Orynn] Skipped malformed task record {meta_file.name}: {exc}", flush=True)
             continue
 
+        inferred = _infer_task_from_log(record.id)
+        if inferred and _is_terminal_status(inferred.status):
+            record.status = inferred.status
+            record.reason = inferred.reason or record.reason
+            record.finished_at = inferred.finished_at or record.finished_at
+            record.paused = False
+            _save_task_record(record)
         if record.status in {"running", "paused", "pending"}:
             record.status = "failed"
             record.reason = record.reason or "Server restarted while task was active."
             record.finished_at = record.finished_at or datetime.now(timezone.utc).isoformat()
+            record.paused = False
             _save_task_record(record)
         tasks[record.id] = record
 
@@ -539,9 +547,10 @@ def _task_is_server_running(task_id: str) -> bool:
 
 def _serialize_task_record(record: TaskRecord) -> dict:
     payload = record.model_dump()
-    payload["paused"] = bool(record.paused or record.id in service._paused_tasks)
+    terminal = _is_terminal_status(record.status)
+    payload["paused"] = False if terminal else bool(record.paused or record.id in service._paused_tasks)
     payload["server_running"] = _task_is_server_running(record.id)
-    if payload["server_running"] or payload["paused"]:
+    if not terminal and (payload["server_running"] or payload["paused"]):
         payload["status"] = "paused" if payload["paused"] else "running"
     return payload
 
@@ -660,6 +669,7 @@ def _on_complete(task_id: str, status: str, reason: str):
     rec = _tasks.get(task_id)
     if rec:
         rec.status = status
+        rec.paused = False
         rec.finished_at = datetime.now(timezone.utc).isoformat()
         rec.reason = reason
         try:
@@ -1075,7 +1085,7 @@ def _select_model_for_task(goal: str, mode: str = "auto", requested_model: Optio
             effort = normalize_effort(_prefs.get_all().get("effort"))
         except Exception:
             effort = "medium"
-        detected_mode = detect_task_mode(goal, requested_mode if requested_mode != "auto" else None)
+        detected_mode = requested_mode if requested_mode != "auto" else "auto"
         if detected_mode == "coding":
             # Only one free coder model — effort doesn't change it.
             selected_model = "openrouter/qwen/qwen3-coder:free"
@@ -1123,7 +1133,7 @@ def _build_task_preflight_payload(
     readiness = readiness or _build_readiness_payload()
     checks = _readiness_checks_by_key(readiness)
     requested_mode = mode or "auto"
-    effective_mode = detect_task_mode(goal, requested_mode if requested_mode != "auto" else None)
+    effective_mode = detect_task_mode(goal, requested_mode) if requested_mode != "auto" else "auto"
     effective_isolated_app = isolated_app
     if effective_mode == "computer_isolated" and not effective_isolated_app:
         effective_isolated_app = infer_isolated_app_name(goal)
@@ -1221,6 +1231,21 @@ def _summarize_preflight_issues(preflight: Dict[str, Any]) -> str:
     return "; ".join(parts) or "Readiness checks did not pass."
 
 
+def _execution_context_from_preflight(
+    preflight: Dict[str, Any],
+    requested_mode: str,
+    requested_isolated_app: Optional[str] = None,
+) -> tuple[str, Optional[str]]:
+    """Return the mode/app the agent should actually run with.
+
+    Runtime mode is no longer inferred from keyword routing. The model starts
+    in a dynamic tool loop and asks for more capabilities during the task.
+    """
+    execution_mode = requested_mode or "auto"
+    execution_isolated_app = requested_isolated_app if execution_mode == "computer_isolated" else requested_isolated_app
+    return execution_mode, execution_isolated_app
+
+
 def _submit_managed_task(
     *,
     goal: str,
@@ -1270,6 +1295,11 @@ def _submit_managed_task(
     if preflight.get("can_override") and preflight.get("issues") and not readiness_override:
         raise RuntimeError(_summarize_preflight_issues(preflight))
 
+    execution_mode, execution_isolated_app = _execution_context_from_preflight(
+        preflight,
+        mode or "auto",
+        isolated_app,
+    )
     selected_project_folder = _resolve_project_folder(project_folder)
     effective_workspace = selected_project_folder or HOME_DIR
     environment = _build_task_environment(
@@ -1282,8 +1312,8 @@ def _submit_managed_task(
         "screen_width": screen_width,
         "screen_height": screen_height,
         "model": selected_model,
-        "mode": mode or "auto",
-        "isolated_app": isolated_app,
+        "mode": execution_mode,
+        "isolated_app": execution_isolated_app,
         "active_skills": active_skills or [],
         "project_folder": str(selected_project_folder) if selected_project_folder else None,
         "environment": environment,
@@ -1300,7 +1330,7 @@ def _submit_managed_task(
             goal=goal,
             screen_width=screen_width,
             screen_height=screen_height,
-            isolated_app=isolated_app,
+            isolated_app=execution_isolated_app,
             active_skills=active_skills or [],
             project_folder=str(selected_project_folder) if selected_project_folder else None,
             environment=environment,
@@ -1311,7 +1341,7 @@ def _submit_managed_task(
             context=context,
             goal=goal,
             model=selected_model,
-            mode=mode or "auto",
+            mode=execution_mode,
             plan_first=plan_first,
             notify_on_completion=notify_on_completion,
             auto_commit=auto_commit,
@@ -2047,6 +2077,11 @@ async def create_task(body: TaskIn):
             },
         )
 
+    execution_mode, execution_isolated_app = _execution_context_from_preflight(
+        preflight,
+        body.mode or "auto",
+        body.isolated_app,
+    )
     selected_project_folder = _resolve_project_folder(body.project_folder)
     effective_workspace = selected_project_folder or HOME_DIR
     environment = _build_task_environment(
@@ -2061,8 +2096,8 @@ async def create_task(body: TaskIn):
             "screen_width": body.screen_width,
             "screen_height": body.screen_height,
             "model": selected_model,
-            "mode": body.mode or "auto",
-            "isolated_app": body.isolated_app,
+            "mode": execution_mode,
+            "isolated_app": execution_isolated_app,
             "active_skills": body.active_skills,
             "project_folder": str(selected_project_folder) if selected_project_folder else None,
             "environment": environment,
@@ -2077,7 +2112,7 @@ async def create_task(body: TaskIn):
                 goal=body.goal,
                 screen_width=body.screen_width,
                 screen_height=body.screen_height,
-                isolated_app=body.isolated_app,
+                isolated_app=execution_isolated_app,
                 active_skills=body.active_skills,
                 project_folder=str(selected_project_folder) if selected_project_folder else None,
                 environment=environment,
@@ -2088,7 +2123,7 @@ async def create_task(body: TaskIn):
                 context=context,
                 goal=body.goal,
                 model=selected_model,
-                mode=body.mode or "auto",
+                mode=execution_mode,
                 plan_first=body.plan_first,
                 notify_on_completion=body.notify_on_completion,
                 auto_commit=body.auto_commit,
@@ -2483,15 +2518,20 @@ async def retry_task(task_id: str, body: Optional[RetryIn] = None):
                 "preflight": preflight,
             },
         )
-    selected_model = model or preflight.get("selected_model") or "openrouter/nvidia/nemotron-3-super-120b-a12b:free"
+    execution_mode, execution_isolated_app = _execution_context_from_preflight(
+        preflight,
+        mode,
+        record.context.isolated_app,
+    )
+    selected_model = preflight.get("selected_model") or model or "openrouter/nvidia/nemotron-3-super-120b-a12b:free"
     new_record = service.init_task(
         task_id=new_task_id,
         goal=goal,
         screen_width=record.context.screen_width,
         screen_height=record.context.screen_height,
         model=selected_model,
-        mode=mode,
-        isolated_app=record.context.isolated_app,
+        mode=execution_mode,
+        isolated_app=execution_isolated_app,
         active_skills=record.context.active_skills,
         project_folder=record.context.project_folder,
         environment=record.context.environment,

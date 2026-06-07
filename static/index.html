@@ -59,8 +59,8 @@
         </span>
         <span class="project-folder-copy">
           <span class="project-folder-label">Project Folder</span>
-          <span class="project-folder-name" id="project-folder-name">General mode</span>
-          <span class="project-folder-path" id="project-folder-path">Desktop + Home access</span>
+          <span class="project-folder-name" id="project-folder-name">Workspace</span>
+          <span class="project-folder-path" id="project-folder-path">Dynamic access</span>
         </span>
       </button>
     </div>
@@ -197,15 +197,6 @@
                 <option value="light">Light</option>
               </select>
             </label>
-            <label class="pref-row">
-              <span class="pref-label">Default mode</span>
-              <select id="pref-default-mode" class="pref-select">
-                <option value="auto">Auto-detect</option>
-                <option value="coding">Coding</option>
-                <option value="computer">Desktop control</option>
-                <option value="computer_use">Browser cowork</option>
-              </select>
-            </label>
             <label class="pref-row pref-toggle">
               <span><span class="pref-label">Speak replies aloud</span><span class="pref-sub">Read the agent's answer with your PC voice</span></span>
               <input type="checkbox" id="pref-speak" class="pref-switch">
@@ -233,12 +224,7 @@
         <div class="settings-group" style="display:none">
           <div class="selector-label">Mode</div>
           <select id="mode-id">
-            <option value="auto">Auto detect</option>
-            <option value="coding">Coding</option>
-            <option value="computer">Desktop control</option>
-            <option value="computer_isolated">Isolated App control</option>
-            <option value="computer_use">Browser cowork</option>
-            <option value="explain">Explain my screen (read-only)</option>
+            <option value="auto">Dynamic</option>
           </select>
         </div>
         <div class="selector-wrap" id="isolated-app-wrap" style="display:none">
@@ -384,11 +370,15 @@
             <label class="composer-toggle"><input type="checkbox" id="plan-first-toggle"><span>Plan first</span></label>
             <label class="composer-toggle"><input type="checkbox" id="notify-toggle"><span>Notify</span></label>
             <label class="composer-toggle"><input type="checkbox" id="checkpoint-toggle"><span>Checkpoint</span></label>
-            <label class="composer-select-label"><span>Autonomy</span><select id="autonomy-level"><option value="balanced">Balanced</option><option value="careful">Careful</option><option value="fast">Fast</option></select></label>
+            <label class="composer-select-label"><span>Access</span><select id="autonomy-level"><option value="careful">Ask for approval</option><option value="fast">Full access</option></select></label>
             <label class="composer-select-label"><span>Thinking</span><select id="thinking-budget"><option value="off">Off</option><option value="standard">Standard</option><option value="extended">Extended</option></select></label>
           </div>
+          <button class="composer-context-chip" id="composer-context-chip" type="button" title="Current mode and model">
+            <span id="composer-mode-label">Dynamic</span>
+            <span id="composer-model-label">Balanced</span>
+          </button>
           <div class="composer-actions">
-            <button class="composer-icon-btn" id="composer-options-toggle" type="button" aria-label="Task options" title="Task options (plan, autonomy, thinking…)" aria-expanded="false">
+            <button class="composer-icon-btn" id="composer-options-toggle" type="button" aria-label="Task options" title="Task options (plan, access, thinking)" aria-expanded="false">
               <svg width="16" height="16" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.8" stroke-linecap="round" stroke-linejoin="round"><line x1="4" y1="6" x2="20" y2="6"/><circle cx="9" cy="6" r="2"/><line x1="4" y1="12" x2="20" y2="12"/><circle cx="15" cy="12" r="2"/><line x1="4" y1="18" x2="20" y2="18"/><circle cx="9" cy="18" r="2"/></svg>
             </button>
             <button class="composer-icon-btn" id="read-aloud-toggle" type="button" aria-label="Read replies aloud" title="Read agent replies aloud">
@@ -411,9 +401,9 @@
       <span class="sb-dot"></span>
       <span class="sb-val">Ready</span>
     </div>
-    <div class="sb-item sb-mode clickable" id="sb-mode" title="Change mode (Ctrl+K)" style="display:none">
-      <span class="sb-label">mode</span>
-      <span class="sb-val" id="sb-mode-val">coding</span>
+    <div class="sb-item sb-mode clickable" id="sb-mode" title="Dynamic runtime" style="display:none">
+      <span class="sb-label">runtime</span>
+      <span class="sb-val" id="sb-mode-val">dynamic</span>
     </div>
     <div class="sb-item sb-model clickable" id="sb-model" title="Change model (Ctrl+K)">
       <span class="sb-label">model</span>

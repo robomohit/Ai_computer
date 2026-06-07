@@ -65,12 +65,14 @@ def test_plan_checklist_renders_model_labels_as_text():
     assert 'subtask.description.replace(/"/g' not in js
 
 
-def test_mode_selection_is_persisted_client_side():
+def test_mode_selection_no_longer_restores_frontend_routing():
     html = _read_all_static()
 
-    assert "localStorage.setItem('orynn_mode'" in html
-    assert "localStorage.getItem('orynn_mode')" in html
-    assert "localStorage.getItem('ai_computer_mode')" in html
+    assert "localStorage.setItem('orynn_mode'" not in html
+    assert "localStorage.getItem('orynn_mode')" not in html
+    assert "localStorage.getItem('ai_computer_mode')" not in html
+    assert "localStorage.removeItem('orynn_mode')" in html
+    assert "setMode('auto')" in html
 
 
 def test_project_folder_picker_is_present_and_persisted_client_side():
@@ -97,6 +99,34 @@ def test_phase_c1_turn_summary_present():
     assert "_turnSummaryText" in html
     assert "activeTurnSummary" in html
     assert "finalizeTurnSummary();" in html
+    assert "el.classList.contains('turn-summary')" in html
+    assert "el.classList.contains('status-note')" in html
+    assert "cleanFinalReplyText" in html
+    assert "isTerminalStatus(currentStatus) && !['done', 'error', 'cancelled'" in html
+    assert ".message.assistant.streaming::after" in html
+
+
+def test_codex_work_summary_folding():
+    """Codex-style: working steps fold under a 'Worked for Xm Ys ›' toggle
+    when a task finishes, keeping the final answer as the primary reading."""
+    js = (_STATIC / "app.js").read_text(encoding="utf-8", errors="replace")
+    css = (_STATIC / "style.css").read_text(encoding="utf-8")
+
+    # JS: summarizeWork function and its invocation in the done handler
+    assert "const summarizeWork" in js, "summarizeWork function missing"
+    assert "fmtWorkDuration" in js, "duration formatter missing"
+    assert "work-summary" in js, "work-summary class missing from JS"
+    assert "work-summary-head" in js, "work-summary-head class missing from JS"
+    assert "work-summary-body" in js, "work-summary-body class missing from JS"
+    assert "body.hidden = !body.hidden" in js, "toggle logic missing"
+    assert "summarizeWork(elapsed)" in js, "summarizeWork not called in done handler"
+
+    # CSS: styling for the collapsed/expanded work summary
+    assert ".work-summary" in css, "work-summary CSS rule missing"
+    assert ".work-summary-head" in css, "work-summary-head CSS rule missing"
+    assert ".work-summary-body" in css, "work-summary-body CSS rule missing"
+    assert ".work-summary.open .work-summary-head .work-chevron" in css, "open-state chevron rotation missing"
+    assert ".work-summary-head.no-expand" in css, "no-expand variant missing"
 
 
 def test_phase_e_typography_whitespace():
@@ -154,7 +184,7 @@ def test_assistant_markdown_is_sanitized_and_links_are_protocol_gated():
     assert "if (!/^(https?:\\/\\/|mailto:)/i.test(trimmed)) return '';" in js
     assert "['http:', 'https:', 'mailto:'].includes(parsed.protocol)" in js
     assert "const sanitizeRenderedMarkdown" in js
-    assert "const allowedTags = new Set(['A', 'BR', 'CODE', 'EM', 'LI', 'P', 'PRE', 'STRONG', 'UL', 'OL', 'H1', 'H2', 'H3', 'HR']);" in js
+    assert "const allowedTags = new Set(['A', 'BR', 'CODE', 'EM', 'LI', 'P', 'PRE', 'STRONG', 'UL', 'OL', 'H1', 'H2', 'H3', 'H4', 'H5', 'H6', 'HR']);" in js
     assert "child.setAttribute('target', '_blank')" in js
     assert "child.setAttribute('rel', 'noopener noreferrer')" in js
     assert "return sanitizeRenderedMarkdown(text);" in js
@@ -250,16 +280,18 @@ def test_task_start_is_gated_by_readiness_preflight():
     assert "const taskReadinessIssues" not in js
     assert "/api/tasks/preflight" in js
     assert "const readinessDecision = await ensureTaskReadiness({" in js
+    assert "const requestedMode = 'auto'" in js
     assert "const requestedModel = selectedModelForRequest(requestedMode)" in js
     assert "if ((mode || 'auto') === 'auto' && !modelSelectionTouched) return null" in js
     assert "modelSelectionTouched = true" in js
-    assert "const effectiveMode = readinessDecision.preflight?.effective_mode || requestedMode" in js
-    assert "const effectiveIsolatedApp = requestedIsolatedApp || readinessDecision.preflight?.isolated_app || ''" in js
+    assert "const effectiveMode = requestedMode" in js
+    assert "const effectiveIsolatedApp = ''" in js
     assert "const displayModel = requestedModel || readinessDecision.preflight?.selected_model || null" in js
     assert "setTaskTitle(goal, { mode: effectiveMode, model: displayModel, status: 'running' })" in js
-    assert js.index("ensureTaskReadiness({") < js.index("requestDesktopAccess({ mode: effectiveMode")
-    assert "if (isDesktopMode(effectiveMode))" in js
-    assert "setDesktopSessionActive(true, effectiveMode, effectiveIsolatedApp || '')" in js
+    assert "event.permission_kind === 'desktop_control'" in js
+    assert "window.pendingDesktopPermission = true" in js
+    assert "Orynn is asking for desktop control." in js
+    assert "setDesktopSessionActive(true, 'computer', target)" in js
     assert "await handleServerPreflightRejection(err, taskPayload)" in js
     assert "taskPayload.readiness_override = true" in js
     assert "readiness_override: !!readinessDecision.override" in js
@@ -268,9 +300,9 @@ def test_task_start_is_gated_by_readiness_preflight():
     assert "const readinessDecision = await ensureTaskReadiness({" in js
     assert "`/api/tasks/${originalTaskId}/retry`, 'POST', { readiness_override: readinessOverride }" in js
     assert "`/api/tasks/${originalTaskId}/retry`, 'POST', { readiness_override: true }" in js
-    assert "requestDesktopAccess({ mode: effectiveMode, isolatedApp: effectiveIsolatedApp })" in js
+    assert "requestDesktopAccess({ mode: effectiveMode, isolatedApp: effectiveIsolatedApp })" not in js
     assert "const displayModel = preflight.selected_model || result.model || $('model-id').value" in js
-    assert "const effectiveMode = preflight.effective_mode || result.mode || $('mode-id').value" in js
+    assert "const effectiveMode = 'auto'" in js
     assert "btnContinue.hidden = blocked" in js
     assert "name.textContent = issue.label" in js
     assert "detail.textContent = issue.detail" in js
@@ -351,7 +383,7 @@ def test_control_trace_surface_present():
     assert "const setControlProfileSurface" in js
     assert "event.type === 'control_profile'" in js
     assert "setControlProfileSurface(event)" in js
-    assert "setLiveStatus('Control route'" in js
+    assert "setLiveStatus('Control route'" not in js
     assert "setControlSurface({" in js
     assert ".topbar-control" in css
     assert ".topbar-control.uia" in css
@@ -389,14 +421,15 @@ def test_dashboard_recovers_active_task_after_reload():
     assert "const recoverActiveTask" in js
     assert "/api/active-tasks?cb=" in js
     assert "await recoverActiveTask()" in js
-    assert "loadTaskLog(activeId, events, item, { live: true, record, silent: true })" in js
+    assert "const stillLive = loadTaskLog(activeId, events, item, { live: true, record, silent: true })" in js
+    assert "if (!stillLive) return false" in js
     assert "streamCursor = streamCursorAfter(events)" in js
     assert "showLiveTaskControls(record || { status: 'running' }, meta)" in js
     assert "restorePendingTrustModal(pendingTrustRequest(events), taskId)" in js
     assert "events.forEach((e) => processTaskEvent(e, { replay: true, taskId, suppressToasts: true }))" in js
     assert "setDesktopSessionActive(!queued && isDesktopMode(meta.mode)" in js
     assert "openStream(activeId)" in js
-    assert "toast('Reconnected to running task.'" in js
+    assert "setLiveStatus('Reconnected'" in js
     assert ".history-dot.paused" in css
 
 
@@ -797,7 +830,7 @@ def test_focused_dashboard_chrome_hides_secondary_noise():
     assert ".history-item {\n  gap: 0;" in css
     assert ".history-list .history-item:hover {\n  transform: none;\n  box-shadow: none;" in css
     assert ".history-dot {\n  width: 0;\n  min-width: 0;\n  opacity: 0;" in css
-    assert ".history-dot.running,\n.history-dot.paused,\n.history-dot.failed" in css
+    assert ".history-dot.running,\n.history-dot.paused" in css
     assert ".sidebar-button {\n  min-height: 34px;\n  background: transparent;" in css
     assert "body[data-glass=\"on\"]:not(.widget-shell) .sidebar-button {\n  background: transparent !important;" in css
     assert ".sidebar-button span:last-child {\n  opacity: 0;" in css
@@ -933,7 +966,8 @@ def test_codex_message_actions_and_contextual_suggestions():
 
     # message footer: copy + thumbs wired to the real feedback API, hover-revealed
     assert "attachMessageActions" in js, "message-actions helper missing"
-    assert "attachMessageActions(appendMessage(reply, 'assistant')" in js, "actions not attached to the reply"
+    assert "finalizeAssistantDelta(finalReply, { taskId })" in js, "streamed reply not finalized"
+    assert "attachMessageActions(appendMessage(finalReply, 'assistant')" in js, "actions not attached to fallback reply"
     assert "sendMessageFeedback" in js, "feedback sender missing"
     assert "/feedback`, 'POST', { rating" in js, "thumbs not wired to feedback API"
     assert ".message:hover .msg-actions" in css, "hover-reveal rule missing"

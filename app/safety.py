@@ -161,6 +161,9 @@ class SafetyManager:
         if t == "request_permission":
             # The action itself is the user consent flow — no extra approval.
             return ActionDecision(danger=DangerLevel.low, reason="permission request", requires_approval=False)
+        if t == "enable_desktop_control":
+            # The action itself opens the user consent flow.
+            return ActionDecision(danger=DangerLevel.medium, reason="desktop control permission request", requires_approval=False)
         if t == "web_search":
             return ActionDecision(danger=DangerLevel.low, reason="read-only web search", requires_approval=False)
         if t == "computer":

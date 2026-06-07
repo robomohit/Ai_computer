@@ -273,7 +273,7 @@
   let currentSubtaskIdx = 0;
   let subtaskEls = {};
   let screenshots = [];
-  let currentMode = 'coding';
+  let currentMode = 'auto';
   let currentBackgroundMode = true;
   let currentStatus = 'ready';
   let currentIsolatedApp = '';
@@ -284,13 +284,16 @@
   const actionCards = {};
   let lastActiveCard = null;
   let activeTurnSummary = null; // Phase C1: groups tool actions between reasoning events
+  let liveAssistantEl = null;
+  let liveAssistantText = '';
+  let liveAssistantTaskId = '';
 
   const _actionTypeLabel = (type = '') => {
     if (/run_command|bash|terminal/i.test(type)) return 'command';
     if (/read_file|write_file|edit_file|str_replace|create_file|delete_file|undo_edit|view_file/i.test(type)) return 'file';
     if (/^browser_|browser_/i.test(type)) return 'browser';
     if (/web_search|^search$/i.test(type)) return 'search';
-    if (/computer|click|type|scroll|screenshot|key/i.test(type)) return 'action';
+    if (/uia_|computer|mouse_|keyboard|virtual_input|wait_for_window|electron_|click|type|scroll|screenshot|key/i.test(type)) return 'desktop';
     return 'step';
   };
 
@@ -307,6 +310,7 @@
       if (t === 'file') return live ? `Editing ${n > 1 ? n + ' files' : 'file'}…` : `Edited ${n} file${n > 1 ? 's' : ''}`;
       if (t === 'search') return live ? 'Searching…' : `Searched ${n} time${n > 1 ? 's' : ''}`;
       if (t === 'browser') return live ? 'Browsing…' : `${n} browser action${n > 1 ? 's' : ''}`;
+      if (t === 'desktop') return live ? 'Using desktop...' : `${n} desktop action${n > 1 ? 's' : ''}`;
       if (t === 'action') return live ? 'Acting…' : `${n} action${n > 1 ? 's' : ''}`;
       return live ? 'Working…' : `${n} step${n > 1 ? 's' : ''}`;
     });
@@ -315,7 +319,7 @@
 
   // Phase C2: build a step-timeline inside the turn-summary body on first expand.
   // Raw tool cards are hidden; one icon-gutter row per step is shown instead.
-  const _STEP_ICONS = { command: '⟩', file: '✎', search: '◎', browser: '⊞', action: '⊙', step: '·' };
+  const _STEP_ICONS = { command: '$', file: '+', search: '?', browser: '@', desktop: '*', action: '*', step: '-' };
   const _buildTurnTimeline = (body, steps) => {
     if (!steps.length) return;
     Array.from(body.children).forEach(c => { if (!c.classList.contains('turn-timeline')) c.style.display = 'none'; });
@@ -424,7 +428,7 @@
 
   const pathLeaf = (value = '') => {
     const cleaned = String(value || '').replace(/[\\/]+$/, '');
-    if (!cleaned) return 'General mode';
+    if (!cleaned) return 'Workspace';
     const bits = cleaned.split(/[\\/]/).filter(Boolean);
     return bits[bits.length - 1] || cleaned;
   };
@@ -456,8 +460,8 @@
 
   const renderProjectFolderSummary = () => {
     const selected = projectFolderState.selectedPath;
-    $('project-folder-name').textContent = selected ? pathLeaf(selected) : 'General mode';
-    $('project-folder-path').textContent = selected ? selected : 'Desktop + Home access';
+    $('project-folder-name').textContent = selected ? pathLeaf(selected) : 'Workspace';
+    $('project-folder-path').textContent = selected ? selected : 'Dynamic access';
     renderWelcomeHero();
     if (!task) setTaskTitle();
   };
@@ -527,7 +531,7 @@
       });
       list.appendChild(b);
     };
-    addItem({ label: 'General mode', sub: 'Desktop + Home access', isGeneral: true });
+    addItem({ label: 'Workspace', sub: 'Dynamic access', isGeneral: true });
     projectFolderState.shortcuts.forEach((s) => addItem({ label: shortcutLabel(s.id, s.label), sub: s.path, path: s.path }));
     if (window.pywebview?.api?.pick_folder) addItem({ label: 'Browse for a folder…', isBrowse: true });
   };
@@ -614,13 +618,64 @@
   const truncate = (value = '', limit = 500) => value.length > limit ? `${value.slice(0, limit)}\n…` : value;
   const escapeHtml = (value = '') => String(value).replace(/[&<>"']/g, (char) => ({ '&': '&amp;', '<': '&lt;', '>': '&gt;', '"': '&quot;', "'": '&#39;' }[char]));
   const isTerminalStatus = (value = '') => /done|complete|failed|error|cancelled/i.test(value);
+  const MODEL_DISPLAY_NAMES = {
+    'openrouter/qwen/qwen3-coder:free': 'Qwen3-Coder (free)',
+    'openrouter/nvidia/nemotron-3-super-120b-a12b:free': 'Nemotron Super (free)',
+    'openrouter/meta-llama/llama-3.3-70b-instruct:free': 'Llama 3.3 70B (free)',
+    'openrouter/google/gemma-4-31b-it:free': 'Gemma 4 31B (free)',
+    'claude-3-5-sonnet-20241022': 'Claude 3.5 Sonnet',
+    'claude-3-7-sonnet-20250219': 'Claude 3.7 Sonnet',
+    'claude-3-opus-20240229': 'Claude 3 Opus',
+    'claude-3-5-haiku-20241022': 'Claude 3.5 Haiku',
+    'gpt-4o': 'GPT-4o',
+    'gpt-4o-mini': 'GPT-4o mini',
+    'gemini-2.5-flash': 'Gemini 2.5 Flash',
+    'gemini-2.0-flash': 'Gemini 2.0 Flash',
+    'groq/llama-3.3-70b-versatile': 'Llama 3.3 70B (Groq)',
+    'groq/llama-3.2-90b-vision-preview': 'Llama 3.2 Vision (Groq)',
+    'tier:balanced': 'Balanced',
+    'tier:quick': 'Quick',
+  };
+  const displayModelName = (model = '') => {
+    const raw = String(model || '').trim();
+    if (!raw) return '';
+    if (MODEL_DISPLAY_NAMES[raw]) return MODEL_DISPLAY_NAMES[raw];
+    if (raw.startsWith('ollama/')) return `Ollama ${raw.slice(7)}`;
+    let label = raw.replace(/^openrouter\//, '');
+    const free = /:free$/i.test(label);
+    label = label.replace(/:free$/i, '');
+    if (label.includes('/')) label = label.split('/').pop();
+    label = label
+      .split(/[-_]/)
+      .filter(Boolean)
+      .map((part) => {
+        const lower = part.toLowerCase();
+        if (['gpt', 'qwen', 'llama', 'gemma', 'mistral', 'claude', 'sonnet', 'opus', 'haiku', 'vl'].includes(lower)) return part.toUpperCase();
+        return part.charAt(0).toUpperCase() + part.slice(1);
+      })
+      .join(' ');
+    return label + (free ? ' (free)' : '');
+  };
 
   const toast = (message, kind = 'info', ttl = 3200) => {
+    if (/^Stream interrupted\. Reconnecting/i.test(String(message || ''))) return null;
+    const stack = $('toast-stack');
+    if (!stack) return null;
+    const existing = Array.from(stack.children).find((node) => node.dataset.message === message);
+    if (existing) {
+      existing.className = `toast ${kind}`;
+      existing.textContent = message;
+      clearTimeout(existing._toastTimer);
+      if (ttl > 0) existing._toastTimer = setTimeout(() => existing.remove(), ttl);
+      return existing;
+    }
     const el = document.createElement('div');
     el.className = `toast ${kind}`;
     el.textContent = message;
-    $('toast-stack').appendChild(el);
-    if (ttl > 0) setTimeout(() => el.remove(), ttl);
+    el.dataset.message = message;
+    stack.appendChild(el);
+    if (ttl > 0) el._toastTimer = setTimeout(() => el.remove(), ttl);
+    return el;
   };
 
   const markFeedActive = () => {
@@ -720,7 +775,7 @@
 
   const sanitizeRenderedMarkdown = (html = '') => {
     if (typeof DOMParser === 'undefined') return String(html || '');
-    const allowedTags = new Set(['A', 'BR', 'CODE', 'EM', 'LI', 'P', 'PRE', 'STRONG', 'UL', 'OL', 'H1', 'H2', 'H3', 'HR']);
+    const allowedTags = new Set(['A', 'BR', 'CODE', 'EM', 'LI', 'P', 'PRE', 'STRONG', 'UL', 'OL', 'H1', 'H2', 'H3', 'H4', 'H5', 'H6', 'HR']);
     const allowedClasses = {
       A: new Set(['md-link']),
       CODE: new Set(['md-code']),
@@ -730,6 +785,9 @@
       H1: new Set(['md-h1']),
       H2: new Set(['md-h2']),
       H3: new Set(['md-h3']),
+      H4: new Set(['md-h4']),
+      H5: new Set(['md-h5']),
+      H6: new Set(['md-h6']),
       HR: new Set(['md-hr']),
     };
     const doc = new DOMParser().parseFromString(`<div>${html}</div>`, 'text/html');
@@ -747,6 +805,7 @@
           return;
         }
         const originalHref = child.getAttribute('href') || '';
+        const originalLang = child.getAttribute('data-lang') || '';
         const originalClasses = Array.from(child.classList || []);
         Array.from(child.attributes).forEach((attr) => child.removeAttribute(attr.name));
         const classAllow = allowedClasses[tag];
@@ -763,6 +822,9 @@
           child.setAttribute('href', safeHref);
           child.setAttribute('target', '_blank');
           child.setAttribute('rel', 'noopener noreferrer');
+        }
+        if (tag === 'PRE' && /^[A-Za-z0-9_+-]{1,24}$/.test(originalLang)) {
+          child.setAttribute('data-lang', originalLang);
         }
         walk(child);
       });
@@ -782,8 +844,10 @@
       return `@@AIC@${kind}${blocks.length - 1}@@AIC@`;
     };
     // 1. fenced code blocks ```lang\n…\n``` — pull out, escape, stash
-    text = text.replace(/```[^\n]*\n?([\s\S]*?)```/g, (_, code) => {
-      return stash('<pre class="md-pre"><code>' + esc(code.replace(/\n$/, '')) + '</code></pre>', 'B');
+    text = text.replace(/```([A-Za-z0-9_+-]*)[^\n]*\n?([\s\S]*?)```/g, (_, lang, code) => {
+      const label = String(lang || '').trim().slice(0, 24);
+      const langAttr = label ? ` data-lang="${esc(label)}"` : '';
+      return stash(`<pre class="md-pre"${langAttr}><code>` + esc(code.replace(/\n$/, '')) + '</code></pre>', 'B');
     });
     // 2. escape everything else
     text = esc(text);
@@ -799,7 +863,7 @@
     });
     // 5. headings (# … ###### → h1–h3), isolated onto their own block
     text = text.replace(/(?:^|\n)[ \t]{0,3}(#{1,6})[ \t]+([^\n]+?)[ \t]*(?=\n|$)/g, (_, hashes, content) => {
-      const level = Math.min(hashes.length, 3);
+      const level = hashes.length;
       return '\n\n' + stash(`<h${level} class="md-h${level}">${content}</h${level}>`, 'H') + '\n\n';
     });
     // 6. horizontal rule (---, ***, ___ on their own line)
@@ -829,12 +893,158 @@
     return sanitizeRenderedMarkdown(text);
   };
 
+  const detectCodeLang = (pre, code = '') => {
+    const attr = String(pre?.dataset?.lang || '').toLowerCase();
+    if (attr) return attr;
+    const sample = String(code || '');
+    if (/^\s*[{[]/.test(sample)) return 'json';
+    if (/^\s*(def |from |import |class |print\()/m.test(sample)) return 'python';
+    if (/^\s*(const |let |var |function |import .* from |export )/m.test(sample)) return 'javascript';
+    if (/^\s*(npm |pnpm |yarn |git |python |pytest |cd |ls |dir |set |Get-)/m.test(sample)) return 'bash';
+    return '';
+  };
+
+  const highlightCode = (code = '', lang = '') => {
+    const lower = String(lang || '').toLowerCase();
+    const keywordSets = {
+      python: 'and as assert async await break class continue def del elif else except False finally for from global if import in is lambda None nonlocal not or pass raise return True try while with yield',
+      py: 'and as assert async await break class continue def del elif else except False finally for from global if import in is lambda None nonlocal not or pass raise return True try while with yield',
+      javascript: 'async await break case catch class const continue default delete do else export extends false finally for from function if import in instanceof let new null return switch throw true try typeof undefined var void while yield',
+      js: 'async await break case catch class const continue default delete do else export extends false finally for from function if import in instanceof let new null return switch throw true try typeof undefined var void while yield',
+      typescript: 'async await break case catch class const continue default delete do else export extends false finally for from function if import in instanceof interface let new null return switch throw true try type typeof undefined var void while yield',
+      ts: 'async await break case catch class const continue default delete do else export extends false finally for from function if import in instanceof interface let new null return switch throw true try type typeof undefined var void while yield',
+      bash: 'case cd do done echo elif else esac export fi for function if in local set then while',
+      shell: 'case cd do done echo elif else esac export fi for function if in local set then while',
+      json: 'true false null',
+    };
+    const keywords = new Set((keywordSets[lower] || keywordSets.javascript).split(/\s+/));
+    const tokenRe = /("(?:\\.|[^"\\])*"|'(?:\\.|[^'\\])*'|`(?:\\.|[^`\\])*`|\/\/[^\n]*|#[^\n]*|\b\d+(?:\.\d+)?\b|\b[A-Za-z_$][\w$-]*\b)/g;
+    let out = '';
+    let last = 0;
+    String(code || '').replace(tokenRe, (match, _unused, offset) => {
+      out += escapeHtml(code.slice(last, offset));
+      const isComment = match.startsWith('//') || (match.startsWith('#') && !/^#(?:[A-Fa-f0-9]{3}){1,2}\b/.test(match));
+      const isString = /^["'`]/.test(match);
+      const isNumber = /^\d/.test(match);
+      const cls = isComment ? 'tok-comment' : isString ? 'tok-string' : isNumber ? 'tok-number' : keywords.has(match) ? 'tok-keyword' : '';
+      out += cls ? `<span class="${cls}">${escapeHtml(match)}</span>` : escapeHtml(match);
+      last = offset + match.length;
+      return match;
+    });
+    return out + escapeHtml(code.slice(last));
+  };
+
+  const decorateCodeBlocks = (root) => {
+    if (!root) return;
+    root.querySelectorAll('pre.md-pre').forEach((pre) => {
+      if (pre.dataset.decorated === '1') return;
+      const codeEl = pre.querySelector('code');
+      if (!codeEl) return;
+      const raw = codeEl.textContent || '';
+      const lang = detectCodeLang(pre, raw);
+      codeEl.innerHTML = highlightCode(raw, lang);
+      const toolbar = document.createElement('div');
+      toolbar.className = 'code-toolbar';
+      if (lang) {
+        const label = document.createElement('span');
+        label.className = 'code-lang';
+        label.textContent = lang;
+        toolbar.appendChild(label);
+      }
+      const copy = document.createElement('button');
+      copy.type = 'button';
+      copy.className = 'code-copy';
+      copy.textContent = 'Copy';
+      copy.title = 'Copy code';
+      copy.addEventListener('click', () => {
+        navigator.clipboard.writeText(raw).then(() => {
+          copy.textContent = 'Copied';
+          setTimeout(() => { copy.textContent = 'Copy'; }, 1200);
+        }).catch(() => {});
+      });
+      toolbar.appendChild(copy);
+      pre.insertBefore(toolbar, codeEl);
+      pre.dataset.decorated = '1';
+    });
+  };
+
+  const resetLiveAssistant = () => {
+    liveAssistantEl = null;
+    liveAssistantText = '';
+    liveAssistantTaskId = '';
+  };
+
+  const appendAssistantDelta = (delta, { taskId = task } = {}) => {
+    const chunk = String(delta || '');
+    if (!chunk) return null;
+    removeWelcome();
+    stopReplyStream();
+    if (!liveAssistantEl || !liveAssistantEl.isConnected || liveAssistantTaskId !== taskId) {
+      liveAssistantEl = document.createElement('div');
+      liveAssistantEl.className = 'message assistant streaming';
+      liveAssistantText = '';
+      liveAssistantTaskId = taskId || '';
+      $('feed').appendChild(liveAssistantEl);
+      pruneFeed();
+    }
+    liveAssistantText += chunk;
+    liveAssistantEl.insertAdjacentText('beforeend', chunk);
+    scrollFeed();
+    return liveAssistantEl;
+  };
+
+  const finalizeAssistantDelta = (finalText = '', { taskId = task } = {}) => {
+    const text = String(finalText || liveAssistantText || '').trim();
+    const el = liveAssistantEl && liveAssistantEl.isConnected ? liveAssistantEl : null;
+    resetLiveAssistant();
+    if (!el || !text) return null;
+    el.classList.remove('streaming');
+    el.innerHTML = renderMarkdown(text);
+    decorateCodeBlocks(el);
+    attachMessageActions(el, { text, taskId });
+    speakAgentReply(text);
+    scrollFeed();
+    return el;
+  };
+
+  const cleanFinalReplyText = (value = '') => String(value || '')
+    .trim()
+    .replace(/^(?:finished|completed|done|success)\s*:\s*/i, '')
+    .trim();
+
+  const renderStatusNote = (type = 'note', text = '', actions = []) => {
+    removeWelcome();
+    const el = document.createElement('div');
+    const normalized = String(type || 'note').toLowerCase();
+    el.className = `status-note status-${normalized}`;
+    const icon = document.createElement('span');
+    icon.className = 'status-note-icon';
+    icon.textContent = normalized === 'error' ? '!' : normalized === 'paused' ? '||' : normalized === 'success' ? 'OK' : 'i';
+    const copy = document.createElement('span');
+    copy.className = 'status-note-copy';
+    copy.textContent = text || humanize(normalized);
+    el.append(icon, copy);
+    actions.forEach((action) => {
+      const btn = document.createElement('button');
+      btn.type = 'button';
+      btn.className = 'status-note-action';
+      btn.textContent = action.label;
+      btn.addEventListener('click', action.onClick);
+      el.appendChild(btn);
+    });
+    $('feed').appendChild(el);
+    pruneFeed();
+    scrollFeed();
+    return el;
+  };
+
   const appendMessage = (text, kind = 'system-note') => {
     removeWelcome();
     const el = document.createElement('div');
     el.className = `message ${kind}`;
     if (kind === 'assistant') {
       el.innerHTML = renderMarkdown(text);
+      decorateCodeBlocks(el);
       speakAgentReply(text);  // read aloud if the user enabled it (no-op otherwise)
     } else {
       el.textContent = text;
@@ -868,6 +1078,7 @@
       _replyStreamTimer = null;
       el.classList.remove('streaming');
       el.innerHTML = renderMarkdown(full);       // clean final render
+      decorateCodeBlocks(el);
       attachMessageActions(el, { text: full, taskId });
       speakAgentReply(full);                      // read aloud once, if enabled
       scrollFeed();
@@ -1190,10 +1401,22 @@
     return 'cancelled';
   };
 
+  const updateComposerContextChip = () => {
+    const modeEl = $('composer-mode-label');
+    const modelEl = $('composer-model-label');
+    const modeLabels = { computer: 'Desktop', computer_use: 'Browser', computer_isolated: 'Isolated', coding: 'Dynamic', chat: 'Dynamic', auto: 'Dynamic' };
+    if (modeEl) modeEl.textContent = modeLabels[currentMode] || humanize(currentMode || 'auto');
+    if (modelEl) {
+      const select = $('model-id');
+      const selected = select?.value || '';
+      modelEl.textContent = select?.options?.[select.selectedIndex]?.textContent || displayModelName(selected) || 'Balanced';
+    }
+  };
+
   const setMode = (mode, isolated = false, isolatedApp = '') => {
-    currentMode = mode || 'coding';
+    currentMode = mode || 'auto';
     currentIsolatedApp = isolatedApp || (currentMode === 'computer_isolated' ? ($('isolated-app-id')?.value || '').trim() : '');
-    const modeLabels = { computer: 'desktop', computer_use: 'browser', computer_isolated: 'isolated', coding: 'coding' };
+    const modeLabels = { computer: 'desktop', computer_use: 'browser', computer_isolated: 'isolated', coding: 'dynamic', chat: 'dynamic', auto: 'dynamic' };
     let label = modeLabels[currentMode] ?? humanize(currentMode).toLowerCase();
     if (isolated && currentMode === 'computer') {
       const appName = isolatedApp ? ` · ${isolatedApp}` : '';
@@ -1212,6 +1435,7 @@
     const sbm = $('sb-mode-val'); if (sbm) sbm.textContent = label;
     setDesktopSessionActive(currentStatus === 'running' || currentStatus === 'paused', currentMode, currentIsolatedApp);
     selectPreferredModelForMode(currentMode);
+    updateComposerContextChip();
   };
 
   const selectPreferredModelForMode = (mode) => {
@@ -1277,12 +1501,16 @@
 
   const setTaskTitle = (title, ctx = {}) => {
     const idleName = projectFolderState.selectedPath ? pathLeaf(projectFolderState.selectedPath) : 'Stream';
-    $('task-title').textContent = title || idleName;
+    const fullTitle = title || idleName;
+    $('task-title').textContent = fullTitle;
+    $('task-title').title = fullTitle;
     const dot = $('topbar-dot');
     if (dot) dot.className = 'topbar-dot' + (ctx.status ? ' ' + ctx.status : '');
     const ctxEl = $('topbar-ctx');
     if (ctxEl) {
-      const parts = [ctx.mode, ctx.model].filter(Boolean);
+      const modeText = ctx.mode && !['auto', 'coding', 'chat'].includes(String(ctx.mode).toLowerCase()) ? humanize(ctx.mode) : '';
+      const parts = [modeText, ctx.model ? displayModelName(ctx.model) : ''].filter(Boolean);
+      ctxEl.title = parts.join(' / ');
       ctxEl.textContent = parts.length ? '· ' + parts.join(' · ') : '';
     }
   };
@@ -1295,10 +1523,7 @@
     item.className = `history-item${makeActive ? ' active' : ''}${isTerminal ? ' terminal' : ''}`;
     item.dataset.taskId = taskRecord.id || '';
     const dotState = (status === 'running' || status === 'queued' || status === 'pending') ? 'running'
-      : status === 'paused' ? 'paused'
-      : (status === 'done' || status === 'complete') ? 'done'
-      : (status === 'failed' || status === 'error') ? 'failed'
-      : (status === 'cancelled') ? 'cancelled' : '';
+      : status === 'paused' ? 'paused' : '';
     const dot = document.createElement('span');
     dot.className = `history-dot ${dotState}`.trim();
     const copy = document.createElement('span');
@@ -1390,11 +1615,12 @@
       const name = document.createElement('span');
       name.className = 'history-group-name';
       name.textContent = historyGroupLabel(g.key);
-      name.title = g.key || 'General mode · Desktop + Home';
+      name.title = g.key || 'Workspace · Dynamic access';
       lead.appendChild(name);
       const count = document.createElement('span');
       count.className = 'history-group-count';
       count.textContent = String(matches.length);
+      count.title = `${matches.length} session${matches.length === 1 ? '' : 's'}`;
       head.append(lead, count);
       const list = document.createElement('div');
       list.className = 'history-group-items';
@@ -1420,7 +1646,12 @@
     });
   };
 
-  const refreshHistoryCount = () => { $('history-count').textContent = String(historyItems.length); };
+  const refreshHistoryCount = () => {
+    const count = $('history-count');
+    if (!count) return;
+    count.textContent = String(historyItems.length);
+    count.title = `${historyItems.length} session${historyItems.length === 1 ? '' : 's'}`;
+  };
 
   const bindHistoryItem = (element, taskId) => {
     if (!taskId) return;
@@ -1455,7 +1686,7 @@
     activeHistoryItem.classList.remove('active');
     const dot = activeHistoryItem.querySelector('.history-dot');
     if (!dot) return;
-    dot.className = `history-dot ${state}`;
+    dot.className = 'history-dot';
   };
 
   const taskRecordId = (record = {}) => record.task_id || record.id || '';
@@ -1634,6 +1865,8 @@
     }
     const isStep = (el) => el.classList && (
       el.classList.contains('status-row') ||
+      el.classList.contains('status-note') ||
+      el.classList.contains('turn-summary') ||
       (el.classList.contains('message') && (
         el.classList.contains('system-note') ||
         el.classList.contains('system-success') ||
@@ -2653,9 +2886,10 @@
     lastActiveCard = null; activeTurnSummary = null;
     taskWorkers = new Set(); $('feed')?.classList.remove('multi-worker');
     stopReplyStream();
+    resetLiveAssistant();
 
     setStatus('ready');
-    setMode($('mode-id').value || 'coding');
+    setMode('auto');
     $('elapsed-time') && ($('elapsed-time').textContent = replay ? '--:--' : '00:00');
     const sbe = $('sb-elapsed-val'); if (sbe) sbe.textContent = replay ? '--:--' : '00:00';
     $('btn-pause').classList.add('hidden');
@@ -2680,6 +2914,12 @@
   const updateCharCount = () => {
     const count = $('input').value.length;
     $('char-count').textContent = count ? `${count} chars` : '';
+    const send = $('send');
+    if (send) {
+      const hasText = !!$('input').value.trim();
+      send.disabled = !hasText || !!(task && sse);
+      send.classList.toggle('is-empty', !hasText);
+    }
   };
 
   const autoGrow = () => {
@@ -2723,6 +2963,23 @@
     // silent rate-limit backoff still trips the "still working" reassurance.
     if (!replay && !(event.type === 'status' && event.heartbeat)) noteProgress();
     if (event.type === 'task_created') return;
+    if (isTerminalStatus(currentStatus) && !['done', 'error', 'cancelled', 'token_usage', 'budget', 'usage_update'].includes(event.type)) {
+      return;
+    }
+
+    const agentTextTypes = new Set(['agent', 'agent_delta', 'assistant_delta', 'agentMessage/delta', 'item/agentMessage/delta']);
+    if (agentTextTypes.has(event.type)) {
+      finalizeLiveStatus();
+      const rawText = event.delta ?? event.text_delta ?? event.content_delta ?? event.content ?? event.text ?? event.message ?? '';
+      const text = String(rawText || '');
+      if (!text) return;
+      const looksFullText = event.text != null || event.content != null;
+      const delta = looksFullText && liveAssistantTaskId === taskId && text.startsWith(liveAssistantText)
+        ? text.slice(liveAssistantText.length)
+        : text;
+      appendAssistantDelta(delta, { taskId });
+      return;
+    }
 
     if (event.type === 'reasoning') {
       // Live reasoning (thought tokens, composing) shows immediately via setLiveStatus.
@@ -2742,6 +2999,18 @@
         const _m = String(event.message || '').trim();
         if (/^executing\b/i.test(_m)) return;
         if (/parsing step \d+/i.test(_m) || /model responded/i.test(_m)) return;
+        if (/^task paused\.?$/i.test(_m) || /^paused\.?$/i.test(_m)) {
+          finalizeLiveStatus();
+          setStatus('paused');
+          renderStatusNote('paused', 'Task paused');
+          return;
+        }
+        if (/^task resumed\.?$/i.test(_m) || /^resumed\.?$/i.test(_m)) {
+          finalizeLiveStatus();
+          setStatus('running');
+          renderStatusNote('note', 'Task resumed');
+          return;
+        }
       }
       if (shouldReuseLiveStatus(event.message || '')) {
         setLiveStatus(statusPhase(event.message || ''), event.message || '', Number.isFinite(event.elapsed_seconds) ? `${event.elapsed_seconds}s` : '');
@@ -2827,9 +3096,26 @@
 
     if (event.type === 'mode') { setMode(event.mode, !!event.isolated, event.isolated_app || ''); return; }
 
+    if (event.type === 'desktop_control') {
+      const target = event.target_app || '';
+      if (event.enabled) {
+        setDesktopSessionActive(true, 'computer', target);
+        setControlSurface({
+          layer: 'Desktop control',
+          reason: event.reason || 'Allowed by user',
+          target: target || 'Desktop',
+          phase: 'Enabled',
+        });
+        setLiveStatus('Desktop access enabled', target ? `Using ${target}` : 'Ready to use the desktop');
+      } else {
+        setDesktopSessionActive(false);
+        setControlSurface();
+      }
+      return;
+    }
+
     if (event.type === 'control_profile') {
       setControlProfileSurface(event);
-      setLiveStatus('Control route', `${event.primary_route || 'UIA exact'}${event.target_app ? ` for ${event.target_app}` : ''}`);
       return;
     }
 
@@ -2937,7 +3223,7 @@
       } else {
         setLiveStatus('Thinking');
       }
-      const sbm = $('sb-model-val'); if (sbm) sbm.textContent = event.tier || event.model || sbm.textContent;
+      const sbm = $('sb-model-val'); if (sbm) sbm.textContent = event.tier || displayModelName(event.model) || sbm.textContent;
       return;
     }
 
@@ -3017,6 +3303,10 @@
         setActionState(entry, grant ? 'Allowed' : 'Denied', grant ? 'ok' : 'fail');
         pWrap.remove();
         $('permission').classList.remove('show');
+        if (event.scope === 'desktop') {
+          $('desktop-access')?.classList.remove('show');
+          window.pendingDesktopPermission = false;
+        }
       };
       btnAllow.onclick = (e) => { e.stopPropagation(); doP(true); };
       btnDenyP.onclick = (e) => { e.stopPropagation(); doP(false); };
@@ -3025,6 +3315,40 @@
       openEntryBody(entry);
 
       if (!replay) {
+        if (event.scope === 'desktop' || event.permission_kind === 'desktop_control') {
+          const target = event.target_app || event.action?.args?.target_app || '';
+          const overlay = $('desktop-access');
+          const list = $('desktop-access-list');
+          $('desktop-access-title').textContent = target ? `Allow control of ${target}?` : 'Allow desktop control?';
+          $('desktop-access-reason').textContent = detail;
+          list.innerHTML = '';
+          [
+            [target || 'Desktop screen', 'Visible to Orynn during this task', 'View'],
+            ['Mouse and keyboard', 'Can click, type, use shortcuts, and control windows', 'Control'],
+            ['Stop anytime', 'Pause, cancel, or deny future requests from the top bar', 'Available'],
+          ].forEach(([title, copy, badge]) => {
+            const row = document.createElement('div');
+            row.className = 'desktop-access-row';
+            const text = document.createElement('div');
+            const strong = document.createElement('strong');
+            strong.textContent = title;
+            const span = document.createElement('span');
+            span.textContent = copy;
+            text.append(strong, span);
+            const badgeEl = document.createElement('div');
+            badgeEl.className = 'desktop-access-badge';
+            badgeEl.textContent = badge;
+            row.append(text, badgeEl);
+            list.appendChild(row);
+          });
+          window.pendingTaskId = taskId;
+          window.pendingPermissionId = event.action_id;
+          window.pendingPermissionScope = event.scope;
+          window.pendingDesktopPermission = true;
+          overlay.classList.add('show');
+          if (!suppressToasts) toast('Orynn is asking for desktop control.', 'warn', 5000);
+          return;
+        }
         $('perm-title').textContent = `Allow ${event.scope || 'access'}?`;
         $('perm-reason').textContent = detail;
         $('perm-code').textContent = JSON.stringify({ scope: event.scope, explanation: event.explanation || '' }, null, 2);
@@ -3065,9 +3389,10 @@
       terminalStateKey = errorKey;
       finalizeTurnSummary();
       finalizeLiveStatus();
+      finalizeAssistantDelta('', { taskId });
       clearLiveIndicators();
       setStatus('error');
-      appendMessage(`Error: ${event.message}`, 'system-error');
+      renderStatusNote('error', `Error: ${event.message || 'Unknown error.'}`);
       if (!replay) { markHistoryFinal('failed'); stopEverything(); }
       else showPostRunControls();
       return;
@@ -3088,21 +3413,24 @@
         renderFilesChanged();  // Codex-style "N files changed" capstone (if any)
         // Show the model's actual final reply as a primary assistant message.
         // Fall back to the generic note only when there's no real answer.
-        const reply = String(event.reason || '').trim();
+        const reply = cleanFinalReplyText(event.reason);
         const isRealAnswer = reply.length > 12 && !/^(done|complete|completed|finished|task complete|ok)\.?$/i.test(reply);
-        if (isRealAnswer) {
-          // Live runs: type the answer out with markdown forming as it goes.
-          // Replays of past logs render instantly (no fake typing of history).
-          if (replay) attachMessageActions(appendMessage(reply, 'assistant'), { text: reply, taskId });
-          else streamInAssistantReply(reply, { taskId });
+        const liveReply = String(liveAssistantText || '').trim();
+        if (isRealAnswer || liveReply) {
+          const finalReply = isRealAnswer ? reply : liveReply;
+          const finalized = finalizeAssistantDelta(finalReply, { taskId });
+          if (!finalized) attachMessageActions(appendMessage(finalReply, 'assistant'), { text: finalReply, taskId });
         }
-        else appendMessage('Task completed successfully.', 'system-success');
+        else renderStatusNote('success', 'Task completed successfully.');
         if (!replay) { markHistoryFinal('done'); stopEverything(); if (!suppressToasts) toast('Task complete.', 'ok'); }
         else showPostRunControls();
       } else {
         setStatus('failed');
+        finalizeAssistantDelta('', { taskId });
         renderFilesChanged();  // surface what was touched before the failure (if any)
-        appendMessage(event.blocked ? `Request blocked: ${event.reason || 'This request could not be completed.'}` : `Task failed: ${event.reason || 'Unknown failure.'}`, 'system-error');
+        renderStatusNote('error', event.blocked ? `Request blocked: ${event.reason || 'This request could not be completed.'}` : `Task failed: ${event.reason || 'Unknown failure.'}`, [
+          { label: 'Retry', onClick: () => retryTask() },
+        ]);
         if (!replay) { markHistoryFinal('failed'); stopEverything(); if (!suppressToasts) toast('Task failed.', 'err'); }
         else showPostRunControls();
       }
@@ -3115,9 +3443,10 @@
       terminalStateKey = key;
       finalizeTurnSummary();
       finalizeLiveStatus();
+      finalizeAssistantDelta('', { taskId });
       clearLiveIndicators();
       setStatus('cancelled');
-      appendMessage(event.message || 'Task was cancelled.', 'system-cancelled');
+      renderStatusNote('cancelled', event.message || 'Task was cancelled.');
       if (!replay) { markHistoryFinal('cancelled'); stopEverything(); }
     }
   };
@@ -3160,7 +3489,6 @@
     };
     sse.onerror = () => {
       if (task !== listenTask || streamClosedManually) return;
-      if (reconnectAttempts < 2) toast(`Stream interrupted. Reconnecting (attempt ${reconnectAttempts + 1}).`, 'warn', 2200);
       scheduleReconnect(listenTask);
     };
   };
@@ -3169,8 +3497,8 @@
     const goal = $('input').value.trim();
     if (!goal) return;
     if (task && sse) { toast('A task is already running. Cancel it before starting another.', 'warn'); return; }
-    const requestedMode = $('mode-id').value;
-    const requestedIsolatedApp = ($('isolated-app-id').value || '').trim();
+    const requestedMode = 'auto';
+    const requestedIsolatedApp = '';
     const requestedModel = selectedModelForRequest(requestedMode);
     const readinessDecision = await ensureTaskReadiness({
       goal,
@@ -3179,13 +3507,9 @@
       isolatedApp: requestedIsolatedApp,
     });
     if (!readinessDecision.ok) return;
-    const effectiveMode = readinessDecision.preflight?.effective_mode || requestedMode;
-    const effectiveIsolatedApp = requestedIsolatedApp || readinessDecision.preflight?.isolated_app || '';
+    const effectiveMode = requestedMode;
+    const effectiveIsolatedApp = '';
     const displayModel = requestedModel || readinessDecision.preflight?.selected_model || null;
-    if (isDesktopMode(effectiveMode)) {
-      const allowed = await requestDesktopAccess({ mode: effectiveMode, isolatedApp: effectiveIsolatedApp });
-      if (!allowed) return;
-    }
 
     task = Math.random().toString(36).slice(2);
     currentViewedTask = task;
@@ -3214,20 +3538,19 @@
       goal,
       model: requestedModel,
       mode: requestedMode,
-      isolated_app: requestedIsolatedApp || null,
+      isolated_app: null,
       active_skills: Array.from(activeSkillIds),
       project_folder: projectFolderState.selectedPath || null,
       plan_first: !!$('plan-first-toggle')?.checked,
       notify_on_completion: !!$('notify-toggle')?.checked,
       auto_commit: !!$('checkpoint-toggle')?.checked,
-      autonomy_level: $('autonomy-level')?.value || 'balanced',
+      autonomy_level: $('autonomy-level')?.value || 'careful',
       thinking_budget: $('thinking-budget')?.value || 'off',
       readiness_override: !!readinessDecision.override
     };
 
     try {
       await keyReady;
-      if (isDesktopMode(effectiveMode)) setDesktopSessionActive(true, effectiveMode, effectiveIsolatedApp || '');
       streamClosedManually = false;
       openStream(task);
       await api('/api/tasks', 'POST', taskPayload);
@@ -3242,7 +3565,7 @@
         if (outcome === 'cancelled') {
           finalizeLiveStatus();
           setStatus('ready');
-          appendMessage('Task was not started. Fix readiness checks in Settings and try again.', 'system');
+          renderStatusNote('error', 'Task was not started. Fix readiness checks in Settings and try again.');
           markHistoryFinal('cancelled');
           stopEverything();
           return;
@@ -3253,7 +3576,7 @@
       finalizeLiveStatus();
       setStatus('error');
       const detail = (typeof err.detail === 'object') ? JSON.stringify(err.detail) : (err.detail || 'Unknown error.');
-      appendMessage(`Failed to start task: ${detail}`, 'system-error');
+      renderStatusNote('error', `Failed to start task: ${detail}`);
       markHistoryFinal('failed');
       showPostRunControls();
     }
@@ -3305,8 +3628,8 @@
     const title = $('task-title').textContent || 'Retry';
     const startRetriedTask = (result) => {
       const preflight = result.preflight || {};
-      const effectiveMode = preflight.effective_mode || result.mode || $('mode-id').value;
-      const effectiveIsolatedApp = preflight.isolated_app || '';
+      const effectiveMode = 'auto';
+      const effectiveIsolatedApp = '';
       const displayModel = preflight.selected_model || result.model || $('model-id').value;
       task = result.task_id; currentViewedTask = task;
       resetTaskView();
@@ -3332,9 +3655,9 @@
       try {
         const record = await api(`/api/tasks/${originalTaskId}`);
         const retryGoal = record.goal || record.context?.goal || title;
-        const retryMode = record.mode || 'auto';
+        const retryMode = 'auto';
         const retryModel = record.model || null;
-        const retryIsolatedApp = record.context?.isolated_app || '';
+        const retryIsolatedApp = '';
         const readinessDecision = await ensureTaskReadiness({
           goal: retryGoal,
           mode: retryMode,
@@ -3346,12 +3669,6 @@
           return;
         }
         readinessOverride = !!readinessDecision.override;
-        const effectiveMode = readinessDecision.preflight?.effective_mode || retryMode;
-        const effectiveIsolatedApp = retryIsolatedApp || readinessDecision.preflight?.isolated_app || '';
-        if (isDesktopMode(effectiveMode)) {
-          const allowed = await requestDesktopAccess({ mode: effectiveMode, isolatedApp: effectiveIsolatedApp });
-          if (!allowed) return;
-        }
       } catch (_) {
         // The server retry endpoint still performs the authoritative preflight.
       }
@@ -3478,6 +3795,10 @@
 
     events.forEach((e) => processTaskEvent(e, { replay: true, taskId, suppressToasts: true }));
     if (live) {
+      if (isTerminalStatus(currentStatus)) {
+        showPostRunControls();
+        return false;
+      }
       streamCursor = streamCursorAfter(events);
       showLiveTaskControls(record || { status: 'running' }, meta);
       restorePendingTrustModal(pendingTrustRequest(events), taskId);
@@ -3489,9 +3810,11 @@
       if (rawStatus === 'queued' || rawStatus === 'pending') setLiveStatus('Queued', 'Waiting for an available task slot.');
       else if (record?.paused || rawStatus === 'paused') setLiveStatus('Paused', 'Task is waiting.');
       else setLiveStatus('Reconnected', 'Live task controls restored.');
+      return true;
     } else if (!silent) {
       toast('Loaded task log.', 'info', 1800);
     }
+    return true;
   };
 
   const recoverActiveTask = async () => {
@@ -3530,10 +3853,11 @@
       events = log.log || [];
     } catch (_) {}
 
-    loadTaskLog(activeId, events, item, { live: true, record, silent: true });
+    const stillLive = loadTaskLog(activeId, events, item, { live: true, record, silent: true });
+    if (!stillLive) return false;
     streamClosedManually = false;
     openStream(activeId);
-    toast('Reconnected to running task.', 'ok', 2400);
+    setLiveStatus('Reconnected', 'Continuing the running task.');
     return true;
   };
 
@@ -3554,6 +3878,7 @@
       option.textContent = 'No configured models';
       select.appendChild(option);
       const sbm = $('sb-model-val'); if (sbm) sbm.textContent = option.textContent;
+      updateComposerContextChip();
       return;
     }
     // Speed tiers first — the recommended way to choose. Each is a curated
@@ -3570,16 +3895,17 @@
     list.forEach((model) => {
       const option = document.createElement('option');
       option.value = model;
-      let label = model.replace('openrouter/', '');
-      if (label.includes('/')) label = label.split('/').slice(-1)[0];
-      option.textContent = label;
+      option.textContent = displayModelName(model);
+      option.title = model;
       select.appendChild(option);
     });
     if (!select.value && select.options.length) select.value = 'tier:balanced';
     selectPreferredModelForMode($('mode-id')?.value || 'auto');
+    updateComposerContextChip();
     const sbm = $('sb-model-val'); if (sbm) sbm.textContent = select.options[select.selectedIndex]?.textContent || '—';
     select.onchange = () => {
       modelSelectionTouched = true;
+      updateComposerContextChip();
       const sbm = $('sb-model-val');
       if (sbm) sbm.textContent = select.options[select.selectedIndex]?.textContent || '—';
     };
@@ -3607,6 +3933,18 @@
   };
   const resolveDesktopAccess = (allow) => {
     $('desktop-access').classList.remove('show');
+    if (window.pendingDesktopPermission) {
+      api('/api/permissions', 'POST', {
+        task_id: window.pendingTaskId,
+        action_id: window.pendingPermissionId,
+        grant: allow,
+        scope: window.pendingPermissionScope || 'desktop',
+      }).catch(() => {});
+      window.pendingDesktopPermission = false;
+      window.pendingPermissionId = null;
+      window.pendingPermissionScope = null;
+      return;
+    }
     if (desktopAccessResolver) desktopAccessResolver(allow);
     desktopAccessResolver = null;
   };
@@ -3891,12 +4229,12 @@
     syncTweaks();
     bindExamples();
     hydrateModelSelect();
-    const _savedMode = localStorage.getItem('orynn_mode') || localStorage.getItem('ai_computer_mode');
+    updateCharCount();
+    localStorage.removeItem('orynn_mode');
+    localStorage.removeItem('ai_computer_mode');
     const _modeSelect = $('mode-id');
-    if (_savedMode && _modeSelect && Array.from(_modeSelect.options).some((o) => o.value === _savedMode)) {
-      _modeSelect.value = _savedMode;
-    }
-    setMode($('mode-id').value || 'auto');
+    if (_modeSelect) _modeSelect.value = 'auto';
+    setMode('auto');
     setBudget(tweakState.budgetPct);
 
     keyReady = fetch(`/api/session?cb=${Date.now()}`, { method: 'POST', credentials: 'same-origin' })
@@ -4454,6 +4792,7 @@
   $('btn-copy-log').onclick = copyCurrentLog;
   $('btn-download-log').onclick = downloadCurrentLog;
   $('new-session-btn').onclick = newSession;
+  $('composer-context-chip')?.addEventListener('click', () => $('open-settings')?.click());
   // Composer: collapse the task options (plan/autonomy/thinking) behind a toggle
   // so the idle input stays clean; reveal them on demand.
   const _optToggle = $('composer-options-toggle');
@@ -4477,9 +4816,8 @@
   $('desktop-control-stop').onclick = () => { stopEverything(); cancelTask(); };
 
   $('mode-id').onchange = (e) => {
-    const val = e.target.value;
+    const val = e.target.value || 'auto';
     const isolatedApp = ($('isolated-app-id').value || '').trim();
-    localStorage.setItem('orynn_mode', val);
     localStorage.removeItem('ai_computer_mode');
     setMode(val, val === 'computer_isolated', isolatedApp);
     $('isolated-app-wrap').style.display = (val === 'computer_isolated') ? '' : 'none';
@@ -4561,29 +4899,34 @@
   const cmdkList = $('cmdk-list');
 
   const buildCommands = () => {
-    const modeOpts = [
-      { value: 'coding', label: 'coding' },
-      { value: 'computer', label: 'desktop' },
-      { value: 'computer_use', label: 'browser' },
-      { value: 'computer_isolated', label: 'isolated' },
-    ];
     const modelSel = $('model-id');
     const models = modelSel ? Array.from(modelSel.options).map(o => ({ value: o.value, label: o.textContent })) : [];
     const cmds = [];
-    modeOpts.forEach(m => cmds.push({
-      group: 'Mode', label: `Set mode: ${m.label}`, hint: m.value,
-      action: () => { const sel = $('mode-id'); if (sel) { sel.value = m.value; sel.dispatchEvent(new Event('change', { bubbles: true })); } setMode(m.value); }
-    }));
     models.forEach(m => cmds.push({
       group: 'Model', label: `Use model: ${m.label}`, hint: m.value,
       action: () => { const sel = $('model-id'); if (sel) { sel.value = m.value; sel.dispatchEvent(new Event('change', { bubbles: true })); } const sbm = $('sb-model-val'); if (sbm) sbm.textContent = m.label; }
     }));
+    [
+      { value: 'careful', label: 'Ask for approval' },
+      { value: 'fast', label: 'Full access' },
+    ].forEach((access) => cmds.push({
+      group: 'Access',
+      label: access.label,
+      hint: access.value,
+      action: () => {
+        const sel = $('autonomy-level');
+        if (sel) {
+          sel.value = access.value;
+          sel.dispatchEvent(new Event('change', { bubbles: true }));
+        }
+      },
+    }));
     cmds.push(
-      { group: 'Task', label: 'Start task', hint: 'Ctrl ↵', action: () => { const b = $('send'); if (b) b.click(); } },
+      { group: 'Task', label: 'Start task', hint: 'Ctrl+Enter', action: () => { const b = $('send'); if (b) b.click(); } },
       { group: 'Task', label: 'Pause / resume', hint: '', action: () => { const b = $('btn-pause'); if (b) b.click(); } },
       { group: 'Task', label: 'Cancel task', hint: 'esc', action: () => { const b = $('btn-cancel'); if (b) b.click(); } },
-      { group: 'Project Folder', label: 'Choose project folder', hint: projectFolderState.selectedPath || 'General mode', action: () => openFolderMenu() },
-      { group: 'Project Folder', label: 'Clear project folder', hint: 'Desktop + Home', action: () => { setProjectFolder('', { persist: true }); toast('Project folder cleared.', 'info', 1800); } },
+      { group: 'Project Folder', label: 'Choose project folder', hint: projectFolderState.selectedPath || 'Workspace', action: () => openFolderMenu() },
+      { group: 'Project Folder', label: 'Clear project folder', hint: 'Dynamic access', action: () => { setProjectFolder('', { persist: true }); toast('Project folder cleared.', 'info', 1800); } },
       { group: 'View', label: 'Focus prompt', hint: 'Ctrl L', action: () => { const el = $('input'); if (el) el.focus(); } },
       { group: 'View', label: 'Show widget gallery', hint: 'demo', action: () => playWidgetGallery() },
       { group: 'View', label: 'Toggle history', hint: '', action: () => { const el = $('btn-history'); if (el) el.click(); } },
@@ -5204,7 +5547,6 @@
     const set = (id, val) => { const el = document.getElementById(id); if (el) el.value = val; };
     const chk = (id, val) => { const el = document.getElementById(id); if (el) el.checked = !!val; };
     set('pref-theme', prefs.theme);
-    set('pref-default-mode', prefs.default_mode);
     set('pref-desktop-model', prefs.desktop_model || '');
     chk('pref-speak', prefs.speak_replies);
     chk('pref-voice-input', prefs.voice_input);
@@ -5242,7 +5584,6 @@
     const onTxt = (id, key) => document.getElementById(id)
       ?.addEventListener('change', e => save({ [key]: e.target.value.trim() }));
     onSel('pref-theme', 'theme');
-    onSel('pref-default-mode', 'default_mode');
     onChk('pref-speak', 'speak_replies');
     onChk('pref-voice-input', 'voice_input');
     onChk('pref-glow', 'show_action_glow');
@@ -5262,14 +5603,10 @@
       prefs = (await r.json()).preferences || {};
       applyTheme(prefs.theme);
       fillControls();
-      // Make the default-mode preference actually drive the mode selector, so
-      // new tasks start in the user's chosen mode.
-      if (prefs.default_mode && prefs.default_mode !== 'auto') {
-        const modeSel = document.getElementById('mode-id');
-        if (modeSel && modeSel.value !== prefs.default_mode) {
-          modeSel.value = prefs.default_mode;
-          modeSel.dispatchEvent(new Event('change', { bubbles: true }));
-        }
+      const modeSel = document.getElementById('mode-id');
+      if (modeSel && modeSel.value !== 'auto') {
+        modeSel.value = 'auto';
+        modeSel.dispatchEvent(new Event('change', { bubbles: true }));
       }
     } catch(e){ console.error('[prefs] load failed', e); }
   }

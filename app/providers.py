@@ -254,6 +254,22 @@ _CHAT_PATTERNS = [
 ]
 
 
+def _matches_chat_pattern(goal_lower: str, pattern: str) -> bool:
+    """Match chat phrases as words, not arbitrary prefixes.
+
+    The old `startswith` check made "ty" match "type hello in notepad", which
+    routed an obvious desktop task into chat mode.
+    """
+    p = pattern.strip()
+    if not p:
+        return False
+    return (
+        goal_lower == p
+        or goal_lower.startswith(f"{p} ")
+        or any(goal_lower.startswith(f"{p}{ch}") for ch in "!?.:,;")
+    )
+
+
 _VISION_MODEL_KEYWORDS = ("vision", "vl", "gemini", "claude", "gpt-4o", "gpt-4-turbo", "pixtral", "llava", "gemma")
 
 
@@ -283,7 +299,7 @@ def detect_task_mode(goal: str, explicit_mode: Optional[str] = None) -> str:
             and not infer_isolated_app_name(goal)):
         return "chat"
     # Starts with a chat pattern
-    if any(g.startswith(p) or g == p.strip() for p in _CHAT_PATTERNS):
+    if any(_matches_chat_pattern(g, p) for p in _CHAT_PATTERNS):
         return "chat"
 
     # --- Existing mode detection ---

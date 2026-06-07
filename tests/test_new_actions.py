@@ -288,7 +288,7 @@ def test_permissions_classify_privacy_sensitive_local_reads():
     assert scope_for_action("ui_critique") == PermissionScope.screen
     assert scope_for_action("find_on_screen") == PermissionScope.screen
     assert scope_for_action("computer", {"action": "screenshot"}) == PermissionScope.screen
-    assert scope_for_action("computer", {"action": "left_click"}) is None
+    assert scope_for_action("computer", {"action": "left_click"}) == PermissionScope.desktop
     assert scope_for_action("get_clipboard") == PermissionScope.clipboard
     assert scope_for_action("set_clipboard") == PermissionScope.clipboard
     # system_info is read-only static OS facts → free (no approval friction).

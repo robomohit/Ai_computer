@@ -348,6 +348,75 @@ async def test_streaming_loop_prompts_for_screen_context_permission(monkeypatch,
 
 
 @pytest.mark.asyncio
+async def test_model_requested_desktop_control_unlocks_desktop_tools(monkeypatch, workspace):
+    s = AgentService(workspace, log_emitter=log_emitter)
+
+    class FakeProvider:
+        total_tokens = 0
+        model = "tier:balanced"
+
+        def __init__(self):
+            self.calls = []
+
+        async def stream_chat_with_tools(self, system, messages, tools, screenshot_b64=None):
+            names = {tool["function"]["name"] for tool in tools}
+            self.calls.append(names)
+            if len(self.calls) == 1:
+                assert "enable_desktop_control" in names
+                assert "uia_find" not in names
+                yield {
+                    "type": "tool_call",
+                    "id": "desktop-1",
+                    "name": "enable_desktop_control",
+                    "args": {"reason": "Open Notepad and type the requested text.", "target_app": "Notepad"},
+                    "thought": "I need desktop control.",
+                }
+            else:
+                assert "uia_find" in names
+                assert "uia_type" in names
+                assert "enable_desktop_control" not in names
+                yield {
+                    "type": "tool_call",
+                    "id": "finish-1",
+                    "name": "finish",
+                    "args": {"reason": "Desktop tools unlocked."},
+                    "thought": "",
+                }
+
+    provider = FakeProvider()
+    events = []
+
+    async def capture_emit(task_id, event, data):
+        events.append((event, data))
+        if event == "permission_required":
+            assert data["scope"] == "desktop"
+            assert data["permission_kind"] == "desktop_control"
+            assert data["target_app"] == "Notepad"
+            s.submit_permission(task_id, data["action_id"], True)
+
+    async def noop_reasoning(*args, **kwargs):
+        return None
+
+    monkeypatch.setattr("app.agent.classify_task_complexity", lambda goal: "atomic")
+    monkeypatch.setattr(s.memory, "search", lambda goal, limit=5: [])
+    monkeypatch.setattr(s.memory, "recall_sessions", lambda goal, limit=5: [])
+    monkeypatch.setattr("app.agent.PlannerProvider", lambda model=None: provider)
+    monkeypatch.setattr(s, "_emit", capture_emit)
+    monkeypatch.setattr(s, "_emit_reasoning", noop_reasoning)
+
+    await s.run_task(
+        "desktop-unlock",
+        "Type hello in Notepad",
+        mode="auto",
+        autonomy_level="careful",
+    )
+
+    assert len(provider.calls) >= 2
+    assert any(event == "desktop_control" and data["enabled"] is True for event, data in events)
+    assert s.permissions.is_granted("desktop-unlock", "desktop") is False
+
+
+@pytest.mark.asyncio
 async def test_screen_permission_is_not_auto_granted(workspace):
     s = AgentService(workspace, log_emitter=log_emitter)
     action = Action(id="screen-auto", type=ActionType.screen_context, args={})

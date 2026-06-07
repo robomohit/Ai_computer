@@ -71,7 +71,7 @@ def test_readiness_endpoint_reports_local_capabilities(monkeypatch):
     assert data["summary"]["ready"] >= 1
 
 
-def test_task_preflight_detects_auto_desktop_warnings(monkeypatch):
+def test_task_preflight_auto_stays_dynamic_without_desktop_guessing(monkeypatch):
     monkeypatch.setenv("OPENROUTER_API_KEY", "sk-test")
     # Pin effort so the desktop model selection is deterministic regardless of
     # the developer's saved preference (medium -> the curated UIA tier).
@@ -101,15 +101,14 @@ def test_task_preflight_detects_auto_desktop_warnings(monkeypatch):
 
     assert resp.status_code == 200
     data = resp.json()
-    assert data["effective_mode"] == "computer_isolated"
-    assert data["isolated_app"] == "Notepad"
-    assert data["selected_model"] == "tier:uia"
-    assert data["model_source"] == "auto:desktop:effort:medium"
+    assert data["effective_mode"] == "auto"
+    assert data["isolated_app"] is None
+    assert data["selected_model"] == "tier:balanced"
+    assert data["model_source"] == "auto:openrouter:effort:medium"
     assert data["model_auto"] is True
     assert data["blocked"] is False
-    assert data["can_override"] is True
-    assert [issue["severity"] for issue in data["issues"]] == ["warning", "warning"]
-    assert data["issues"][0]["key"] == "uia"
+    assert data["can_override"] is False
+    assert data["issues"] == []
 
 
 def test_create_task_blocks_when_preflight_has_blockers(monkeypatch):
@@ -178,6 +177,10 @@ def test_create_task_requires_override_for_preflight_warnings(monkeypatch):
     assert allowed.status_code == 200
     assert allowed.json()["preflight"]["can_override"] is True
     assert _m._tasks["warning-preflight-task"].status == "queued"
+    assert _m._tasks["warning-preflight-task"].mode == "auto"
+    assert _m._tasks["warning-preflight-task"].context.isolated_app is None
+    assert _m._queued_task_specs[0]["mode"] == "auto"
+    assert _m._queued_task_specs[0]["isolated_app"] is None
 
 
 def test_retry_task_requires_override_for_preflight_warnings(monkeypatch, tmp_path):
@@ -250,6 +253,8 @@ def test_retry_task_requires_override_for_preflight_warnings(monkeypatch, tmp_pa
     assert body["retried_from"] == "retry-source"
     assert body["preflight"]["can_override"] is True
     assert init_calls[0]["model"] == "tier:uia"
+    assert init_calls[0]["mode"] == "auto"
+    assert init_calls[0]["isolated_app"] == "Notepad"
     assert _m._tasks["retry-source-retry-1"].status == "running"
 
 
@@ -280,8 +285,12 @@ def test_managed_external_submit_uses_preflight_queue_and_tracking(monkeypatch, 
     )
 
     assert record.status == "queued"
-    assert _m._tasks["telegram-managed"].model == "tier:uia"
-    assert _m._queued_task_specs[0]["model"] == "tier:uia"
+    assert _m._tasks["telegram-managed"].model == "tier:balanced"
+    assert _m._tasks["telegram-managed"].mode == "auto"
+    assert _m._tasks["telegram-managed"].context.isolated_app is None
+    assert _m._queued_task_specs[0]["model"] == "tier:balanced"
+    assert _m._queued_task_specs[0]["mode"] == "auto"
+    assert _m._queued_task_specs[0]["isolated_app"] is None
     assert _m._queued_task_specs[0]["source"] == "telegram"
     created = [payload for _, event, payload in events if event == "task_created"][0]
     assert created["source"] == "telegram"
@@ -548,8 +557,12 @@ def test_create_task_auto_desktop_uses_uia_tier(monkeypatch):
     body = resp.json()
     assert body["preflight"]["effective_mode"] == "computer_isolated"
     assert body["preflight"]["isolated_app"] == "Notepad"
-    assert _m._tasks["auto-desktop-task"].model == "tier:uia"
-    assert _m._queued_task_specs[0]["model"] == "tier:uia"
+    assert _m._tasks["auto-desktop-task"].model == "tier:balanced"
+    assert _m._tasks["auto-desktop-task"].mode == "auto"
+    assert _m._tasks["auto-desktop-task"].context.isolated_app is None
+    assert _m._queued_task_specs[0]["model"] == "tier:balanced"
+    assert _m._queued_task_specs[0]["mode"] == "auto"
+    assert _m._queued_task_specs[0]["isolated_app"] is None
 
 
 def test_task_feedback_endpoint_persists_feedback(monkeypatch, tmp_path):

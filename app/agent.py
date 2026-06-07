@@ -120,6 +120,20 @@ _TEXT_ONLY_DESKTOP_TOOL_EXCLUDES = _VISUAL_DESKTOP_ACTION_TYPES | {
     ActionType.ui_critique,
 }
 
+_DYNAMIC_DESKTOP_TOOL_ACTIONS = (
+    _UIA_ACTION_TYPES
+    | _VISUAL_DESKTOP_ACTION_TYPES
+    | _DESKTOP_POST_ACTION_TYPES
+    | {
+        ActionType.virtual_input,
+        ActionType.ocr_image,
+        ActionType.pixel_color_at,
+        ActionType.ui_critique,
+        ActionType.electron_check,
+        ActionType.electron_unlock,
+    }
+)
+
 MAKE_SUBTASKS_TOOL_NAME = "make_subtasks"
 MAKE_SUBTASKS_TOOL_SCHEMA: Dict[str, Any] = {
     "type": "function",
@@ -227,6 +241,24 @@ def _tool_excludes_for_control_route(mode: str, model_sees: bool, goal: str = ""
         excluded |= _TEXT_ONLY_DESKTOP_TOOL_EXCLUDES
         if _goal_requests_screen_context(goal):
             excluded.discard(ActionType.screen_context)
+    return excluded
+
+
+def _tool_excludes_for_dynamic_surface(
+    *,
+    desktop_enabled: bool,
+    model_sees: bool,
+    goal: str = "",
+) -> set[ActionType]:
+    excluded = _tool_excludes_for_control_route(
+        "computer" if desktop_enabled else "auto",
+        model_sees,
+        goal,
+    )
+    if desktop_enabled:
+        excluded.add(ActionType.enable_desktop_control)
+    else:
+        excluded |= _DYNAMIC_DESKTOP_TOOL_ACTIONS
     return excluded
 
 _POINT_TAG_RE = re.compile(r"\[POINT:(?P<body>[^\]]+)\]", re.IGNORECASE)
@@ -1218,7 +1250,7 @@ class AgentService:
         active_skills = list(active_skills or [])
         task_workspace = Path(project_folder).expanduser().resolve() if project_folder else self.home_dir
         goal = expand_workflow_goal(goal, task_workspace)
-        detected_mode = detect_task_mode(goal, mode if mode != "auto" else None)
+        detected_mode = mode if mode and mode != "auto" else "auto"
         if detected_mode == "computer_isolated" and not isolated_app:
             isolated_app = infer_isolated_app_name(goal)
         self._assign_task_tools(task_id, task_workspace)
@@ -1551,6 +1583,8 @@ class AgentService:
         is_auto_approve = mode in ("coding", "chat", "auto", "computer", "computer_isolated", "computer_use")
         if autonomy_level == "careful":
             is_auto_approve = False
+        if mode in ("computer", "computer_isolated"):
+            self.permissions.grant(task_id, "desktop")
 
         provider_model = getattr(provider, "model", model)
         await self._emit(task_id, "provider_info", {
@@ -1840,7 +1874,7 @@ class AgentService:
                 from .providers import get_tool_guidance
                 from .tool_registry import get_tool_schemas, get_unified_packs
 
-                _is_computer_desktop = mode in ("computer", "computer_isolated")
+                _is_computer_desktop = self.permissions.is_granted(task_id, "desktop") or mode in ("computer", "computer_isolated")
                 _is_browser_use = mode == "computer_use"
 
                 # ── Unified tool surface ──────────────────────────────────────
@@ -1850,11 +1884,12 @@ class AgentService:
                 # screen capture, browser, web research, files, shell. The one
                 # exception is headless browser mode (computer_use): it has no
                 # real desktop, so it stays browser + web + file focused.
-                if _is_browser_use:
-                    packs = ["core", "browser", "web", "filesystem", "utilities"]
-                else:
-                    packs = get_unified_packs()
-                tool_excludes = _tool_excludes_for_control_route(mode, _model_sees, goal)
+                packs = ["core", "browser", "web", "filesystem", "utilities"] if _is_browser_use else get_unified_packs()
+                tool_excludes = _tool_excludes_for_dynamic_surface(
+                    desktop_enabled=_is_computer_desktop,
+                    model_sees=_model_sees,
+                    goal=goal,
+                )
                 tool_guidance = get_tool_guidance(packs, exclude_actions=tool_excludes)
                 tool_schemas = get_tool_schemas(packs, exclude_actions=tool_excludes)
 
@@ -2018,8 +2053,12 @@ class AgentService:
                     system = (
                         "You are Orynn — an intelligent assistant and coding agent.\n"
                         "You can have natural conversations AND take real actions using tools.\n\n"
-                        "You ALSO have desktop (UIA), browser, and web-research tools — use them when a task "
-                        "needs the screen, a desktop app, or live web data, not just files and the shell.\n\n"
+                        "You start with ordinary conversation, coding, file, browser, and web tools. "
+                        "You do NOT start with desktop-control tools. If the user's goal requires seeing or "
+                        "controlling the visible Windows desktop or a desktop app, call "
+                        "enable_desktop_control with a concrete reason and optional target_app. The user will "
+                        "decide in the dashboard; if they allow it, your next turn will include UIA, window, "
+                        "screenshot, mouse, and keyboard tools.\n\n"
                         "ENVIRONMENT: Windows 11. The shell is CMD/PowerShell — NOT bash/zsh.\n"
                         "- Use 'python' not 'python3'. Use 'dir' not 'ls'. Use 'type' not 'cat'.\n"
                         "- 'head', 'grep', 'tail', 'which' do NOT exist. Use Python one-liners or PowerShell instead.\n"
@@ -2027,6 +2066,7 @@ class AgentService:
                         "HOW TO RESPOND:\n"
                         "- Questions, greetings, explanations → just reply conversationally. No tools needed.\n"
                         "- Tasks (write code, edit files, run commands, search, fix bugs) → use your tools.\n"
+                        "- Desktop/app tasks → call enable_desktop_control first; do not pretend you used the desktop.\n"
                         "- YOU decide when tools are needed. Never use a tool just for the sake of it.\n"
                         "- When you're done with a task or have answered a question, call finish.\n\n"
                         "EFFICIENCY RULES (strictly follow these to avoid wasted steps):\n"
@@ -2052,6 +2092,7 @@ class AgentService:
                         "- To just reply (chat/explain): write your response normally, then <action type=\"finish\">{\"reason\": \"done\"}</action>\n\n"
                         "WHEN TO USE TOOLS: only when you actually need to do something (create files, run code, search, etc.).\n"
                         "For questions and conversation, just answer — then finish.\n\n"
+                        "DESKTOP: if you need to see or control the Windows desktop or an app, first call enable_desktop_control with a concrete reason. The desktop tools appear only after the user allows that request.\n\n"
                         "EFFICIENCY: Never call the same tool twice with the same args. Never read_file a file you just wrote. Never re-fetch a URL. After getting what you need, call finish.\n\n"
                         f"Available tools:\n{tool_guidance}\n\n"
                         "After each <observation>, decide your next step. Call finish when done."
@@ -2108,9 +2149,26 @@ class AgentService:
                     args = {}
                     thought_text = ""
                     tool_call_id = None
+                    agent_reply_emitted = False
 
                     def _step_elapsed() -> int:
                         return int(asyncio.get_event_loop().time() - step_start)
+
+                    desktop_now = self.permissions.is_granted(task_id, "desktop") or mode in ("computer", "computer_isolated")
+                    if desktop_now != _is_computer_desktop:
+                        _is_computer_desktop = desktop_now
+                        tool_excludes = _tool_excludes_for_dynamic_surface(
+                            desktop_enabled=_is_computer_desktop,
+                            model_sees=_model_sees,
+                            goal=goal,
+                        )
+                        tool_guidance = get_tool_guidance(packs, exclude_actions=tool_excludes)
+                        tool_schemas = get_tool_schemas(packs, exclude_actions=tool_excludes)
+                        use_native_tools = len(tool_schemas) > 0 and inspect.isasyncgenfunction(
+                            getattr(provider, "stream_chat_with_tools", None)
+                        )
+                        if _is_computer_desktop:
+                            max_steps = max(max_steps, DESKTOP_MAX_STEPS)
 
                     # ── Refresh screenshot each step for vision desktop mode ──
                     # UIA-tier text models drive controls by name and cannot use pixels.
@@ -2250,6 +2308,9 @@ class AgentService:
                                         })
                                     elif event["type"] == "text_only":
                                         thought_text = event.get("content", "")
+                                        if thought_text:
+                                            await self._emit(task_id, "agent", {"text": thought_text})
+                                            agent_reply_emitted = True
                                         # The card will be finalized at the end of the loop
                             except Exception as e:
                                 _log.warning(f"Native tool calling failed, falling back to XML: {e}")
@@ -2375,6 +2436,8 @@ class AgentService:
                         # Model gave a text-only response — that IS the answer.
                         # Emit as a finalized response card only (no duplicate live card).
                         if thought_text and thought_text.strip():
+                            if not agent_reply_emitted:
+                                await self._emit(task_id, "agent", {"text": thought_text})
                             # Finalize the current step as a reply rather than creating a duplicate "Response" card
                             await self._emit(task_id, "reasoning", {
                                 "stage": f"Step {step+1}", "summary": thought_text[:80],
@@ -2507,6 +2570,82 @@ class AgentService:
                     except ValueError:
                         messages.append({"role": "assistant", "content": thought_text})
                         messages.append({"role": "user", "content": f"Invalid action type: {action_type}. Use only the provided tools."})
+                        continue
+
+                    if act.type == AT.enable_desktop_control:
+                        _arg_summary = _summarize_args(act.type.value, args)
+                        reason = str(args.get("reason") or thought_text or "Desktop control is needed for this task.").strip()
+                        target_app = str(args.get("target_app") or "").strip()
+                        await self._emit(task_id, "intent", {
+                            "action_id": act.id,
+                            "action_type": act.type.value,
+                            "explanation": reason,
+                            "args_preview": _arg_summary,
+                        })
+                        await self._emit(task_id, "action_start", {
+                            "action_id": act.id,
+                            "action_type": act.type.value,
+                            "explanation": reason,
+                            "args_summary": _arg_summary,
+                        })
+                        if is_auto_approve:
+                            self.permissions.grant(task_id, "desktop")
+                            granted, denied_scope = True, "desktop"
+                        else:
+                            granted, denied_scope = await self._ensure_permission_for_action(
+                                task_id,
+                                act,
+                                auto_grant=False,
+                                args_summary=_arg_summary,
+                            )
+                        if not granted:
+                            output = f"Desktop control was denied for {denied_scope or 'desktop'} access."
+                            await self._emit(task_id, "action_result", {
+                                "action_id": act.id,
+                                "action_type": act.type.value,
+                                "ok": False,
+                                "output": output,
+                                "args_summary": _arg_summary,
+                            })
+                            self._finalize(task_id, "cancelled", output)
+                            return
+
+                        self.permissions.grant(task_id, "screen")
+                        output = (
+                            "Desktop control is now enabled. On the next turn you can use UIA control-name tools "
+                            "(uia_find, uia_click, uia_type, uia_wait), window focus tools, screenshots, mouse, and keyboard. "
+                            "Use UIA first and verify the actual result before finishing."
+                        )
+                        await self._emit(task_id, "desktop_control", {
+                            "enabled": True,
+                            "reason": reason,
+                            "target_app": target_app,
+                            "scope": "desktop",
+                        })
+                        await self._emit(task_id, "action_result", {
+                            "action_id": act.id,
+                            "action_type": act.type.value,
+                            "ok": True,
+                            "output": output,
+                            "args_summary": _arg_summary,
+                        })
+                        if use_native_tools and tool_call_id:
+                            messages.append({
+                                "role": "assistant",
+                                "content": thought_text,
+                                "tool_calls": [{
+                                    "id": tool_call_id,
+                                    "type": "function",
+                                    "function": {"name": action_type, "arguments": json.dumps(args)},
+                                }],
+                            })
+                            messages.append({"role": "tool", "tool_call_id": tool_call_id, "content": output})
+                        else:
+                            messages.append({
+                                "role": "assistant",
+                                "content": f"<thought>{thought_text}</thought>\n<action type=\"{action_type}\">\n{json.dumps(args)}\n</action>",
+                            })
+                            messages.append({"role": "user", "content": f"<observation>\n{output}\n</observation>"})
                         continue
 
                     if _should_guard_premature_visual_action(
@@ -2776,8 +2915,10 @@ class AgentService:
                         messages.append({"role": "user", "content": f"<observation>\n{obs_text}\n</observation>"})
                     
                     # Update budget (chars/4 is a better token approximation than word count)
-                    provider._total_input_tokens += len(messages[-1].get("content", "")) // 4
-                    provider._total_output_tokens += len(thought_text) // 4
+                    if hasattr(provider, "_total_input_tokens"):
+                        provider._total_input_tokens += len(messages[-1].get("content", "")) // 4
+                    if hasattr(provider, "_total_output_tokens"):
+                        provider._total_output_tokens += len(thought_text) // 4
                     if await self._check_token_budget(task_id, provider, token_budget):
                         return
                     await self._emit(task_id, "usage_update", {"total_tokens": provider.total_tokens})
@@ -2900,14 +3041,21 @@ class AgentService:
             return True, scope
         if self.permissions.is_denied(task_id, scope):
             return False, scope
+        if action.type == ActionType.enable_desktop_control:
+            reason = str(action.args.get("reason") or action.explanation or "The agent needs to view or control the desktop.").strip()
+        else:
+            reason = f"Action '{action.type.value}' needs '{scope}' access."
         payload = {
             "action_id": action.id,
             "scope": scope,
-            "reason": f"Action '{action.type.value}' needs '{scope}' access.",
+            "reason": reason,
             "action_type": action.type.value,
             "args_summary": args_summary or _summarize_args(action.type.value, action.args),
             "action": action.model_dump(),
         }
+        if action.type == ActionType.enable_desktop_control:
+            payload["permission_kind"] = "desktop_control"
+            payload["target_app"] = str(action.args.get("target_app") or "").strip()
         self._permission_waits.setdefault(f"{task_id}:{action.id}", asyncio.Future())
         if emit:
             await emit("permission_required", payload)

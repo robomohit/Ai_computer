@@ -7,6 +7,7 @@ from typing import Dict, Set
 class PermissionScope(str, Enum):
     browser = "browser"
     clipboard = "clipboard"
+    desktop = "desktop"
     google_sheets = "google_sheets"
     filesystem = "filesystem"
     shell = "shell"
@@ -60,6 +61,34 @@ _SCREEN_ACTIONS = {
     "ui_critique",
 }
 
+_DESKTOP_ACTIONS = {
+    "enable_desktop_control",
+    "mouse_click",
+    "keyboard_type",
+    "scroll",
+    "double_click",
+    "right_click",
+    "middle_click",
+    "mouse_move",
+    "left_click_drag",
+    "key_combo",
+    "hold_key",
+    "cursor_position",
+    "type_with_delay",
+    "focus_window",
+    "wait_for_window",
+    "force_close_window",
+    "virtual_input",
+    "computer",
+    "uia_find",
+    "uia_click",
+    "uia_click_sequence",
+    "uia_type",
+    "uia_wait",
+    "electron_check",
+    "electron_unlock",
+}
+
 # system_info is read-only, static OS facts (platform, Python version, CPU
 # count) — harmless, so it's a FREE action (no approval) to avoid pointless
 # "Allow system access?" friction on simple tasks. list_processes stays gated
@@ -70,6 +99,7 @@ _COMPUTER_SCREEN_SUBACTIONS = {"screenshot"}
 
 _EXPLICIT_GRANT_SCOPES = {
     PermissionScope.clipboard,
+    PermissionScope.desktop,
     PermissionScope.mcp,
     PermissionScope.screen,
     PermissionScope.system,
@@ -104,12 +134,14 @@ def scope_for_action(action_type: str, args: dict | None = None) -> PermissionSc
         return PermissionScope.mcp
     if action_type in _CLIPBOARD_ACTIONS:
         return PermissionScope.clipboard
-    if action_type in _SCREEN_ACTIONS:
-        return PermissionScope.screen
     if action_type == "computer":
         subaction = str(args.get("action") or "").strip().lower()
         if subaction in _COMPUTER_SCREEN_SUBACTIONS:
             return PermissionScope.screen
+    if action_type in _DESKTOP_ACTIONS:
+        return PermissionScope.desktop
+    if action_type in _SCREEN_ACTIONS:
+        return PermissionScope.screen
     if action_type in _SYSTEM_ACTIONS:
         return PermissionScope.system
     return None

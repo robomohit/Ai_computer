@@ -29,8 +29,15 @@ def md_to_safe_html(text: str) -> str:
     s = re.sub(r"`([^`\n]+)`", _stash, s)
 
     def _heading(m: re.Match[str]) -> str:
-        level = min(len(m.group(1)), 3)
-        size = {1: "1.34em", 2: "1.17em", 3: "1.02em"}[level]
+        level = min(len(m.group(1)), 6)
+        size = {
+            1: "1.34em",
+            2: "1.17em",
+            3: "1.02em",
+            4: "0.98em",
+            5: "0.94em",
+            6: "0.90em",
+        }[level]
         return (f'<div style="font-size:{size};font-weight:700;'
                 f'margin:6px 0 2px;">{m.group(2)}</div>')
 

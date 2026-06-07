@@ -45,6 +45,7 @@ TOOL_DESCRIPTIONS = {
     ActionType.web_fetch: "web_fetch: {\"url\": str} — fetch a webpage's content directly.",
     ActionType.api_call: "api_call: {\"method\": str, \"url\": str, \"headers\": dict, \"body\": dict} — make an HTTP(S) API call. Only public http(s) URLs are allowed.",
     ActionType.request_permission: "request_permission: {\"scope\": str, \"reason\": str} — ask user for permission.",
+    ActionType.enable_desktop_control: "enable_desktop_control: {\"reason\": str, \"target_app\": str} — ask the user to allow desktop view/control only when you need to interact with the visible computer or a desktop app. Explain the concrete reason, e.g. 'open Notepad and type the requested text'. After the user allows it, the next turn will include UIA, window, screenshot, mouse, and keyboard tools.",
     ActionType.computer: "computer: {\"action\": str, \"x\": int, \"y\": int, \"text\": str, \"keys\": str} — high-level computer action (screenshot, mouse_move, left_click, right_click, double_click, key, type, scroll, cursor_position).",
     ActionType.virtual_input: "virtual_input: {\"action\": str, \"text\": str, \"keys\": str} — alias for high-level isolated input.",
     ActionType.list_mcp_servers: "list_mcp_servers: {} — discover the MCP servers currently registered for this workspace.",
@@ -71,7 +72,7 @@ TOOL_DESCRIPTIONS = {
 }
 
 TOOL_PACKS = {
-    "core": [ActionType.system_info, ActionType.finish, ActionType.request_permission, ActionType.todo_write, ActionType.memory_recall, ActionType.analyze_folder, ActionType.show_widget, ActionType.screen_context],
+    "core": [ActionType.system_info, ActionType.finish, ActionType.request_permission, ActionType.enable_desktop_control, ActionType.todo_write, ActionType.memory_recall, ActionType.analyze_folder, ActionType.show_widget, ActionType.screen_context],
     "filesystem": [ActionType.read_file, ActionType.write_file, ActionType.list_directory, ActionType.move_file, ActionType.file_glob, ActionType.file_grep],
     "terminal": [ActionType.run_command, ActionType.bash, ActionType.wait_for_window, ActionType.git, ActionType.run_tests, ActionType.lint_code, ActionType.find_symbol, ActionType.delegate_coding, ActionType.list_processes, ActionType.kill_process, ActionType.run_and_watch],
     "editing": [ActionType.text_view, ActionType.text_create, ActionType.text_str_replace, ActionType.text_insert, ActionType.text_undo_edit, ActionType.text_editor],

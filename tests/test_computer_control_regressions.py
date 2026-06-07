@@ -689,6 +689,8 @@ def test_providers_module_exposes_asyncio():
 def test_single_app_desktop_goal_auto_selects_isolated_mode():
     assert infer_isolated_app_name("Open Notepad and write hello") == "Notepad"
     assert detect_task_mode("Open Notepad and write hello") == "computer_isolated"
+    assert infer_isolated_app_name("type hello in notepad") == "Notepad"
+    assert detect_task_mode("type hello in notepad") == "computer_isolated"
     assert detect_task_mode("Open the Start menu and click the Settings button") == "computer"
 
 
@@ -1500,8 +1502,9 @@ async def test_unified_surface_desktop_task_can_reach_browser_web_and_files(monk
 
 
 @pytest.mark.asyncio
-async def test_unified_surface_coding_task_can_reach_desktop_and_browser(monkeypatch, workspace):
-    """A coding/chat task can reach desktop (UIA) and browser tools too."""
+async def test_dynamic_surface_starts_without_desktop_until_requested(monkeypatch, workspace):
+    """Generic tasks start lean: browser/web/files are available, desktop UIA is
+    unlocked only after enable_desktop_control is called."""
     service = AgentService(workspace, log_emitter=DummyLogEmitter())
     monkeypatch.setattr("app.agent.classify_task_complexity", lambda goal: "atomic")
     monkeypatch.setattr("app.agent.is_vision_model", lambda model: False)
@@ -1511,4 +1514,5 @@ async def test_unified_surface_coding_task_can_reach_desktop_and_browser(monkeyp
 
     names = captured["names"]
     assert {"read_file", "write_file", "run_command", "finish"} <= names
-    assert {"uia_find", "browser_open", "web_search"} <= names
+    assert {"browser_open", "web_search", "enable_desktop_control"} <= names
+    assert "uia_find" not in names

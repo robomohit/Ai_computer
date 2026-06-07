@@ -3268,6 +3268,7 @@ class ToolExecutor:
             # request_permission is normally intercepted by the agent, but stub
             # it here so ActionType enum coverage is complete.
             ActionType.request_permission: lambda a: ToolResult(ok=True, output=f"Permission request for '{a.args.get('scope','')}' noted."),
+            ActionType.enable_desktop_control: lambda a: ToolResult(ok=True, output="Desktop control request noted."),
             # Coding power tools
             ActionType.git: lambda a: self.git(a.args["command"], a.args.get("args", "")),
             ActionType.run_tests: lambda a: self.run_tests(a.args.get("command", ""), a.args.get("path", ".")),

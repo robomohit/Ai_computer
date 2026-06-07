@@ -71,6 +71,7 @@ class ActionType(str, Enum):
     system_info = "system_info"
     list_directory = "list_directory"
     request_permission = "request_permission"
+    enable_desktop_control = "enable_desktop_control"
     file_glob = "file_glob"
     file_grep = "file_grep"
     web_fetch = "web_fetch"

@@ -43,6 +43,8 @@ CODING = [
 ]
 
 DESKTOP = [
+    ("type hello in notepad", "computer_isolated"),
+    ("type hello into notepad", "computer_isolated"),
     ("open notepad and write hello", "computer_isolated"),
     ("open calculator and compute 5 times 9", "computer_isolated"),
     ("open the start menu and click the settings button", "computer"),

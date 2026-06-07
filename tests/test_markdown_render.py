@@ -33,7 +33,10 @@ def test_heading_levels_have_distinct_sizes():
     h1 = md_to_safe_html("# Big")
     h2 = md_to_safe_html("## Medium")
     h3 = md_to_safe_html("### Small")
+    h4 = md_to_safe_html("#### Smaller")
+    h6 = md_to_safe_html("###### Tiny")
     assert "1.34em" in h1 and "1.17em" in h2 and "1.02em" in h3
+    assert "0.98em" in h4 and "0.90em" in h6
 
 
 def test_html_is_escaped_no_injection():
