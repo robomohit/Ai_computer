@@ -1547,7 +1547,31 @@
       head.append(lead, count);
       const list = document.createElement('div');
       list.className = 'history-group-items';
-      matches.forEach((it, idx) => {
+      // Collapse repeated identical goals into one row with a ×N badge, so the
+      // sidebar shows "Inspect the repo ×6" instead of six identical rows.
+      const _byGoal = new Map();
+      const _rows = [];
+      matches.forEach((it) => {
+        const g2 = (it.querySelector('.history-goal')?.textContent || '').trim();
+        const existing = _byGoal.get(g2);
+        if (existing) { existing.count += 1; return; }
+        const entry = { item: it, count: 1 };
+        _byGoal.set(g2, entry);
+        _rows.push(entry);
+      });
+      _rows.forEach((entry, idx) => {
+        const it = entry.item;
+        let badge = it.querySelector('.history-dup-badge');
+        if (entry.count > 1) {
+          if (!badge) {
+            badge = document.createElement('span');
+            badge.className = 'history-dup-badge';
+            it.querySelector('.history-goal')?.insertAdjacentElement('afterend', badge);
+          }
+          badge.textContent = `×${entry.count}`;
+        } else if (badge) {
+          badge.remove();
+        }
         it.classList.toggle('history-overflow', !expanded && idx >= HISTORY_GROUP_LIMIT);
         list.appendChild(it);
       });

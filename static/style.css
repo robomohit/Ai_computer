@@ -560,6 +560,18 @@
     text-overflow: ellipsis;
   }
   .history-item.terminal:not(.active) .history-goal { color: var(--ink-2); }
+  /* "×N" badge when identical runs are collapsed into one sidebar row. */
+  .history-dup-badge {
+    flex-shrink: 0;
+    align-self: center;
+    padding: 0 5px;
+    border-radius: 99px;
+    background: var(--bg-3);
+    color: var(--muted-2);
+    font-size: var(--fs-micro);
+    font-weight: 600;
+    font-variant-numeric: tabular-nums;
+  }
   .history-meta {
     flex-shrink: 0;
     color: var(--muted-2);
