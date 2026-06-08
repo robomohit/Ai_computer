@@ -1780,6 +1780,10 @@
 
   const setLiveStatus = (title, detail = '', age = '') => {
     const card = ensureStatusCard();
+    // A specific status/reassurance message — distinct from the calm "Thinking…"
+    // shimmer — so drop the thinking-min styling and let the real text (and its
+    // subtitle) show plainly. showThinking() re-applies the shimmer on progress.
+    card.classList.remove('thinking-min');
     liveStatusMessage = detail || title || '';
     card.querySelector('.status-title').textContent = title || 'Agent update';
     card.querySelector('.status-subtitle').textContent = detail || '';
@@ -2988,7 +2992,11 @@
     // the final answer, terminal states, and interactive prompts still render.
     if (_MIN_SUPPRESS.has(event.type)) {
       if (event.type === 'action_start') _turnDidWork = true;
-      if (!replay) showThinking();
+      // Heartbeats are keep-alives, not progress — don't let them reset the
+      // indicator to "Thinking" and clobber an active reassurance message (the
+      // rate-limit "retrying…" notice or the stall-watchdog "still working").
+      const isHeartbeat = event.type === 'status' && event.heartbeat;
+      if (!replay && !isHeartbeat) showThinking();
       return;
     }
 
@@ -3245,7 +3253,7 @@
         setLiveStatus(String(event.message));
         noteProgress();  // an explicit retry notice is progress — don't double up with the stall hint
       } else {
-        setLiveStatus('Thinking');
+        showThinking();
       }
       const sbm = $('sb-model-val'); if (sbm) sbm.textContent = event.tier || displayModelName(event.model) || sbm.textContent;
       return;

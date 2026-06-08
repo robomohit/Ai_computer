@@ -134,6 +134,25 @@ def test_worked_for_capstone_when_minimal_stream_suppresses_work():
     assert ".work-capstone" in css, "work-capstone CSS rule missing"
 
 
+def test_rate_limit_reassurance_survives_heartbeats_in_minimal_stream():
+    """During a free-model backoff the only events are heartbeats. They must NOT
+    reset the indicator to 'Thinking' and clobber the rate-limit 'retrying…' /
+    stall 'still working' reassurance the user relies on to know it isn't frozen."""
+    js = (_STATIC / "app.js").read_text(encoding="utf-8", errors="replace")
+
+    # Heartbeats are recognised and skip showThinking() (so they don't overwrite).
+    assert "event.type === 'status' && event.heartbeat" in js, \
+        "heartbeat not distinguished in the minimal-stream suppress guard"
+    assert "!replay && !isHeartbeat) showThinking()" in js, \
+        "heartbeats must not call showThinking() (would clobber the reassurance)"
+    # A specific reassurance message drops the thinking-min shimmer so it reads plainly.
+    assert "card.classList.remove('thinking-min')" in js, \
+        "setLiveStatus must clear thinking-min so the reassurance text shows"
+    # The non-retry provider_info path keeps the calm shimmer via showThinking().
+    assert "} else {\n        showThinking();" in js, \
+        "non-retry provider_info should fall back to the Thinking shimmer"
+
+
 def test_phase_e_typography_whitespace():
     html = _read_all_static()
 
