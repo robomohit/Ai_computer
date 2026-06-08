@@ -102,8 +102,8 @@
           <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.8" stroke-linecap="round" stroke-linejoin="round"><path d="M8 2v6"/><path d="M16 2v6"/><path d="M7 8h10v4a5 5 0 0 1-10 0z"/><path d="M12 17v5"/></svg>
         </div>
         <h1 class="onb-title">Switch on the AI</h1>
-        <p class="onb-sub">Paste a free key to power the assistant. It's free, takes about 30 seconds, and no card is needed.</p>
-        <button class="onb-link" id="onb-get-key" type="button">Get a free key →</button>
+        <p class="onb-sub">Paste a free API key — no card needed, ~30 seconds. <b>A free Groq key gives the fastest replies</b> (OpenRouter keys work too — paste either).</p>
+        <button class="onb-link" id="onb-get-key" type="button">Get a free Groq key →</button>
         <input class="onb-input" id="onb-key" type="password" autocomplete="off" placeholder="Paste your key here">
         <div class="onb-status" id="onb-key-status" role="status"></div>
         <div class="onb-actions">
@@ -180,10 +180,10 @@
         </div>
 
         <div class="settings-group" id="provider-key-group" data-settings-tab="general">
-          <div class="selector-label">OpenRouter key
+          <div class="selector-label">API key
             <span class="key-state" id="key-state">checking…</span>
           </div>
-          <p class="settings-hint">Powers the assistant on free models. <a href="https://openrouter.ai/keys" target="_blank" rel="noopener" class="key-link">Get a free key →</a></p>
+          <p class="settings-hint">Powers the assistant on free models — a free <a href="https://console.groq.com/keys" target="_blank" rel="noopener" class="key-link">Groq key</a> is fastest, or an <a href="https://openrouter.ai/keys" target="_blank" rel="noopener" class="key-link">OpenRouter key</a>. Paste either.</p>
           <div class="key-row">
             <input id="provider-key-input" class="pref-input" type="password" autocomplete="off" spellcheck="false" placeholder="Paste a new key to update">
             <button id="provider-key-save" class="key-save" type="button">Save</button>

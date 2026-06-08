@@ -5678,7 +5678,7 @@
       const r = await fetch('/api/setup/provider-key', {
         method:'POST', credentials:'include',
         headers:{'Content-Type':'application/json'},
-        body: JSON.stringify({ provider:'openrouter', key }),
+        body: JSON.stringify({ provider: /^gsk_/i.test(key) ? 'groq' : 'openrouter', key }),
       });
       if (r.ok){ status.className = 'onb-status ok'; status.textContent = 'Connected ✓'; setTimeout(next, 500); }
       else { const d = await r.json().catch(()=>({})); status.className = 'onb-status err'; status.textContent = d.detail || 'That key didn’t work — double-check and try again.'; }
@@ -5711,7 +5711,9 @@
     document.getElementById('onb-key-save')?.addEventListener('click', saveKey);
     document.getElementById('onb-key')?.addEventListener('keydown', e => { if (e.key === 'Enter') saveKey(); });
     document.getElementById('onb-get-key')?.addEventListener('click', () => {
-      try { window.open('https://openrouter.ai/keys', '_blank'); } catch(_){}
+      // Steer new users to Groq — free AND sub-second (vs OpenRouter free's
+      // 5-15s). Either key works; the save auto-detects which from its prefix.
+      try { window.open('https://console.groq.com/keys', '_blank'); } catch(_){}
     });
     // theme segmented control
     const seg = document.getElementById('onb-theme');
@@ -5899,7 +5901,7 @@
       const r = await fetch('/api/setup/provider-key', {
         method:'POST', credentials:'include',
         headers:{'Content-Type':'application/json'},
-        body: JSON.stringify({ provider:'openrouter', key }),
+        body: JSON.stringify({ provider: /^gsk_/i.test(key) ? 'groq' : 'openrouter', key }),
       });
       if (r.ok){
         statusEl.textContent = 'Saved ✓'; statusEl.className = 'key-status ok';
