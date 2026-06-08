@@ -1764,6 +1764,46 @@
     scrollFeed();
   };
 
+  // When a task fully stops, fold the just-finished turn's working cards
+  // (tool / approval / permission / status) into one collapsed "Worked for X ›"
+  // toggle, leaving just the conversation + the answer. A plain chat with no
+  // working cards gets no fold.
+  const collapseWorkIntoFold = (elapsedSeconds) => {
+    const feed = $('feed');
+    if (!feed) return;
+    const work = [...feed.children].filter((el) =>
+      el.nodeType === 1 &&
+      !el.classList.contains('work-fold') &&
+      !(el.classList.contains('message') &&
+        (el.classList.contains('user') || el.classList.contains('assistant')))
+    );
+    if (!work.length) return;
+    const fold = document.createElement('div');
+    fold.className = 'work-fold';
+    const head = document.createElement('button');
+    head.type = 'button';
+    head.className = 'work-fold-head';
+    const label = document.createElement('span');
+    label.className = 'work-fold-label';
+    label.textContent = `Worked for ${fmtWorkDuration(elapsedSeconds)}`;
+    const chev = document.createElement('span');
+    chev.className = 'work-fold-chevron';
+    chev.textContent = '›';
+    head.append(label, chev);
+    const body = document.createElement('div');
+    body.className = 'work-fold-body';
+    body.hidden = true;
+    fold.append(head, body);
+    feed.insertBefore(fold, work[0]);
+    work.forEach((el) => body.appendChild(el));
+    head.addEventListener('click', () => {
+      const open = body.hidden;
+      body.hidden = !open;
+      fold.classList.toggle('open', open);
+    });
+    scrollFeed();
+  };
+
   const fmtWorkDuration = (sec) => {
     sec = Math.max(0, Math.round(sec || 0));
     if (sec < 60) return `${sec}s`;
@@ -3323,7 +3363,10 @@
       clearLiveIndicators();
       if (event.complete) {
         setStatus('complete');
-        // Minimal stream: no work-fold / files-changed capstone — just the answer.
+        // Task fully stopped: fold the working/approval cards into a single
+        // collapsed "Worked for X ›" toggle, leaving just the answer below.
+        const _workElapsed = startTime ? (Date.now() - startTime) / 1000 : 0;
+        collapseWorkIntoFold(_workElapsed);
         // Show the model's actual final reply as a primary assistant message.
         // Fall back to the generic note only when there's no real answer.
         const reply = cleanFinalReplyText(event.reason);

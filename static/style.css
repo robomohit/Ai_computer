@@ -1489,6 +1489,27 @@
     from { background-position: 200% 0; }
     to   { background-position: -40% 0; }
   }
+
+  /* "Worked for X ›" — the collapsed capstone the working/approval cards fold
+     into once a task fully stops. Collapsed by default; click to expand. */
+  .work-fold { margin: 6px 0 6px 24px; }
+  .work-fold-head {
+    display: inline-flex; align-items: center; gap: 6px;
+    background: transparent; border: 0; padding: 4px 0; cursor: pointer;
+    color: var(--muted-2); font-size: var(--fs-sm); font-family: var(--font-ui);
+  }
+  .work-fold-head:hover { color: var(--ink-2); }
+  .work-fold-chevron { color: var(--muted-3); transition: transform var(--dur-fast) var(--ease-out); }
+  .work-fold.open .work-fold-chevron { transform: rotate(90deg); }
+  .work-fold-body { margin-top: 4px; padding-left: 10px; border-left: 1px solid var(--line); }
+  .work-fold-body[hidden] { display: none; }
+
+  /* Interactive approval/permission cards have their own buttons — drop the
+     whole-card hover highlight (it sat misaligned against the inner boxes). */
+  .feed-card:has([data-trust-controls]):hover,
+  .feed-card:has(.trust-action-btn):hover,
+  .feed-card:has(.modal-actions):hover,
+  .feed-card:has(.modal-btn):hover { background: transparent; }
   .message.assistant code.md-code {
     font-family: var(--font-mono);
     font-size: 0.86em;
