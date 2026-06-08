@@ -4,6 +4,7 @@
 
 ### Conversation & stream
 - Minimal stream: planning/working/reflection chrome collapses into a single calm "Thinking…" indicator with a moving accent shimmer; on completion the working/approval cards fold into "Worked for X" and only the answer text remains.
+- Even when the minimal stream suppressed every working card, a finished desktop/coding turn now leaves a quiet "Worked for X" capstone above the answer (a plain chat stays bare).
 - The final answer streams in token-by-token (typing reveal) with live markdown formatting.
 - Proper markdown rendering — real heading hierarchy (H1–H3), ordered + bullet lists, horizontal rules — in both the web dashboard and the Qt capsule.
 - Multi-turn chat: a follow-up message continues the conversation with prior context instead of starting a new one; clicking a continued chat in the sidebar replays the whole thread.
@@ -17,6 +18,7 @@
 ### Onboarding & reliability
 - Onboarding steers new users to a free **and fast** Groq key (accepts an OpenRouter or Groq key, auto-detected by prefix).
 - More persistent chain retry on free-tier rate-limit storms so a transient 429 wave recovers into a (slow) success instead of failing the task.
+- During a backoff, the "retrying in Ns…" notice and the stall-watchdog "still working" hint now persist instead of being overwritten by keep-alive heartbeats — a rate-limited task explains the wait rather than silently reading "Thinking".
 
 ### Visual polish
 - Ambient accent glow enabled, dark default theme, decluttered composer (task options behind a toggle), feed breathing room, and removed the unused 3.2 MB mermaid dependency.
