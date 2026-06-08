@@ -652,6 +652,26 @@
     border-bottom: 1px solid var(--line);
   }
   .settings-head h3 { margin: 0; font-size: 15px; font-weight: 600; color: var(--ink); }
+  .settings-tabs {
+    display: flex;
+    gap: 4px;
+    padding: 10px 16px 0;
+    flex-shrink: 0;
+  }
+  .settings-tab {
+    background: transparent;
+    border: 0;
+    padding: 7px 12px;
+    border-radius: var(--r-sm);
+    color: var(--muted);
+    font-size: var(--fs-sm);
+    font-weight: 550;
+    cursor: pointer;
+    font-family: var(--font-ui);
+    transition: color var(--dur-fast) var(--ease-out), background var(--dur-fast) var(--ease-out);
+  }
+  .settings-tab:hover { color: var(--ink-2); background: var(--bg-2); }
+  .settings-tab.is-active { color: var(--accent); background: var(--accent-soft); }
   .settings-body {
     padding: 16px 20px 20px;
     display: grid;

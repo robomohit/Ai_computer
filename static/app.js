@@ -134,6 +134,19 @@
         close();
       }
     }, true);
+
+    // Settings tabs: group the dumping-ground sections into General / Permissions
+    // / Extensions. Toggle visibility via the `hidden` attribute so each section
+    // keeps its natural display.
+    const settingsTabs = overlay.querySelectorAll('.settings-tab');
+    const applySettingsTab = (which) => {
+      settingsTabs.forEach((t) => t.classList.toggle('is-active', t.dataset.tab === which));
+      overlay.querySelectorAll('.settings-body [data-settings-tab]').forEach((sec) => {
+        sec.hidden = sec.dataset.settingsTab !== which;
+      });
+    };
+    settingsTabs.forEach((tab) => tab.addEventListener('click', () => applySettingsTab(tab.dataset.tab)));
+    applySettingsTab('general');
   })();
 
   /* ---------------- voice: dictation (STT) + read-aloud (TTS) ----------------
