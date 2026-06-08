@@ -2140,6 +2140,7 @@ async def create_task(body: TaskIn):
             log_emitter.emit(body.task_id, "task_created", {
                 "task_id": body.task_id,
                 "goal": body.goal,
+                "conversation": body.history or [],
                 "model": selected_model,
                 "mode": record.mode,
                 "effective_mode": preflight.get("effective_mode"),
@@ -2165,6 +2166,7 @@ async def create_task(body: TaskIn):
         log_emitter.emit(body.task_id, "task_created", {
             "task_id": body.task_id,
             "goal": body.goal,
+            "conversation": body.history or [],
             "model": selected_model,
             "mode": record.mode,
             "effective_mode": preflight.get("effective_mode"),

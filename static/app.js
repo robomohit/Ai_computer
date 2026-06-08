@@ -3542,6 +3542,9 @@
     $('btn-copy-log').classList.add('hidden');
     $('btn-download-log').classList.add('hidden');
     if (!continuing) activeHistoryItem = addActiveHistoryItem(goal);
+    // Continuation: re-point the conversation's sidebar row at the latest turn,
+    // whose task_created carries the full prior conversation for full-thread replay.
+    else if (activeHistoryItem) { activeHistoryItem.dataset.taskId = task; bindHistoryItem(activeHistoryItem, task); }
 
     startTime = Date.now();
     timer = setInterval(updateClock, 1000);
@@ -3796,11 +3799,25 @@
 
     const createdEvent = events.find((e) => e.type === 'task_created');
     const meta = activeTaskMeta(record || {}, events);
-    const firstGoal = createdEvent?.goal || meta.goal;
-    const title = sourceEl?.querySelector('.history-goal')?.textContent || firstGoal || 'Past task';
+    const conversation = Array.isArray(createdEvent?.conversation) ? createdEvent.conversation : [];
+    const turnGoal = createdEvent?.goal || meta.goal;
+    const title = sourceEl?.querySelector('.history-goal')?.textContent
+      || (conversation.find((t) => t && t.role === 'user')?.content) || turnGoal || 'Past task';
     if (live) setMode(meta.mode, meta.mode === 'computer_isolated' || !!meta.isolatedApp, meta.isolatedApp);
     setTaskTitle(title, { mode: live ? meta.mode : createdEvent?.mode, model: live ? meta.model : createdEvent?.model, status: live ? 'running' : '' });
-    appendMessage(title, 'user');
+    // Full-thread replay: render the prior conversation turns before this turn's
+    // message, so a continued chat replays the whole thread (not just one turn).
+    if (!live && conversation.length) {
+      conversation.forEach((t) => {
+        const c = (t && t.content) ? String(t.content) : '';
+        if (!c) return;
+        if (t.role === 'assistant') attachMessageActions(appendMessage(c, 'assistant'), { text: c, taskId });
+        else appendMessage(c, 'user');
+      });
+      appendMessage(turnGoal, 'user');
+    } else {
+      appendMessage(title, 'user');
+    }
     if (!live) {
       $('btn-retry').classList.remove('hidden');
       $('btn-control-report').classList.remove('hidden');
