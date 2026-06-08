@@ -1033,10 +1033,13 @@ def classify_task_complexity(goal: str) -> str:
 DEFAULT_OPENROUTER_MODEL = "openrouter/openai/gpt-oss-120b:free"
 
 # Chain-level retry: when ALL models in the fallback chain are exhausted (e.g.
-# all 429'd), retry the whole chain this many times with exponential backoff
-# before surfacing a human-readable error.  Caps total wait at ~40s.
-_CHAIN_RETRY_MAX = 2
-_CHAIN_RETRY_BACKOFFS = [10, 30]  # seconds between chain retry attempts
+# all 429'd at once — common on the free tier), retry the whole chain this many
+# times with exponential backoff before surfacing an error. More persistence
+# here means a transient rate-limit storm recovers into a (slow) success instead
+# of failing the task — the point being an agent that finishes, not one that
+# "sometimes works." Caps total backoff at ~68s; the user can always cancel.
+_CHAIN_RETRY_MAX = 3
+_CHAIN_RETRY_BACKOFFS = [8, 20, 40]  # seconds between chain retry attempts
 
 # Speed tiers — each is an ordered free-model fallback chain. A user picks a
 # tier ("tier:quick" / "tier:balanced") instead of a raw model; the chain
