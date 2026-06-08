@@ -3549,7 +3549,7 @@
     startTime = Date.now();
     timer = setInterval(updateClock, 1000);
     updateClock();
-    setLiveStatus('Initializing', 'Starting task…');
+    showThinking();
     const taskPayload = {
       task_id: task,
       goal,
@@ -3662,7 +3662,7 @@
       startTime = Date.now();
       timer = setInterval(updateClock, 1000);
       updateClock();
-      setLiveStatus('Initializing', 'Retrying task...');
+      showThinking();
       if (isDesktopMode(effectiveMode)) setDesktopSessionActive(true, effectiveMode, effectiveIsolatedApp || '');
       streamClosedManually = false;
       openStream(task);
@@ -4006,7 +4006,7 @@
     startTime = Date.now();
     timer = setInterval(updateClock, 1000);
     updateClock();
-    setLiveStatus('Initializing', 'Starting task…');
+    showThinking();
 
     await delay(600);
     setLiveStatus('Planning', 'Drafting sub-tasks and file plan.', '3s');
@@ -4171,7 +4171,7 @@
     startTime = Date.now();
     timer = setInterval(updateClock, 1000);
     updateClock();
-    setLiveStatus('Initializing', 'Starting desktop task…');
+    showThinking();
 
     await delay(700);
     setLiveStatus('Planning', 'Routing to Windows UI Automation.', '2s');
