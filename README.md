@@ -123,15 +123,15 @@ chmod +x setup.sh && ./setup.sh
 Open `.env` and paste in **at least one** key - both have free tiers:
 
 ```env
-OPENROUTER_API_KEY=sk-or-v1-...   # free - widest model selection + auto-fallback
+OPENROUTER_API_KEY=sk-or-v1-...   # free - widest model selection
 GROQ_API_KEY=gsk_...              # free - dramatically faster (sub-second) responses
 ```
 
 > Get a free OpenRouter key at [openrouter.ai/keys](https://openrouter.ai/keys), or a
-> free Groq key at [console.groq.com/keys](https://console.groq.com/keys). OpenRouter
-> has the widest free-model selection and automatic fallback across models; **Groq is
-> much faster** but has no cross-provider fallback. Set whichever fits - if you set
-> both, OpenRouter takes precedence. All free tiers carry the provider's own rate limits.
+> free Groq key at [console.groq.com/keys](https://console.groq.com/keys). **Best results:
+> set both.** Orynn uses Groq for its sub-second speed and **automatically falls back to
+> OpenRouter's free models if Groq is busy** — so you get fast *and* reliable. With only
+> one key it uses that provider. All free tiers carry the provider's own rate limits.
 
 ### 3. Launch
 

@@ -1082,6 +1082,16 @@ def _select_model_for_task(goal: str, mode: str = "auto", requested_model: Optio
             "missing_key": bool(required_key and not os.environ.get(required_key)),
         }
 
+    if os.environ.get("GROQ_API_KEY"):
+        # Groq is free AND sub-second, so it's the preferred free provider when its
+        # key is set — this is the app's #1 UX win (latency). A Groq 429/failure
+        # transparently falls back to the OpenRouter ":free" chain inside
+        # LLMProvider.stream_chat_with_tools, so speed doesn't cost reliability.
+        # A deliberate DESKTOP_MODEL opt-in still wins for an explicit desktop task
+        # (reliability is the whole point of that escape hatch).
+        _dm = os.environ.get("DESKTOP_MODEL", "").strip()
+        if not (_dm and requested_mode in ("computer", "computer_isolated")):
+            return {"selected_model": "groq/llama-3.3-70b-versatile", "model_source": "auto:groq", "model_auto": True, "required_key": "GROQ_API_KEY", "missing_key": False}
     if os.environ.get("OPENROUTER_API_KEY"):
         from .providers import effort_model, normalize_effort
         try:
@@ -1115,8 +1125,6 @@ def _select_model_for_task(goal: str, mode: str = "auto", requested_model: Optio
         return {"selected_model": "gpt-4o-mini", "model_source": "auto:openai", "model_auto": True, "required_key": "OPENAI_API_KEY", "missing_key": False}
     if os.environ.get("GOOGLE_API_KEY"):
         return {"selected_model": "gemini-2.0-flash", "model_source": "auto:google", "model_auto": True, "required_key": "GOOGLE_API_KEY", "missing_key": False}
-    if os.environ.get("GROQ_API_KEY"):
-        return {"selected_model": "groq/llama-3.3-70b-versatile", "model_source": "auto:groq", "model_auto": True, "required_key": "GROQ_API_KEY", "missing_key": False}
     if os.environ.get("OLLAMA_DEFAULT_MODEL"):
         return {"selected_model": f"ollama/{os.environ['OLLAMA_DEFAULT_MODEL']}", "model_source": "auto:ollama:env", "model_auto": True, "required_key": None, "missing_key": False}
 

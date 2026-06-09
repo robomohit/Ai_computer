@@ -17,6 +17,7 @@
 
 ### Onboarding & reliability
 - Onboarding steers new users to a free **and fast** Groq key (accepts an OpenRouter or Groq key, auto-detected by prefix).
+- Groq is now the preferred free provider when its key is set (sub-second vs OpenRouter's 5–15s latency), with a transparent cross-provider fallback to the OpenRouter `:free` chain if Groq is busy/unavailable — fast by default, reliable as backup. A deliberate `DESKTOP_MODEL` opt-in still wins for explicit desktop tasks.
 - More persistent chain retry on free-tier rate-limit storms so a transient 429 wave recovers into a (slow) success instead of failing the task.
 - During a backoff, the "retrying in Ns…" notice and the stall-watchdog "still working" hint now persist instead of being overwritten by keep-alive heartbeats — a rate-limited task explains the wait rather than silently reading "Thinking".
 

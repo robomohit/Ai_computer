@@ -1769,36 +1769,60 @@ class PlannerProvider:
         """
         import httpx as _httpx
 
-        last_err: Optional[Exception] = None
-        for _chain_attempt in range(_CHAIN_RETRY_MAX + 1):
-            last_err = None
-            try:
-                async for event in self._stream_chat_with_tools_single(
-                    system, messages, tools, screenshot_b64
-                ):
-                    yield event
-                return  # chain succeeded
-            except Exception as e:
-                last_err = e
-                _is_rate_limit = (
-                    isinstance(e, _httpx.HTTPStatusError)
-                    and e.response.status_code in (402, 429)
-                ) or isinstance(e, RuntimeError) and (
-                    "429" in str(e) or "rate" in str(e).lower() or "busy" in str(e).lower()
-                )
-                if not _is_rate_limit:
-                    raise  # non-rate-limit errors don't benefit from chain retry
-            if _chain_attempt < _CHAIN_RETRY_MAX:
-                _wait = _CHAIN_RETRY_BACKOFFS[_chain_attempt]
-                yield {
-                    "type": "provider_info",
-                    "retrying": True,
-                    "message": f"All free models are busy — retrying in {_wait}s…",
-                }
-                await asyncio.sleep(_wait)
-        raise RuntimeError(
-            "All free models are currently busy. Please try again in a moment."
-        )
+        # Groq is fast but the inner streamer gives it no fallback chain. If a Groq
+        # attempt fails before any token is streamed and an OpenRouter key exists,
+        # transparently switch to the OpenRouter ":free" chain (speed first,
+        # reliability as backup). One-shot; self.model is restored in `finally` so
+        # the next agent step tries fast Groq again once it recovers.
+        _original_model = self.model
+        _groq_fallback_ready = self._is_groq() and bool(self._openrouter_key)
+        try:
+            last_err: Optional[Exception] = None
+            for _chain_attempt in range(_CHAIN_RETRY_MAX + 1):
+                last_err = None
+                _streamed_any = False
+                try:
+                    async for event in self._stream_chat_with_tools_single(
+                        system, messages, tools, screenshot_b64
+                    ):
+                        _streamed_any = True
+                        yield event
+                    return  # chain succeeded
+                except Exception as e:
+                    last_err = e
+                    _is_rate_limit = (
+                        isinstance(e, _httpx.HTTPStatusError)
+                        and e.response.status_code in (402, 429)
+                    ) or isinstance(e, RuntimeError) and (
+                        "429" in str(e) or "rate" in str(e).lower() or "busy" in str(e).lower()
+                    )
+                    # Cross-provider fallback: any Groq failure before a token was
+                    # streamed → switch to the OpenRouter chain and retry now.
+                    if _groq_fallback_ready and not _streamed_any:
+                        _groq_fallback_ready = False
+                        self.model = DEFAULT_OPENROUTER_MODEL
+                        yield {
+                            "type": "provider_info",
+                            "model": "openrouter",
+                            "fallback": True,
+                            "message": "Groq is busy — switching to free OpenRouter models…",
+                        }
+                        continue  # retry immediately with OpenRouter (no backoff)
+                    if not _is_rate_limit:
+                        raise  # non-rate-limit errors don't benefit from chain retry
+                if _chain_attempt < _CHAIN_RETRY_MAX:
+                    _wait = _CHAIN_RETRY_BACKOFFS[_chain_attempt]
+                    yield {
+                        "type": "provider_info",
+                        "retrying": True,
+                        "message": f"All free models are busy — retrying in {_wait}s…",
+                    }
+                    await asyncio.sleep(_wait)
+            raise RuntimeError(
+                "All free models are currently busy. Please try again in a moment."
+            )
+        finally:
+            self.model = _original_model
 
     async def _stream_chat_with_tools_single(self, system: str, messages: List[Dict[str, Any]], tools: List[Dict[str, Any]], screenshot_b64: Optional[str] = None):
         """Async generator that streams tool calls via native function calling.
@@ -1899,7 +1923,11 @@ class PlannerProvider:
 
             # When OpenRouter already has a model fallback chain, fail over quickly
             # instead of spending a full backoff ladder on a rate-limited first choice.
-            _retry_delays = [] if len(models_to_try) > 1 else [5, 15, 30]
+            # Groq has only its single model here, but when an OpenRouter key exists
+            # the wrapper cross-provider falls back — so fail FAST instead of burning
+            # ~50s of in-place Groq backoff before that switch can happen.
+            _groq_failfast = self._is_groq() and bool(self._openrouter_key)
+            _retry_delays = [] if (len(models_to_try) > 1 or _groq_failfast) else [5, 15, 30]
             for _attempt, _delay in enumerate([0] + _retry_delays):
                 if _delay:
                     await asyncio.sleep(_delay)
