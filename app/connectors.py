@@ -258,6 +258,28 @@ CONNECTORS: list[dict] = [
      "tip": "Read / write the system clipboard (always available)",
      "task_template": "",
      "default_mode": "auto"},
+    # ── Always-on API connectors: free, no login, one call → real data. These are
+    # the surfaces that stay reliable on a fast free model (no multi-step UI driving).
+    {"id": "weather",   "label": "Weather",       "icon": "cloud",
+     "tint": "#38BDF8", "auth_kind": "api",
+     "tip": "Live weather + 3-day forecast for any place — no setup",
+     "task_template": "", "default_mode": "auto"},
+    {"id": "wikipedia", "label": "Wikipedia",      "icon": "book",
+     "tint": "#9CA3AF", "auth_kind": "api",
+     "tip": "Plain-language summary of any topic — no setup",
+     "task_template": "", "default_mode": "auto"},
+    {"id": "hackernews","label": "Hacker News",    "icon": "social",
+     "tint": "#FF6600", "auth_kind": "api",
+     "tip": "Top tech stories right now — no setup",
+     "task_template": "", "default_mode": "auto"},
+    {"id": "github_api","label": "GitHub (public)","icon": "github",
+     "tint": "#181717", "auth_kind": "api",
+     "tip": "Stars, language + open issues for any owner/name — no setup",
+     "task_template": "", "default_mode": "auto"},
+    {"id": "dictionary","label": "Dictionary",     "icon": "book",
+     "tint": "#A78BFA", "auth_kind": "api",
+     "tip": "Definitions + pronunciation of any English word — no setup",
+     "task_template": "", "default_mode": "auto"},
 ]
 
 
@@ -414,6 +436,22 @@ CONNECTOR_SKILLS: dict[str, dict] = {
     "clipboard": {"keywords": ["clipboard", "copied", "paste"], "skill": (
         "CLIPBOARD. Use get_clipboard to read what the user copied and set_clipboard to place a "
         "result they can paste. The clipboard contents are often the real subject of the task.")},
+    "weather": {"keywords": ["weather", "temperature", "forecast", "rain", "snow", "humid", "how hot", "how cold"], "skill": (
+        "WEATHER. Call the `weather` tool with the place name — one call returns current conditions + a "
+        "3-day forecast. NEVER open a browser for weather.")},
+    "wikipedia": {"keywords": ["wikipedia", "who is", "who was", "what is", "tell me about", "history of", "background on", "explain"], "skill": (
+        "WIKIPEDIA. Call the `wikipedia` tool with the topic for a sourced summary in one call. Prefer it "
+        "over web browsing for 'what/who is X' and background questions.")},
+    "hackernews": {"keywords": ["hacker news", "hackernews", "hn", "trending", "tech news", "top stories"], "skill": (
+        "HACKER NEWS. Call the `hacker_news` tool for the current top stories (title, points, comments, "
+        "link). Don't open the website.")},
+    "github_api": {"keywords": ["github", "repo", "repository", "stars", "open issues"], "skill": (
+        "GITHUB (read-only API). Call the `github_repo` tool with 'owner/name' (or a github.com URL) for "
+        "stars, language, description + recent open issues — instant, no login. Use this for public-repo "
+        "facts instead of opening github.com.")},
+    "dictionary": {"keywords": ["define", "definition", "meaning of", "what does", "dictionary", "synonym"], "skill": (
+        "DICTIONARY. Call the `dictionary` tool with the word for definitions, part of speech, and "
+        "pronunciation.")},
 }
 
 
@@ -462,8 +500,8 @@ def list_with_state() -> list[dict]:
     for c in CONNECTORS:
         c = dict(c)
         s = state.get(c["id"], {})
-        # Local connectors are implicitly linked — they need no setup.
-        c["linked"] = bool(s.get("linked")) or c["auth_kind"] == "local"
+        # Local + API connectors are implicitly linked — they need no setup.
+        c["linked"] = bool(s.get("linked")) or c["auth_kind"] in ("local", "api")
         c["linked_at"] = s.get("linked_at")
         c["notes"] = s.get("notes", "")
         # Expose the connector's skill manual + whether it has one, so the

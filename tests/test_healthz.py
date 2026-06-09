@@ -73,6 +73,7 @@ def test_readiness_endpoint_reports_local_capabilities(monkeypatch):
 
 def test_task_preflight_auto_stays_dynamic_without_desktop_guessing(monkeypatch):
     monkeypatch.setenv("OPENROUTER_API_KEY", "sk-test")
+    monkeypatch.delenv("GROQ_API_KEY", raising=False)  # isolate the OpenRouter-tier path
     # Pin effort so the desktop model selection is deterministic regardless of
     # the developer's saved preference (medium -> the curated UIA tier).
     import app.preferences as _prefs
@@ -260,6 +261,7 @@ def test_retry_task_requires_override_for_preflight_warnings(monkeypatch, tmp_pa
 
 def test_managed_external_submit_uses_preflight_queue_and_tracking(monkeypatch, tmp_path):
     monkeypatch.setenv("OPENROUTER_API_KEY", "sk-test")
+    monkeypatch.delenv("GROQ_API_KEY", raising=False)  # isolate the OpenRouter-tier path
     monkeypatch.setattr(_m, "_tasks", {})
     monkeypatch.setattr(_m, "_queued_task_specs", [])
     monkeypatch.setattr(_m, "_MAX_ACTIVE_TASKS", 0)
@@ -529,6 +531,7 @@ def test_create_task_queues_when_active_limit_reached(monkeypatch):
 
 def test_create_task_auto_desktop_uses_uia_tier(monkeypatch):
     monkeypatch.setenv("OPENROUTER_API_KEY", "sk-test")
+    monkeypatch.delenv("GROQ_API_KEY", raising=False)  # isolate the OpenRouter-tier path
     monkeypatch.setattr(_m, "_tasks", {})
     monkeypatch.setattr(_m, "_queued_task_specs", [])
     monkeypatch.setattr(_m, "_MAX_ACTIVE_TASKS", 0)

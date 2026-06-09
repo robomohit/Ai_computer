@@ -2055,6 +2055,148 @@ class ToolExecutor:
         except Exception as e:
             return ToolResult(ok=False, output=str(e))
 
+    # ── Real API connectors: free, no-auth, single-call (reliable on free models) ──
+    # Each is one HTTP GET to a hardcoded public host (user input is URL-encoded
+    # into the path/query, so no SSRF surface) → structured text the model formats.
+    # This is the surface that actually *works* on a fast free model: a single
+    # tool call returns real data, vs multi-step web-UI driving that derails.
+    def _connector_get(self, url: str, timeout: float = 15.0):
+        import httpx
+        r = httpx.get(url, timeout=timeout, follow_redirects=True,
+                      headers={"User-Agent": "Orynn/1.0 (+https://github.com/robomohit/Orynn)"})
+        r.raise_for_status()
+        return r.json()
+
+    _WMO = {0: "clear sky", 1: "mainly clear", 2: "partly cloudy", 3: "overcast", 45: "fog", 48: "rime fog",
+            51: "light drizzle", 53: "drizzle", 55: "dense drizzle", 61: "light rain", 63: "rain", 65: "heavy rain",
+            71: "light snow", 73: "snow", 75: "heavy snow", 80: "light showers", 81: "showers", 82: "violent showers",
+            85: "snow showers", 86: "heavy snow showers", 95: "thunderstorm", 96: "thunderstorm w/ hail", 99: "thunderstorm w/ heavy hail"}
+
+    def weather(self, location: str):
+        """Current weather + 3-day forecast for a place. Open-Meteo (free, no key)."""
+        import urllib.parse
+        try:
+            q = urllib.parse.quote((location or "").strip())
+            geo = self._connector_get(f"https://geocoding-api.open-meteo.com/v1/search?name={q}&count=1&language=en&format=json")
+            hits = geo.get("results") or []
+            if not hits:
+                return ToolResult(ok=False, output=f"Couldn't find a place called {location!r}.")
+            g = hits[0]; lat, lon = g["latitude"], g["longitude"]
+            place = ", ".join(x for x in [g.get("name"), g.get("admin1"), g.get("country")] if x)
+            fc = self._connector_get(
+                f"https://api.open-meteo.com/v1/forecast?latitude={lat}&longitude={lon}"
+                "&current=temperature_2m,apparent_temperature,relative_humidity_2m,weather_code,wind_speed_10m"
+                "&daily=temperature_2m_max,temperature_2m_min,weather_code&timezone=auto&forecast_days=3")
+            cur = fc.get("current", {}); daily = fc.get("daily", {})
+            lines = [f"Weather for {place}:",
+                     f"- Now: {cur.get('temperature_2m')}°C ({self._WMO.get(cur.get('weather_code'), '')}), "
+                     f"feels like {cur.get('apparent_temperature')}°C, humidity {cur.get('relative_humidity_2m')}%, "
+                     f"wind {cur.get('wind_speed_10m')} km/h"]
+            dts, hi, lo, dc = daily.get("time", []), daily.get("temperature_2m_max", []), daily.get("temperature_2m_min", []), daily.get("weather_code", [])
+            for i in range(min(3, len(dts))):
+                lines.append(f"- {dts[i]}: {lo[i]}–{hi[i]}°C, {self._WMO.get(dc[i], '')}")
+            return ToolResult(ok=True, output=wrap_untrusted_web_content("\n".join(lines), source="open-meteo.com", kind="weather"))
+        except Exception as e:
+            return ToolResult(ok=False, output=f"weather failed: {e}")
+
+    def wikipedia(self, topic: str):
+        """Plain-language summary of a topic. Wikipedia REST API (free)."""
+        import urllib.parse
+        try:
+            title = urllib.parse.quote((topic or "").strip().replace(" ", "_"))
+            try:
+                data = self._connector_get(f"https://en.wikipedia.org/api/rest_v1/page/summary/{title}")
+            except Exception:
+                sr = self._connector_get(f"https://en.wikipedia.org/w/api.php?action=query&list=search&srsearch={urllib.parse.quote(topic)}&format=json&srlimit=1")
+                hits = sr.get("query", {}).get("search", [])
+                if not hits:
+                    return ToolResult(ok=False, output=f"No Wikipedia article found for {topic!r}.")
+                t2 = urllib.parse.quote(hits[0]["title"].replace(" ", "_"))
+                data = self._connector_get(f"https://en.wikipedia.org/api/rest_v1/page/summary/{t2}")
+            extract = data.get("extract") or "(no summary available)"
+            page = data.get("content_urls", {}).get("desktop", {}).get("page", "")
+            out = f"{data.get('title')}\n{extract}" + (f"\n\n{page}" if page else "")
+            return ToolResult(ok=True, output=wrap_untrusted_web_content(out, source="wikipedia.org", kind="wikipedia"))
+        except Exception as e:
+            return ToolResult(ok=False, output=f"wikipedia failed: {e}")
+
+    def hacker_news(self, count: int = 10):
+        """Top Hacker News stories right now. HN Firebase API (free)."""
+        try:
+            count = max(1, min(int(count or 10), 20))
+            ids = (self._connector_get("https://hacker-news.firebaseio.com/v0/topstories.json") or [])[:count]
+            lines = []
+            for i, sid in enumerate(ids, 1):
+                try:
+                    it = self._connector_get(f"https://hacker-news.firebaseio.com/v0/item/{int(sid)}.json")
+                    if not it:
+                        continue
+                    url = it.get("url") or f"https://news.ycombinator.com/item?id={sid}"
+                    lines.append(f"{i}. {it.get('title', '(no title)')}  ({it.get('score', 0)} pts, {it.get('descendants', 0)} comments)\n   {url}")
+                except Exception:
+                    continue
+            if not lines:
+                return ToolResult(ok=False, output="Couldn't fetch Hacker News stories.")
+            return ToolResult(ok=True, output=wrap_untrusted_web_content("\n".join(lines), source="news.ycombinator.com", kind="hacker_news"))
+        except Exception as e:
+            return ToolResult(ok=False, output=f"hacker_news failed: {e}")
+
+    def github_repo(self, repo: str):
+        """Public GitHub repo info: stars, language, description, recent issues. (free, no token)"""
+        import urllib.parse
+        import re as _re
+        try:
+            slug = (repo or "").strip()
+            m = _re.search(r"github\.com/([^/]+/[^/#?]+)", slug)
+            if m:
+                slug = m.group(1)
+            slug = slug.strip("/")
+            if slug.endswith(".git"):
+                slug = slug[:-4]
+            if slug.count("/") != 1:
+                return ToolResult(ok=False, output=f"Give the repo as owner/name (got {repo!r}).")
+            owner, name = (urllib.parse.quote(p) for p in slug.split("/"))
+            r = self._connector_get(f"https://api.github.com/repos/{owner}/{name}")
+            lines = [f"{r.get('full_name')} — {r.get('description') or '(no description)'}",
+                     f"⭐ {r.get('stargazers_count', 0)}  ·  forks {r.get('forks_count', 0)}  ·  open issues {r.get('open_issues_count', 0)}  ·  {r.get('language') or 'n/a'}",
+                     f"{r.get('html_url')}"]
+            try:
+                issues = self._connector_get(f"https://api.github.com/repos/{owner}/{name}/issues?per_page=5&state=open&sort=updated")
+                real = [i for i in issues if "pull_request" not in i]
+                if real:
+                    lines.append("Recent open issues:")
+                    lines += [f"  #{i['number']} {i['title']}" for i in real[:5]]
+            except Exception:
+                pass
+            return ToolResult(ok=True, output=wrap_untrusted_web_content("\n".join(lines), source="api.github.com", kind="github_repo"))
+        except Exception as e:
+            return ToolResult(ok=False, output=f"github_repo failed: {e}")
+
+    def dictionary(self, word: str):
+        """Definition(s) of an English word. Free Dictionary API (no key)."""
+        import urllib.parse
+        try:
+            w = urllib.parse.quote((word or "").strip())
+            try:
+                data = self._connector_get(f"https://api.dictionaryapi.dev/api/v2/entries/en/{w}")
+            except Exception:
+                return ToolResult(ok=False, output=f"No definition found for {word!r}.")
+            if not isinstance(data, list) or not data:
+                return ToolResult(ok=False, output=f"No definition found for {word!r}.")
+            entry = data[0]
+            phon = ""
+            for p in entry.get("phonetics", []):
+                if p.get("text"):
+                    phon = f"  /{p['text']}/"; break
+            lines = [f"{entry.get('word', word)}{phon}"]
+            for meaning in entry.get("meanings", [])[:3]:
+                pos = meaning.get("partOfSpeech", "")
+                for d in meaning.get("definitions", [])[:2]:
+                    lines.append(f"- ({pos}) {d.get('definition', '')}")
+            return ToolResult(ok=True, output=wrap_untrusted_web_content("\n".join(lines), source="dictionaryapi.dev", kind="dictionary"))
+        except Exception as e:
+            return ToolResult(ok=False, output=f"dictionary failed: {e}")
+
     def text_editor_action(self, command: str, path: str, **kwargs):
         command = command.lower().strip()
         if command == "view":
@@ -3097,6 +3239,11 @@ class ToolExecutor:
         "file_grep":      ["pattern"],
         "web_fetch":      ["url"],
         "web_search":     ["query"],
+        "weather":        ["location"],
+        "wikipedia":      ["topic"],
+        "hacker_news":    [],
+        "github_repo":    ["repo"],
+        "dictionary":     ["word"],
         "kill_process":   ["pid"],
         "force_close_window": [],
         "list_mcp_tools": ["server_name"],
@@ -3254,6 +3401,11 @@ class ToolExecutor:
             ActionType.file_grep: lambda a: self.file_grep(a.args["pattern"], a.args.get("directory", ".")),
             ActionType.web_fetch: lambda a: self.web_fetch(a.args["url"]),
             ActionType.web_search: lambda a: self.web_search(a.args["query"], a.args.get("max_results", 5)),
+            ActionType.weather: lambda a: self.weather(a.args.get("location") or a.args.get("city") or a.args.get("query", "")),
+            ActionType.wikipedia: lambda a: self.wikipedia(a.args.get("topic") or a.args.get("query") or a.args.get("title", "")),
+            ActionType.hacker_news: lambda a: self.hacker_news(a.args.get("count", 10)),
+            ActionType.github_repo: lambda a: self.github_repo(a.args.get("repo") or a.args.get("repository") or a.args.get("url", "")),
+            ActionType.dictionary: lambda a: self.dictionary(a.args.get("word") or a.args.get("query") or a.args.get("term", "")),
             ActionType.list_processes: lambda a: self.list_processes(),
             ActionType.kill_process: lambda a: self.kill_process(a.args["pid"], a.args.get("force", False)),
             ActionType.force_close_window: lambda a: self.force_close_window(

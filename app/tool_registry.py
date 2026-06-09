@@ -43,6 +43,11 @@ TOOL_DESCRIPTIONS = {
     ActionType.screenshot: "screenshot: {} — take a screenshot of the desktop.",
     ActionType.web_search: "web_search: {\"query\": str} — search the web for information.",
     ActionType.web_fetch: "web_fetch: {\"url\": str} — fetch a webpage's content directly.",
+    ActionType.weather: "weather: {\"location\": str} — current weather + 3-day forecast for a city/place (Open-Meteo, free, no key). One call returns real data — use for any 'weather in X' question instead of browsing.",
+    ActionType.wikipedia: "wikipedia: {\"topic\": str} — a plain-language summary of a topic from Wikipedia (free). Use for 'what/who is X', background, or concept definitions — faster and more reliable than browsing.",
+    ActionType.hacker_news: "hacker_news: {\"count\": int} — the current top Hacker News stories (title, points, comments, link). Use for 'what's trending on HN / in tech'.",
+    ActionType.github_repo: "github_repo: {\"repo\": str} — public info for a GitHub repo given as 'owner/name' or a github.com URL: stars, language, description, and recent open issues (free, no token).",
+    ActionType.dictionary: "dictionary: {\"word\": str} — definition(s), part of speech, and pronunciation of an English word (free, no key).",
     ActionType.api_call: "api_call: {\"method\": str, \"url\": str, \"headers\": dict, \"body\": dict} — make an HTTP(S) API call. Only public http(s) URLs are allowed.",
     ActionType.request_permission: "request_permission: {\"scope\": str, \"reason\": str} — ask user for permission.",
     ActionType.enable_desktop_control: "enable_desktop_control: {\"reason\": str, \"target_app\": str} — ask the user to allow desktop view/control only when you need to interact with the visible computer or a desktop app. Explain the concrete reason, e.g. 'open Notepad and type the requested text'. After the user allows it, the next turn will include UIA, window, screenshot, mouse, and keyboard tools.",
@@ -80,6 +85,9 @@ TOOL_PACKS = {
     "computer": [ActionType.mouse_click, ActionType.keyboard_type, ActionType.focus_window, ActionType.wait_for_window, ActionType.force_close_window, ActionType.screenshot, ActionType.ocr_image, ActionType.scroll, ActionType.double_click, ActionType.right_click, ActionType.middle_click, ActionType.mouse_move, ActionType.left_click_drag, ActionType.key_combo, ActionType.hold_key, ActionType.cursor_position, ActionType.type_with_delay, ActionType.find_on_screen, ActionType.computer, ActionType.pixel_color_at, ActionType.ui_critique],
     "uia": [ActionType.uia_find, ActionType.uia_click, ActionType.uia_click_sequence, ActionType.uia_type, ActionType.uia_wait, ActionType.electron_check, ActionType.electron_unlock, ActionType.focus_window, ActionType.wait_for_window],
     "web": [ActionType.web_fetch, ActionType.web_search, ActionType.extract_links],
+    # Real API connectors — free, no-auth, single-call. The reliable surface on a
+    # fast free model: one tool call returns real data (vs multi-step UI driving).
+    "connectors": [ActionType.weather, ActionType.wikipedia, ActionType.hacker_news, ActionType.github_repo, ActionType.dictionary],
     "utilities": [ActionType.api_call, ActionType.get_clipboard, ActionType.set_clipboard, ActionType.notify, ActionType.list_mcp_servers, ActionType.list_mcp_tools, ActionType.mcp_tool],
     "editing_extras": [ActionType.diff_files],
 }
@@ -171,7 +179,7 @@ def get_tool_schemas(packs: List[str], exclude_actions: Optional[Iterable[Action
 # model drops the pixel/screenshot tools and drives the desktop blind by UIA).
 UNIFIED_PACKS = [
     "core", "filesystem", "editing", "editing_extras", "terminal",
-    "uia", "computer", "browser", "web", "utilities",
+    "uia", "computer", "browser", "web", "connectors", "utilities",
 ]
 
 
@@ -181,9 +189,9 @@ def get_unified_packs() -> List[str]:
 
 def get_mode_packs(mode: str) -> List[str]:
     if mode in ("coding", "chat", "auto"):
-        return ["core", "filesystem", "terminal", "editing", "editing_extras", "web", "utilities"]
+        return ["core", "filesystem", "terminal", "editing", "editing_extras", "web", "connectors", "utilities"]
     if mode == "computer_use":
-        return ["core", "browser", "web"]
+        return ["core", "browser", "web", "connectors"]
     if mode in ("computer", "computer_isolated"):
         # Desktop app control: UIA + the few launch/clipboard helpers. Drop
         # filesystem/web (a desktop task doesn't read files or web-search) — fewer

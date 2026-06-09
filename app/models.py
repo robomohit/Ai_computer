@@ -76,6 +76,12 @@ class ActionType(str, Enum):
     file_grep = "file_grep"
     web_fetch = "web_fetch"
     web_search = "web_search"
+    # Real API connectors — free, no-auth, single-call (reliable on free models)
+    weather = "weather"
+    wikipedia = "wikipedia"
+    hacker_news = "hacker_news"
+    github_repo = "github_repo"
+    dictionary = "dictionary"
     list_processes = "list_processes"
     kill_process = "kill_process"
     force_close_window = "force_close_window"
