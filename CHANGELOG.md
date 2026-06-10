@@ -3,6 +3,22 @@
 ## Unreleased
 
 ### Background agent (input politeness)
+- **Keystroke-safety check** — the Calculator keyboard fallback now verifies
+  the target window is REALLY foreground (and not minimized) before sending
+  any keys; previously a held foreground lock meant the expression was typed
+  into whatever window the user had focused, and Ctrl+C read the user's
+  clipboard back as the "result".
+- **Settle-and-retry read-back** — `uia_click_sequence`'s result read waits
+  and re-reads once before concluding a mismatch (the display often hasn't
+  repainted 60ms after the last click), so clean InvokePattern runs no longer
+  get "corrected" by the focus-stealing keyboard fallback.
+
+### Docs
+- New hero demo GIF: a real, pure-InvokePattern run computing 2847×916 in
+  21s on Groq Llama-3.3-70b while the Calculator is COVERED by another
+  window the entire time — no cursor movement, no screenshots. (Recording
+  note: minimizing a freshly-launched UWP app suspends its UIA tree; cover,
+  don't minimize.)
 - **Fixed silent pixel-click degradation of every "UIA" click.** The
   uiautomation lib defines `GetInvokePattern()` only on its typed control
   subclasses; our tree walks return generic `Control` wrappers, so the call

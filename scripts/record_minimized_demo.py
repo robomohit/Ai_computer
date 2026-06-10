@@ -221,18 +221,17 @@ def _compose(
     im = Image.new("RGB", (W, H), BG)
     d  = ImageDraw.Draw(im)
 
-    # ── banner row 1: branding ──
+    # ── banner row 1: branding (badge REPLACES the tagline so they never collide) ──
     d.ellipse([24, 26, 34, 36], fill=ACCENT)
     d.text((42, 22), "Orynn", font=_font(15, True), fill=ACCENT)
-    d.text((96, 24),
-           "— drives apps by control name, not screenshots",
-           font=_font(12), fill=MUTED)
-
-    # ── MINIMIZED badge (top-right) ──
     if minimized and not result:
-        badge = "● MINIMIZED"
+        badge = "● COVERED BY ANOTHER WINDOW"
         bw = d.textlength(badge, font=_font(11))
         d.text((W - bw - 14, 24), badge, font=_font(11), fill=ACCENT)
+    else:
+        d.text((96, 24),
+               "— drives apps by control name, not screenshots",
+               font=_font(12), fill=MUTED)
 
     # ── banner row 2: goal or result ──
     if result:
@@ -305,13 +304,14 @@ def build_gif(cap: FrameCapture, out_path: Path) -> None:
     intro = _card(W, H, [
         ("Orynn", 46, True, ACCENT),
         ("controls Windows apps by control name.", 19, False, WHITE),
-        ("This run: Calculator minimized — cursor never moved.", 15, False, MUTED),
+        ("This run: Calculator covered by another window —", 15, False, MUTED),
+        ("cursor never moved.", 15, False, MUTED),
         ("", 8, False, BG),
         (GOAL_SHORT, 18, False, MUTED),
     ])
     outro = _card(W, H, [
         ("= 2,607,852", 44, True, ACCENT),
-        ("Calculator was minimized the entire run.", 18, False, WHITE),
+        ("Calculator was covered the entire run.", 18, False, WHITE),
         ("no screenshots · no pixel-clicks · free model", 16, False, MUTED),
         ("", 10, False, BG),
         ("github.com/robomohit/Orynn", 17, True, WHITE),
@@ -368,12 +368,12 @@ def main() -> int:
     time.sleep(1.5)
 
     # ── 1. Ensure server is running ──
-    server_owned = False
+    server_proc = None
     if _healthy():
         print(f"Server already healthy on {BASE}")
     else:
         print(f"Starting Orynn server on {BASE}…")
-        subprocess.Popen(
+        server_proc = subprocess.Popen(
             [
                 str(ROOT / ".venv" / "Scripts" / "python.exe"),
                 "-m", "uvicorn", "app.main:app",
@@ -385,7 +385,6 @@ def main() -> int:
             stderr=subprocess.DEVNULL,
         )
         _wait_healthy(90)
-        server_owned = True
         print("Server healthy.")
 
     # Give server a moment to finish initialising MCP / lifespan
@@ -414,14 +413,19 @@ def main() -> int:
 
     # ── 4. Start capture thread ──
     hwnd_ref: list[int | None] = [None]
+    npad_ref: list[int | None] = [None]
     cap       = FrameCapture()
     cap_thread = Thread(target=cap.run, args=(hwnd_ref,), daemon=True)
     cap_thread.start()
 
-    # ── 5. Wait for Calculator → minimize ──
+    # ── 5. Wait for Calculator → COVER it with Notepad ──
+    # Minimizing a freshly-launched UWP app suspends its UIA tree (a real take
+    # derailed exactly that way). Covering it with another window keeps the
+    # tree alive, InvokePattern keeps landing, and the proof is even stronger:
+    # pixel clicks at those coordinates would visibly hit Notepad instead.
     print("Waiting for Calculator window…")
     calc_found  = False
-    minimized   = False
+    covered     = False
     t0          = time.time()
 
     while time.time() - t0 < 90:
@@ -431,18 +435,46 @@ def main() -> int:
             if not calc_found:
                 calc_found = True
                 print(f"Calculator appeared (hwnd={hw})")
-            if not minimized:
-                time.sleep(2.5)   # let a few "open" frames accumulate
-                print("Minimizing Calculator…")
-                win32gui.ShowWindow(hw, win32con.SW_MINIMIZE)
-                cap.mark_minimized()
-                minimized = True
-                print("Minimized. Agent continues via UIA InvokePattern.")
+            if not covered:
+                # Cover FAST: on Groq the click sequence starts ~2-3s after
+                # window-ready; the cover must land before the first click for
+                # the "covered the entire run" claim to be true.
+                time.sleep(1.0)
+                print("Covering Calculator with Notepad…")
+                subprocess.run(
+                    ["powershell", "-NoProfile", "-Command", "Start-Process notepad"],
+                    capture_output=True,
+                )
+                npad = None
+                t1 = time.time()
+                while time.time() - t1 < 10 and npad is None:
+                    def _np(hwnd, _):
+                        nonlocal npad
+                        if (win32gui.IsWindowVisible(hwnd)
+                                and win32gui.GetWindowText(hwnd).endswith("Notepad")):
+                            npad = hwnd
+                    win32gui.EnumWindows(_np, None)
+                    if npad is None:
+                        time.sleep(0.2)
+                if npad:
+                    npad_ref[0] = npad
+                    l, t_, r, b = win32gui.GetWindowRect(hw)
+                    win32gui.MoveWindow(npad, l - 40, t_ - 40,
+                                        (r - l) + 80, (b - t_) + 80, True)
+                    try:
+                        win32gui.SetForegroundWindow(npad)
+                    except Exception:
+                        pass
+                    cap.mark_minimized()
+                    covered = True
+                    print("Covered. Agent continues via UIA InvokePattern behind Notepad.")
+                else:
+                    print("WARNING: Notepad never appeared — running uncovered.")
                 break
         time.sleep(0.4)
 
-    if not minimized:
-        print("WARNING: Calculator never appeared within 90 s — continuing without minimize.")
+    if not covered:
+        print("WARNING: Calculator was never covered — take will be unproven.")
 
     # ── 6. Poll for completion ──
     print("Polling for task completion…")
@@ -477,7 +509,14 @@ def main() -> int:
     except Exception as exc:
         print(f"  (could not fetch log: {exc})")
 
-    # ── 8. Restore Calculator, capture result frames ──
+    # ── 8. Close OUR Notepad, bring Calculator forward, capture result frames ──
+    if npad_ref[0]:
+        print("Closing the covering Notepad…")
+        try:
+            win32gui.PostMessage(npad_ref[0], win32con.WM_CLOSE, 0, 0)
+        except Exception:
+            pass
+        time.sleep(0.8)
     hw = hwnd_ref[0] or _find_calc()
     if hw:
         print("Restoring Calculator…")
@@ -509,7 +548,8 @@ def main() -> int:
 
     # ── 11. Verify answer ──
     answer = (
-        rec.get("answer")
+        rec.get("reason")       # the task record's final text lives here
+        or rec.get("answer")
         or rec.get("result")
         or rec.get("output")
         or ""
@@ -520,6 +560,10 @@ def main() -> int:
     else:
         print(f"⚠ Answer not found in record (got: {str(answer)[:120]!r})")
         print("  Check the GIF manually — the display frame should show 2,607,852.")
+
+    if server_proc is not None:
+        print("Stopping the server this script started…")
+        server_proc.terminate()
 
     return 0
 

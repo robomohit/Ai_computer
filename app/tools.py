@@ -2904,6 +2904,20 @@ class ToolExecutor:
         focused = self.focus_window(app or "Calculator")
         if not focused.ok:
             return None
+        # Keystrokes land in the FOREGROUND window. focus_window can report ok
+        # while the OS held the foreground lock or the window is still
+        # minimized — typing would then go into whatever the USER has focused
+        # (a real take typed '2847*916=' into a random window and Ctrl+C'd the
+        # user's clipboard as the 'result'). Verify before sending anything.
+        try:
+            import win32gui
+            fg = win32gui.GetForegroundWindow()
+            fg_title = (win32gui.GetWindowText(fg) or "").lower()
+            needle = (app or "Calculator").lower()
+            if needle not in fg_title or win32gui.IsIconic(fg):
+                return None
+        except Exception:
+            return None
         try:
             self._input_politeness_gate()
             pyautogui.press("escape")
@@ -3011,14 +3025,27 @@ class ToolExecutor:
             # verify + finish without spending a separate uia_find turn.
             try:
                 from .widget.desktop_features import find_ui_elements
-                rr = find_ui_elements(read_result, app, 1)
-                items = rr.get("items") or []
-                val = (items[0].get("name") or "").strip() if items else ""
+
+                def _read_value() -> str:
+                    rr = find_ui_elements(read_result, app, 1)
+                    items = rr.get("items") or []
+                    return (items[0].get("name") or "").strip() if items else ""
+
+                val = _read_value()
                 if val:
                     data["result"] = val
                     if self._is_calculator_target(app):
                         expression = self._calculator_expression_from_targets(targets)
                         expected = self._calculator_expected_result(expression or "")
+                        if expected and not self._calculator_result_matches(val, expected):
+                            # The display often hasn't repainted 0.06s after the
+                            # last click — settle and re-read once before the
+                            # disruptive keyboard fallback (which steals focus).
+                            time.sleep(0.45)
+                            retry_val = _read_value()
+                            if retry_val:
+                                val = retry_val
+                                data["result"] = val
                         if expected and not self._calculator_result_matches(val, expected):
                             calc_fallback = self._calculator_sequence_fallback(
                                 targets, app, read_result

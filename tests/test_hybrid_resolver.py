@@ -384,6 +384,14 @@ def test_uia_click_sequence_calculator_uses_keyboard_fallback(monkeypatch, tmp_p
     )
     monkeypatch.setitem(sys.modules, "pyautogui", fake_pyautogui)
     monkeypatch.setitem(sys.modules, "pyperclip", fake_pyperclip)
+    # The fallback verifies the target window is REALLY foreground before
+    # sending keystrokes (so they can't land in the user's window) — simulate
+    # a foreground, non-minimized Calculator.
+    monkeypatch.setitem(sys.modules, "win32gui", types.SimpleNamespace(
+        GetForegroundWindow=lambda: 42,
+        GetWindowText=lambda h: "Calculator",
+        IsIconic=lambda h: False,
+    ))
 
     ex = _ex(tmp_path)
     monkeypatch.setattr(
@@ -432,6 +440,13 @@ def test_uia_click_sequence_calculator_fallback_on_wrong_display(monkeypatch, tm
     monkeypatch.setitem(sys.modules, "pyperclip", types.SimpleNamespace(
         paste=lambda: clip["value"],
         copy=lambda value: clip.update(value=value),
+    ))
+    # Simulate a foreground, non-minimized Calculator for the keystroke-safety
+    # check inside the fallback.
+    monkeypatch.setitem(sys.modules, "win32gui", types.SimpleNamespace(
+        GetForegroundWindow=lambda: 42,
+        GetWindowText=lambda h: "Calculator",
+        IsIconic=lambda h: False,
     ))
 
     ex = _ex(tmp_path)
@@ -512,3 +527,46 @@ def test_uia_type_reports_verification(monkeypatch, tmp_path):
     assert res.ok is True
     assert res.data["verified"] is True
     assert "verified" in res.output
+
+
+def test_calculator_keyboard_fallback_aborts_when_not_foreground(monkeypatch, tmp_path):
+    """Keystrokes land in the FOREGROUND window — if the OS refused to bring
+    Calculator forward, the fallback must abort instead of typing into
+    whatever the user has focused (a real take typed an expression into a
+    random window and read the user's clipboard back as the 'result')."""
+    import app.widget.desktop_features as df
+
+    monkeypatch.setattr(df, "invoke_ui_element",
+                        lambda q, a: {"ok": False, "error": "no UIA control matched"})
+    monkeypatch.setattr(df, "ocr_find_in_app", lambda q, a: {"ok": False})
+    monkeypatch.setattr(df, "app_window_rect",
+                        lambda a: {"left": 0, "top": 0, "width": 400, "height": 300})
+
+    sent = []
+    monkeypatch.setitem(sys.modules, "pyautogui", types.SimpleNamespace(
+        press=lambda key: sent.append(("press", key)),
+        write=lambda text, interval=0: sent.append(("write", text, interval)),
+        hotkey=lambda *k: sent.append(("hotkey", k)),
+    ))
+    # Foreground is the USER's window, not Calculator.
+    monkeypatch.setitem(sys.modules, "win32gui", types.SimpleNamespace(
+        GetForegroundWindow=lambda: 7,
+        GetWindowText=lambda h: "important-essay.docx - Word",
+        IsIconic=lambda h: False,
+    ))
+
+    ex = _ex(tmp_path)
+    monkeypatch.setattr(
+        ex,
+        "focus_window",
+        lambda app: tools_mod.ToolResult(ok=True, output=f"Focused {app}"),
+    )
+
+    res = ex.uia_click_sequence(
+        ["Four", "Seven", "Multiply", "Eight", "Nine", "Equals"],
+        "Calculator",
+        read_result="Display",
+    )
+
+    assert res.ok is False           # honest miss, no silent keyboard takeover
+    assert sent == []                # NOT ONE keystroke left the agent
