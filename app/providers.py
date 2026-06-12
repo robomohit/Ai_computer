@@ -1863,10 +1863,7 @@ class PlannerProvider:
         limit becomes invisible. Losers are cancelled the moment a winner
         speaks, so the extra usage is a few wasted prefill tokens.
         """
-        candidates = [
-            ("groq", None),  # None → self.model (the fast primary)
-            ("openrouter", DEFAULT_OPENROUTER_MODEL),
-        ]
+        candidates = self._race_candidates()
         gens = [
             (label, self._stream_chat_with_tools_single(system, messages, tools, screenshot_b64, model_override=mo))
             for label, mo in candidates
@@ -1921,15 +1918,44 @@ class PlannerProvider:
         async for ev in winner_gen:
             yield ev
 
+    def _swarm_race_mode(self) -> str:
+        """'off' | 'cross' | 'all'.
+
+        cross (default): race only across INDEPENDENT providers (Groq primary +
+        OpenRouter) — separate rate limits, so parallelism is pure free win.
+        all (opt-in, ORYNN_SWARM_RACE=all): additionally race two different
+        free models on the SAME provider when that's all you have — cuts TTFT
+        variance but spends that provider's quota ~2x per step.
+        """
+        flag = os.environ.get("ORYNN_SWARM_RACE", "1").strip().lower()
+        if flag in ("0", "off", "false", "no"):
+            return "off"
+        if flag in ("all", "2", "aggressive"):
+            return "all"
+        return "cross"
+
+    def _race_candidates(self) -> list:
+        """(label, model_override) pairs to race; override None = self.model."""
+        if self._is_groq():
+            return [("groq", None), ("openrouter", DEFAULT_OPENROUTER_MODEL)]
+        # OpenRouter-only ('all' mode): race the primary against the first
+        # DIFFERENT free model from the known-good pool.
+        primary_norm = self.model.replace("openrouter/", "")
+        for alt in (DEFAULT_OPENROUTER_MODEL, *self._FALLBACK_MODELS):
+            if alt.replace("openrouter/", "") != primary_norm:
+                short = alt.replace("openrouter/", "").split("/")[-1].split(":")[0]
+                return [("primary", None), (short, alt)]
+        return [("primary", None)]
+
     def _swarm_race_enabled(self) -> bool:
-        """Race only when there are genuinely two independent free providers:
-        a Groq primary plus an OpenRouter key. Opt out with ORYNN_SWARM_RACE=0."""
-        return (
-            os.environ.get("ORYNN_SWARM_RACE", "1") != "0"
-            and self._is_groq()
-            and bool(self._groq_key)
-            and bool(self._openrouter_key)
-        )
+        mode = self._swarm_race_mode()
+        if mode == "off":
+            return False
+        if self._is_groq() and self._groq_key and self._openrouter_key:
+            return True  # cross-provider race — free win, on by default
+        if mode == "all" and self._openrouter_key and self._is_openrouter_model:
+            return len(self._race_candidates()) > 1
+        return False
 
     async def _stream_chat_with_tools_single(self, system: str, messages: List[Dict[str, Any]], tools: List[Dict[str, Any]], screenshot_b64: Optional[str] = None, model_override: Optional[str] = None):
         """Async generator that streams tool calls via native function calling.

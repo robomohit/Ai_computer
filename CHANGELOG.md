@@ -2,6 +2,25 @@
 
 ## Unreleased
 
+### Same-provider racing for single-key setups (ORYNN_SWARM_RACE=all)
+- Racing no longer requires two providers. With only an OpenRouter key,
+  `ORYNN_SWARM_RACE=all` races the primary model against the first DIFFERENT
+  free model from the known-good pool — cuts TTFT variance on busy free tiers
+  at the cost of ~2x quota per step, which is why it's opt-in (default mode
+  `cross` only races independent providers; `0` kills racing entirely).
+- Modes: `off` | `cross` (default) | `all`, via `_swarm_race_mode()`.
+
+### Harness benchmark — "best" is now a number (scripts/bench.py)
+- Drives a goal suite through the live server twice per goal and scores runs
+  purely from the persisted event log: model calls, TTFT per step, race wins
+  by provider, compile/replay flags, wall time. Prints a scorecard and the
+  model calls saved by replay; `--json` writes bench_results.json.
+- Scorer (`score_events`) is a pure function with offline unit tests.
+
+### ROADMAP.md — the spine written down
+- One sentence: the best agent harness for free models. Core vs hero surface
+  vs frozen experiments, one-goal-per-branch process.
+
 ### Swarm racing — parallel free providers, fastest token wins
 - When a Groq key AND an OpenRouter key are both set, every native tool-call
   step now runs on BOTH providers simultaneously; whichever streams a token

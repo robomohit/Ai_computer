@@ -678,3 +678,49 @@ def test_swarm_race_gating(monkeypatch):
     # No second provider → no race.
     monkeypatch.delenv("OPENROUTER_API_KEY")
     assert PlannerProvider(model="groq/llama-3.3-70b-versatile")._swarm_race_enabled() is False
+
+
+def test_swarm_race_all_mode_openrouter_only(monkeypatch):
+    """ORYNN_SWARM_RACE=all unlocks same-provider racing when OpenRouter is
+    the only key — two DIFFERENT free models race on one provider."""
+    from app.providers import PlannerProvider, DEFAULT_OPENROUTER_MODEL
+    monkeypatch.delenv("GROQ_API_KEY", raising=False)
+    monkeypatch.setenv("OPENROUTER_API_KEY", "ok")
+    monkeypatch.delenv("ORYNN_SWARM_RACE", raising=False)
+
+    # Default 'cross' mode: single provider → no race (quota discipline).
+    p = PlannerProvider(model=DEFAULT_OPENROUTER_MODEL)
+    assert p._swarm_race_mode() == "cross"
+    assert p._swarm_race_enabled() is False
+
+    # Opt-in 'all' mode: race two different OpenRouter free models.
+    monkeypatch.setenv("ORYNN_SWARM_RACE", "all")
+    p = PlannerProvider(model=DEFAULT_OPENROUTER_MODEL)
+    assert p._swarm_race_mode() == "all"
+    assert p._swarm_race_enabled() is True
+    cands = p._race_candidates()
+    assert len(cands) == 2
+    assert cands[0] == ("primary", None)
+    alt_label, alt_model = cands[1]
+    # The alternate must be a genuinely different model than the primary.
+    assert alt_model is not None
+    assert alt_model.replace("openrouter/", "") != p.model.replace("openrouter/", "")
+    assert alt_label and alt_label != "primary"
+
+    # Kill switch still wins over everything.
+    monkeypatch.setenv("ORYNN_SWARM_RACE", "0")
+    p = PlannerProvider(model=DEFAULT_OPENROUTER_MODEL)
+    assert p._swarm_race_mode() == "off"
+    assert p._swarm_race_enabled() is False
+
+
+def test_swarm_race_all_mode_does_not_break_cross(monkeypatch):
+    """'all' with both keys keeps the proven cross-provider pair."""
+    from app.providers import PlannerProvider
+    monkeypatch.setenv("GROQ_API_KEY", "gk")
+    monkeypatch.setenv("OPENROUTER_API_KEY", "ok")
+    monkeypatch.setenv("ORYNN_SWARM_RACE", "all")
+    p = PlannerProvider(model="groq/llama-3.3-70b-versatile")
+    assert p._swarm_race_enabled() is True
+    labels = [label for label, _ in p._race_candidates()]
+    assert labels == ["groq", "openrouter"]
