@@ -2543,6 +2543,49 @@ class ToolExecutor:
             pass
         return None
 
+    def _adaptive_recovery_suffix(
+        self,
+        *,
+        action_type: str,
+        query: str,
+        app: str,
+        data: dict,
+        output: str,
+    ) -> str:
+        try:
+            from .adaptive_windows import analyze_windows_failure, format_recovery_plan
+            analysis = analyze_windows_failure(
+                action=action_type,
+                query=query,
+                app=app,
+                result=data,
+                output=output,
+            )
+            data["adaptive"] = analysis.to_dict()
+            return "\n" + format_recovery_plan(analysis)
+        except Exception:
+            return ""
+
+    def _remember_adaptive_success(
+        self,
+        app: str,
+        *,
+        failure_class: str,
+        resolver_id: str,
+        detail: str = "",
+    ) -> None:
+        try:
+            from .adaptive_windows import remember_resolver_outcome
+            remember_resolver_outcome(
+                app,
+                failure_class,
+                resolver_id,
+                True,
+                detail=detail,
+            )
+        except Exception:
+            pass
+
     def uia_find(self, query: str, app: str = "", limit: int = 5):
         from .widget.desktop_features import find_ui_elements
         res = find_ui_elements(query, app, limit)
@@ -2567,7 +2610,15 @@ class ToolExecutor:
                 control_reason="no accessible control and OCR found no match",
             )
             suffix = self._electron_unlock_hint(app, data)
-            return ToolResult(ok=False, output=res.get("error", "no match") + suffix, data=data)
+            output = res.get("error", "no match") + suffix
+            output += self._adaptive_recovery_suffix(
+                action_type="uia_find",
+                query=query,
+                app=app,
+                data=data,
+                output=output,
+            )
+            return ToolResult(ok=False, output=output, data=data)
         lines = [f"{i+1}. {c.get('name') or c.get('automation_id') or '(unnamed)'} "
                  f"[{c.get('control_type')}] @ ({c['x']},{c['y']}) score={c.get('score')}"
                  for i, c in enumerate(res.get("items", []))]
@@ -2624,6 +2675,12 @@ class ToolExecutor:
                 control_layer="OCR fallback",
                 control_reason="no accessible control — matched on-screen text",
             )
+            self._remember_adaptive_success(
+                app,
+                failure_class="uia_no_match",
+                resolver_id="ocr_text_target",
+                detail=f"Clicked {matched}",
+            )
             return ToolResult(ok=True, data=data, output=(
                 f"Clicked '{matched}' via OCR fallback at ({x},{y}). "
                 f"[uia:{x-14},{y-12},28,24]{self._app_rect_token(app, app_rect)}"))
@@ -2669,6 +2726,12 @@ class ToolExecutor:
                 f"Found “{matched}” (OCR)", target=matched, app_rect=app_rect,
                 rect=rect, control_layer="OCR fallback",
                 control_reason="no accessible control — matched on-screen text")
+            self._remember_adaptive_success(
+                app,
+                failure_class="uia_no_match",
+                resolver_id="ocr_text_target",
+                detail=f"Found {matched}",
+            )
             return ToolResult(ok=True, data=data, output=(
                 f"OCR matches (no accessible control):\n1. {matched} [OcrText] "
                 f"@ ({x},{y}) via screen text. [uia:{x-14},{y-12},28,24]"
@@ -2718,6 +2781,12 @@ class ToolExecutor:
                 rect={"left": x - 14, "top": y - 12, "width": 28, "height": 24},
                 control_layer="OCR fallback",
                 control_reason="no accessible field — matched on-screen text",
+            )
+            self._remember_adaptive_success(
+                app,
+                failure_class="uia_no_match",
+                resolver_id="ocr_text_target",
+                detail=f"Typed into {matched}",
             )
             return ToolResult(ok=True, data=data, output=(
                 f"Typed into '{matched}' via OCR fallback at ({x},{y}). "
@@ -3020,6 +3089,13 @@ class ToolExecutor:
             suffix = self._electron_unlock_hint(app, data)
             out += ("\nThe rest were not attempted. Re-check the name of the "
                     "missing control with uia_find, then continue." + suffix)
+            out += self._adaptive_recovery_suffix(
+                action_type="uia_click_sequence",
+                query=str(failed or ""),
+                app=app,
+                data=data,
+                output=out,
+            )
         elif read_result:
             # Read the named result control back in THIS call so the agent can
             # verify + finish without spending a separate uia_find turn.
@@ -3084,7 +3160,15 @@ class ToolExecutor:
                 control_reason="no accessible control and OCR found no match",
             )
             suffix = self._electron_unlock_hint(app, data)
-            return ToolResult(ok=False, output=res.get("error", "click failed") + suffix, data=data)
+            output = res.get("error", "click failed") + suffix
+            output += self._adaptive_recovery_suffix(
+                action_type="uia_click",
+                query=query,
+                app=app,
+                data=data,
+                output=output,
+            )
+            return ToolResult(ok=False, output=output, data=data)
         app_rect = self._app_rect_payload(app)
         target = str(res.get("target") or query or "").strip()
         tok = self._uia_rect_token(res.get("rect", {})) + self._app_rect_token(app, app_rect)
@@ -3128,7 +3212,15 @@ class ToolExecutor:
                 control_reason="no accessible field and OCR found no match",
             )
             suffix = self._electron_unlock_hint(app, data)
-            return ToolResult(ok=False, output=res.get("error", "type failed") + suffix, data=data)
+            output = res.get("error", "type failed") + suffix
+            output += self._adaptive_recovery_suffix(
+                action_type="uia_type",
+                query=query,
+                app=app,
+                data=data,
+                output=output,
+            )
+            return ToolResult(ok=False, output=output, data=data)
         # Post-action verification: read the control back and confirm the text
         # actually landed (computer mastery, not just "fire and hope").
         verified = self._verify_typed(query, app, text)
