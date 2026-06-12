@@ -117,6 +117,141 @@ def test_adaptive_observe_schema_is_in_uia_pack():
     assert "app" not in schema["required"]
 
 
+def test_window_hint_score_matches_titleless_process_window():
+    import app.widget.desktop_features as desktop_features
+
+    score = desktop_features._window_hint_score(
+        {
+            "hwnd": 4242,
+            "title": "",
+            "exe": r"C:\Games\Mahoraga.exe",
+        },
+        "Mahoraga",
+    )
+
+    assert score >= 80
+
+
+def test_window_hint_score_matches_camelcase_exe_token_to_title():
+    import app.widget.desktop_features as desktop_features
+
+    score = desktop_features._window_hint_score(
+        {
+            "hwnd": 200,
+            "title": "Settings",
+            "exe": r"C:\Windows\System32\ApplicationFrameHost.exe",
+        },
+        "SystemSettings.exe",
+    )
+
+    assert score >= 90
+
+
+def test_uia_root_candidates_falls_back_to_process_matched_hwnd(monkeypatch):
+    import sys
+    import types
+    import app.widget.desktop_features as desktop_features
+
+    class RootControl:
+        def GetChildren(self):
+            return []
+
+    class AppControl:
+        Name = ""
+        NativeWindowHandle = 4242
+        ControlTypeName = "WindowControl"
+        ClassName = "Chrome_WidgetWin_1"
+
+        def GetChildren(self):
+            return []
+
+    root = RootControl()
+    app = AppControl()
+    fake_uia = types.SimpleNamespace(
+        GetRootControl=lambda: root,
+        GetForegroundControl=lambda: types.SimpleNamespace(NativeWindowHandle=0),
+        ControlFromHandle=lambda hwnd: app if hwnd == 4242 else None,
+    )
+    monkeypatch.setitem(sys.modules, "uiautomation", fake_uia)
+    monkeypatch.setattr(desktop_features, "_ensure_uia_config", lambda uia: None)
+    monkeypatch.setattr(desktop_features, "_window_cloaked", lambda hwnd: False)
+    monkeypatch.setattr(
+        desktop_features,
+        "_visible_top_level_windows",
+        lambda include_untitled=False: [
+            {
+                "hwnd": 4242,
+                "title": "",
+                "exe": r"C:\Games\Mahoraga.exe",
+                "class_name": "Chrome_WidgetWin_1",
+                "area": 1920 * 1080,
+            }
+        ],
+    )
+
+    roots = desktop_features._uia_root_candidates("Mahoraga", fallback_foreground=False)
+
+    assert roots == [app]
+
+
+def test_uia_root_candidates_includes_same_title_uwp_frame(monkeypatch):
+    import sys
+    import types
+    import app.widget.desktop_features as desktop_features
+
+    class RootControl:
+        def GetChildren(self):
+            return []
+
+    class AppControl:
+        Name = "Settings"
+        ClassName = ""
+
+        def __init__(self, hwnd, control_type):
+            self.NativeWindowHandle = hwnd
+            self.ControlTypeName = control_type
+
+        def GetChildren(self):
+            return []
+
+    core = AppControl(100, "PaneControl")
+    frame = AppControl(200, "WindowControl")
+    fake_uia = types.SimpleNamespace(
+        GetRootControl=lambda: RootControl(),
+        GetForegroundControl=lambda: types.SimpleNamespace(NativeWindowHandle=0),
+        ControlFromHandle=lambda hwnd: {100: core, 200: frame}.get(hwnd),
+    )
+    monkeypatch.setitem(sys.modules, "uiautomation", fake_uia)
+    monkeypatch.setattr(desktop_features, "_ensure_uia_config", lambda uia: None)
+    monkeypatch.setattr(desktop_features, "_window_cloaked", lambda hwnd: False)
+    monkeypatch.setattr(desktop_features, "_has_real_content", lambda ctrl: ctrl is frame)
+    monkeypatch.setattr(
+        desktop_features,
+        "_visible_top_level_windows",
+        lambda include_untitled=False: [
+            {
+                "hwnd": 100,
+                "title": "Settings",
+                "exe": r"C:\Windows\ImmersiveControlPanel\SystemSettings.exe",
+                "class_name": "Windows.UI.Core.CoreWindow",
+                "area": 1680 * 1000,
+            },
+            {
+                "hwnd": 200,
+                "title": "Settings",
+                "exe": r"C:\Windows\System32\ApplicationFrameHost.exe",
+                "class_name": "ApplicationFrameWindow",
+                "area": 1688 * 1010,
+            },
+        ],
+    )
+
+    roots = desktop_features._uia_root_candidates("SystemSettings.exe", fallback_foreground=False)
+
+    assert frame in roots
+    assert roots[0] is frame
+
+
 @pytest.mark.asyncio
 async def test_tool_executor_adaptive_observe_maps_controls(monkeypatch, workspace):
     import app.widget.desktop_features as desktop_features

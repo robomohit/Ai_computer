@@ -29,61 +29,167 @@ except ImportError:  # pragma: no cover - exercised on non-Windows CI hosts.
     winreg = None
 
 
-# â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€
-# WINDOW-SNAP LAYOUTS
-# â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€
-def list_visible_windows() -> list[dict]:
-    """Return [{'hwnd', 'title', 'exe'}] of user-visible top-level windows."""
-    user32 = ctypes.windll.user32
-    kernel32 = ctypes.windll.kernel32
-    dwm = ctypes.windll.dwmapi
+_DWMWA_CLOAKED = 14
+_PROCESS_QUERY_LIMITED_INFORMATION = 0x1000
 
-    EnumWindowsProc = ctypes.WINFUNCTYPE(
-        ctypes.c_bool, wintypes.HWND, wintypes.LPARAM)
+
+def _basename_lower(path: str) -> str:
+    return re.split(r"[\\/]", str(path or "").strip().strip('"'))[-1].lower()
+
+
+def _app_hint_parts(app_hint: str) -> list[str]:
+    """Comparable app tokens from a title, basename, or full .exe path."""
+    raw_hint = str(app_hint or "").strip().strip('"')
+    raw_base = re.split(r"[\\/]", raw_hint)[-1]
+    raw_stem = raw_base[:-4] if raw_base.lower().endswith(".exe") else os.path.splitext(raw_base)[0]
+    hint = raw_hint.lower()
+    base = raw_base.lower()
+    stem = raw_stem.lower()
+    parts: list[str] = []
+    camel_words = re.findall(
+        r"[A-Z]?[a-z]+|[A-Z]+(?=[A-Z]|$)|\d+",
+        raw_stem,
+    )
+    for value in (hint, base, stem, *(word.lower() for word in camel_words if len(word) >= 3)):
+        value = value.strip()
+        if value and value not in parts:
+            parts.append(value)
+    return parts
+
+
+def _window_hint_score(window: dict, app_hint: str, foreground_hwnd: int = 0) -> int:
+    """Score whether a top-level window matches an app hint by title or exe.
+
+    UIA title matching is ideal, but games and Electron shells can expose blank
+    or dynamic titles. Process-basename matching gives the resolver a second
+    anchor before it escalates to OCR/visual control.
+    """
+    parts = _app_hint_parts(app_hint)
+    if not parts:
+        return 0
+    title = str(window.get("title") or "").strip().lower()
+    exe_base = _basename_lower(str(window.get("exe") or ""))
+    exe_stem = exe_base[:-4] if exe_base.endswith(".exe") else os.path.splitext(exe_base)[0]
+    score = 0
+    for part in parts:
+        if title:
+            if title == part:
+                score = max(score, 100)
+            elif title.startswith(part):
+                score = max(score, 75)
+            elif part in title:
+                score = max(score, 45)
+        if exe_base and exe_base == part:
+            score = max(score, 90)
+        if exe_stem:
+            if exe_stem == part:
+                score = max(score, 85)
+            elif len(part) >= 4 and part in exe_stem:
+                score = max(score, 60)
+            elif len(exe_stem) >= 4 and exe_stem in part:
+                score = max(score, 55)
+    if score <= 0:
+        return 0
+    try:
+        if foreground_hwnd and int(window.get("hwnd") or 0) == foreground_hwnd:
+            score += 35
+    except Exception:
+        pass
+    if "activate windows" in title:
+        score -= 200
+    return score
+
+
+def _visible_top_level_windows(*, include_untitled: bool = False) -> list[dict]:
+    """Visible Win32 top-level windows, including exe metadata when available."""
+    try:
+        user32 = ctypes.windll.user32
+        kernel32 = ctypes.windll.kernel32
+        dwm = ctypes.windll.dwmapi
+        enum_proc = ctypes.WINFUNCTYPE(
+            ctypes.c_bool, wintypes.HWND, wintypes.LPARAM)
+    except Exception:
+        return []
 
     results: list[dict] = []
-    DWMWA_CLOAKED = 14
-    PROCESS_QUERY_LIMITED_INFORMATION = 0x1000
-    SKIP = {"Program Manager", "Windows Input Experience",
-            "Microsoft Text Input Application", "Settings", "Search"}
 
     def cb(hwnd, _lp):
         try:
             if not user32.IsWindowVisible(hwnd):
                 return True
             cloaked = wintypes.DWORD(0)
-            dwm.DwmGetWindowAttribute(wintypes.HWND(hwnd), DWMWA_CLOAKED,
-                                      ctypes.byref(cloaked),
-                                      ctypes.sizeof(cloaked))
-            if cloaked.value:
+            try:
+                dwm.DwmGetWindowAttribute(
+                    wintypes.HWND(hwnd), _DWMWA_CLOAKED,
+                    ctypes.byref(cloaked), ctypes.sizeof(cloaked))
+                if cloaked.value:
+                    return True
+            except Exception:
+                pass
+            rect = wintypes.RECT()
+            if not user32.GetWindowRect(hwnd, ctypes.byref(rect)):
+                return True
+            width = int(rect.right - rect.left)
+            height = int(rect.bottom - rect.top)
+            if width <= 0 or height <= 0:
                 return True
             length = user32.GetWindowTextLengthW(hwnd)
-            if length == 0:
-                return True
-            buf = ctypes.create_unicode_buffer(length + 2)
-            user32.GetWindowTextW(hwnd, buf, length + 2)
-            title = buf.value
-            if not title or title in SKIP:
+            title = ""
+            if length > 0:
+                buf = ctypes.create_unicode_buffer(length + 2)
+                user32.GetWindowTextW(hwnd, buf, length + 2)
+                title = buf.value
+            if not title and not include_untitled:
                 return True
             pid = wintypes.DWORD(0)
             user32.GetWindowThreadProcessId(hwnd, ctypes.byref(pid))
             exe = ""
-            h = kernel32.OpenProcess(PROCESS_QUERY_LIMITED_INFORMATION,
-                                     False, pid.value)
+            h = kernel32.OpenProcess(
+                _PROCESS_QUERY_LIMITED_INFORMATION, False, pid.value)
             if h:
-                ebuf = ctypes.create_unicode_buffer(1024)
-                size = wintypes.DWORD(1024)
-                kernel32.QueryFullProcessImageNameW(h, 0, ebuf,
-                                                    ctypes.byref(size))
-                exe = ebuf.value
-                kernel32.CloseHandle(h)
-            results.append({"hwnd": int(hwnd), "title": title, "exe": exe})
+                try:
+                    ebuf = ctypes.create_unicode_buffer(1024)
+                    size = wintypes.DWORD(1024)
+                    if kernel32.QueryFullProcessImageNameW(
+                            h, 0, ebuf, ctypes.byref(size)):
+                        exe = ebuf.value
+                finally:
+                    kernel32.CloseHandle(h)
+            cls = ctypes.create_unicode_buffer(256)
+            try:
+                user32.GetClassNameW(hwnd, cls, 256)
+            except Exception:
+                pass
+            results.append({
+                "hwnd": int(hwnd),
+                "title": title,
+                "exe": exe,
+                "pid": int(pid.value),
+                "class_name": cls.value,
+                "rect": (int(rect.left), int(rect.top), int(rect.right), int(rect.bottom)),
+                "area": width * height,
+            })
         except Exception:
             pass
         return True
 
-    user32.EnumWindows(EnumWindowsProc(cb), 0)
+    user32.EnumWindows(enum_proc(cb), 0)
+    results.sort(key=lambda item: item.get("area", 0), reverse=True)
     return results
+
+
+# â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€
+# WINDOW-SNAP LAYOUTS
+# â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€
+def list_visible_windows() -> list[dict]:
+    """Return [{'hwnd', 'title', 'exe'}] of user-visible top-level windows."""
+    SKIP = {"Program Manager", "Windows Input Experience",
+            "Microsoft Text Input Application", "Settings", "Search"}
+    return [
+        {"hwnd": w["hwnd"], "title": w["title"], "exe": w["exe"]}
+        for w in _visible_top_level_windows(include_untitled=False)
+        if w.get("title") and w.get("title") not in SKIP
+    ]
 
 
 def foreground_window_info() -> dict:
@@ -526,7 +632,6 @@ def _uia_root_candidates(app_hint: str = "", fallback_foreground: bool = True) -
     import uiautomation as uia
     candidates: list[tuple[int, object]] = []
     if app_hint:
-        hint = app_hint.lower().strip()
         # Foreground window handle â€” when several windows of the same app are
         # open (e.g. 5 Notepads), prefer the one the user is actually looking at.
         fg_handle = 0
@@ -534,12 +639,26 @@ def _uia_root_candidates(app_hint: str = "", fallback_foreground: bool = True) -
             fg_handle = int(uia.GetForegroundControl().NativeWindowHandle or 0)
         except Exception:
             pass
+        seen_handles: set[int] = set()
         for top in uia.GetRootControl().GetChildren():
             try:
                 low = (top.Name or "").strip().lower()
-                if not low or hint not in low:
+                try:
+                    handle = int(top.NativeWindowHandle or 0)
+                except Exception:
+                    handle = 0
+                score = _window_hint_score(
+                    {
+                        "hwnd": handle,
+                        "title": low,
+                        "exe": "",
+                        "class_name": getattr(top, "ClassName", ""),
+                    },
+                    app_hint,
+                    fg_handle,
+                )
+                if score <= 0:
                     continue
-                score = 100 if low == hint else (60 if low.startswith(hint) else 30)
                 try:
                     if top.ControlTypeName == "WindowControl":
                         score += 20
@@ -547,19 +666,53 @@ def _uia_root_candidates(app_hint: str = "", fallback_foreground: bool = True) -
                     pass
                 if _has_real_content(top):
                     score += 45
-                try:
-                    handle = int(top.NativeWindowHandle or 0)
-                except Exception:
-                    handle = 0
-                if fg_handle and handle == fg_handle:  # the active window wins ties
-                    score += 40
                 if _window_cloaked(handle):     # suspended/zombie frame, never a target
                     score -= 150
-                if "activate windows" in low:   # the activation watermark, never a target
-                    score -= 200
                 candidates.append((score, top))
+                if handle:
+                    seen_handles.add(handle)
             except Exception:
                 continue
+        raw_windows = _visible_top_level_windows(include_untitled=True)
+        companion_titles: dict[str, int] = {}
+
+        def add_win32_candidate(win: dict, score: int) -> bool:
+            hwnd = int(win.get("hwnd") or 0)
+            if hwnd and hwnd in seen_handles:
+                return False
+            try:
+                top = uia.ControlFromHandle(hwnd)
+            except Exception:
+                return False
+            if top is None:
+                return False
+            try:
+                if top.ControlTypeName == "WindowControl":
+                    score += 20
+            except Exception:
+                pass
+            if _has_real_content(top):
+                score += 45
+            candidates.append((score, top))
+            if hwnd:
+                seen_handles.add(hwnd)
+            return True
+
+        for win in raw_windows:
+            score = _window_hint_score(win, app_hint, fg_handle)
+            if score <= 0:
+                continue
+            title = str(win.get("title") or "").strip().lower()
+            if title:
+                companion_titles[title] = max(companion_titles.get(title, 0), score)
+            add_win32_candidate(win, score)
+        for win in raw_windows:
+            title = str(win.get("title") or "").strip().lower()
+            if not title or title not in companion_titles:
+                continue
+            if _window_hint_score(win, app_hint, fg_handle) > 0:
+                continue
+            add_win32_candidate(win, max(1, companion_titles[title] - 5))
         candidates.sort(key=lambda x: -x[0])
     roots = [c for _, c in candidates]
     if not roots and fallback_foreground:
