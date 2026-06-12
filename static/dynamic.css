@@ -626,3 +626,107 @@ body[data-glass="on"]:not(.widget-shell) .composer-wrap {
     padding-inline: 14px;
   }
 }
+
+/* ── 9. Pro-feed layer: entrances, streaming caret, jump pill, filter, tables ── */
+
+/* Message + status entrances — quick, weighty, never bouncy. */
+@keyframes feed-in {
+  from { opacity: 0; transform: translateY(7px) scale(0.992); }
+  to   { opacity: 1; transform: none; }
+}
+.message, .status-note, .feed-card { animation: feed-in 0.26s cubic-bezier(0.2, 0.9, 0.3, 1) both; }
+
+/* Live streaming caret — the "it's alive" tell on a growing reply. */
+.message.assistant.streaming::after {
+  content: '';
+  display: inline-block;
+  width: 7px; height: 15px;
+  margin-left: 4px; vertical-align: -2px;
+  border-radius: 2px;
+  background: var(--dyn-accent, #5BE0D0);
+  animation: caret-blink 0.85s steps(2, start) infinite;
+}
+@keyframes caret-blink { 50% { opacity: 0; } }
+
+/* Jump-to-latest pill — appears only when the reader scrolls away. */
+#jump-bottom {
+  position: fixed;
+  right: 28px; bottom: 124px;
+  z-index: 60;
+  display: inline-flex; align-items: center; gap: 6px;
+  padding: 7px 13px;
+  font-size: 12px; font-weight: 600;
+  color: var(--text-1, #e8e8ea);
+  background: color-mix(in oklab, var(--bg-1, #17181c) 78%, transparent);
+  border: 1px solid rgba(128, 138, 152, 0.28);
+  border-radius: 999px;
+  box-shadow: 0 8px 28px rgba(0, 0, 0, 0.28);
+  backdrop-filter: blur(14px) saturate(150%);
+  -webkit-backdrop-filter: blur(14px) saturate(150%);
+  cursor: pointer;
+  opacity: 0; transform: translateY(8px) scale(0.96);
+  pointer-events: none;
+  transition: opacity 0.18s ease, transform 0.22s cubic-bezier(0.2, 0.9, 0.3, 1);
+}
+#jump-bottom.show { opacity: 1; transform: none; pointer-events: auto; }
+#jump-bottom:hover { border-color: var(--dyn-accent, #5BE0D0); color: var(--dyn-accent, #5BE0D0); }
+
+/* Feed filter — quiet segmented control in the topbar. */
+.feed-filter {
+  display: inline-flex; align-items: center; gap: 2px;
+  margin-left: auto;
+  padding: 2px;
+  border: 1px solid rgba(128, 138, 152, 0.22);
+  border-radius: 999px;
+}
+.feed-filter-btn {
+  border: none; background: transparent;
+  padding: 4px 11px;
+  font-size: 11px; font-weight: 600;
+  color: var(--text-2, #9aa0aa);
+  border-radius: 999px;
+  cursor: pointer;
+  transition: background 0.15s ease, color 0.15s ease;
+}
+.feed-filter-btn:hover { color: var(--text-1, #e8e8ea); }
+.feed-filter-btn.active {
+  color: var(--text-1, #e8e8ea);
+  background: color-mix(in oklab, var(--dyn-accent, #5BE0D0) 22%, transparent);
+}
+body[data-feed-filter="chat"] .work-buffer,
+body[data-feed-filter="chat"] .status-note,
+body[data-feed-filter="chat"] .work-summary,
+body[data-feed-filter="chat"] .work-capstone,
+body[data-feed-filter="chat"] .feed-card { display: none; }
+body[data-feed-filter="activity"] .message.user,
+body[data-feed-filter="activity"] .message.assistant { display: none; }
+
+/* Markdown tables — agents speak in tables; render them like we mean it. */
+.md-table {
+  width: 100%;
+  margin: 10px 0;
+  border-collapse: collapse;
+  font-size: 0.92em;
+  border: 1px solid rgba(128, 138, 152, 0.22);
+  border-radius: 10px;
+  overflow: hidden;
+}
+.md-table th, .md-table td {
+  padding: 7px 12px;
+  text-align: left;
+  border-bottom: 1px solid rgba(128, 138, 152, 0.14);
+}
+.md-table th {
+  font-weight: 650;
+  font-size: 0.86em;
+  letter-spacing: 0.02em;
+  background: rgba(128, 138, 152, 0.09);
+}
+.md-table tbody tr:last-child td { border-bottom: none; }
+.md-table tbody tr:hover td { background: rgba(128, 138, 152, 0.06); }
+
+@media (prefers-reduced-motion: reduce) {
+  .message, .status-note, .feed-card { animation: none; }
+  .message.assistant.streaming::after { animation: none; }
+  #jump-bottom { transition: none; }
+}

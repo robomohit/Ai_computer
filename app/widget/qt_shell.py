@@ -4339,6 +4339,26 @@ def main(port: int = 8000) -> int:
 
         def mouseReleaseEvent(self, _e) -> None:
             self._drag = None
+            # Edge clamp with a smooth settle — a capsule dragged past the
+            # screen edge glides back instead of getting lost offscreen.
+            try:
+                scr = self.screen().availableGeometry()
+                g = self.frameGeometry()
+                margin = 6 - SHADOW_PAD  # visible glass stays on screen
+                nx = max(scr.left() + margin, min(g.x(), scr.right() - g.width() - margin))
+                ny = max(scr.top() + margin, min(g.y(), scr.bottom() - g.height() - margin))
+                if (nx, ny) != (g.x(), g.y()):
+                    snap = QPropertyAnimation(self, b"pos")
+                    snap.setDuration(240)
+                    snap.setEasingCurve(QEasingCurve.OutCubic)
+                    snap.setStartValue(g.topLeft())
+                    snap.setEndValue(QPoint(nx, ny))
+                    snap.finished.connect(self._sample_bg)
+                    self._snap_anim = snap
+                    snap.start()
+                    return
+            except Exception:
+                pass
             self._sample_bg()  # re-adapt glass to the new backdrop
 
         def showEvent(self, e) -> None:  # noqa: N802

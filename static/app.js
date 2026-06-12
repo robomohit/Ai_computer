@@ -667,12 +667,72 @@
     bindExamples();
   };
 
+  // Smart sticky scroll — follow the stream only while the user is at the
+  // bottom. Scrolling up to read pauses the follow; a floating "jump to
+  // latest" pill brings it back. This is the difference between a feed that
+  // fights the reader and one that respects them.
   let _scrollPending = false;
-  const scrollFeed = () => {
+  let _stickToBottom = true;
+  let _jumpPill = null;
+  const updateJumpPill = () => { if (_jumpPill) _jumpPill.classList.toggle('show', !_stickToBottom); };
+  const scrollFeed = (force = false) => {
+    if (force) { _stickToBottom = true; updateJumpPill(); }
+    if (!_stickToBottom) return;
     if (_scrollPending) return;
     _scrollPending = true;
     requestAnimationFrame(() => { _scrollPending = false; const fs = $('feed-scroll'); if (fs) fs.scrollTop = fs.scrollHeight; });
   };
+  const initFeedScrollFeel = () => {
+    const fs = $('feed-scroll');
+    if (!fs || _jumpPill) return;
+    _jumpPill = document.createElement('button');
+    _jumpPill.type = 'button';
+    _jumpPill.id = 'jump-bottom';
+    _jumpPill.title = 'Jump to latest';
+    _jumpPill.innerHTML = '<svg width="14" height="14" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round" aria-hidden="true"><path d="M12 5v14"/><path d="m19 12-7 7-7-7"/></svg><span>Latest</span>';
+    _jumpPill.addEventListener('click', () => scrollFeed(true));
+    document.body.appendChild(_jumpPill);
+    // Unstick only on EXPLICIT user intent (wheel-up / touch drag) — a smooth
+    // programmatic glide also fires scroll events mid-flight and must never be
+    // mistaken for the reader scrolling away. Re-stick when they return.
+    fs.addEventListener('wheel', (e) => {
+      if (e.deltaY < 0 && _stickToBottom) { _stickToBottom = false; updateJumpPill(); }
+    }, { passive: true });
+    fs.addEventListener('touchmove', () => {
+      if (_stickToBottom) { _stickToBottom = false; updateJumpPill(); }
+    }, { passive: true });
+    fs.addEventListener('scroll', () => {
+      const near = fs.scrollHeight - fs.scrollTop - fs.clientHeight < 160;
+      if (near && !_stickToBottom) { _stickToBottom = true; updateJumpPill(); }
+    }, { passive: true });
+  };
+  initFeedScrollFeel();
+
+  // Feed filter — All / Chat / Activity. A long agent run buries the
+  // conversation under tool cards; one tap strips the noise either way.
+  const initFeedFilter = () => {
+    const bar = document.querySelector('.topbar-main');
+    if (!bar || bar.querySelector('.feed-filter')) return;
+    const wrap = document.createElement('div');
+    wrap.className = 'feed-filter';
+    wrap.setAttribute('role', 'group');
+    wrap.title = 'Filter what the feed shows';
+    [['all', 'All'], ['chat', 'Chat'], ['activity', 'Activity']].forEach(([val, label], i) => {
+      const b = document.createElement('button');
+      b.type = 'button';
+      b.className = 'feed-filter-btn' + (i === 0 ? ' active' : '');
+      b.dataset.v = val;
+      b.textContent = label;
+      b.addEventListener('click', () => {
+        document.body.dataset.feedFilter = val;
+        wrap.querySelectorAll('.feed-filter-btn').forEach((x) => x.classList.toggle('active', x === b));
+        scrollFeed();
+      });
+      wrap.appendChild(b);
+    });
+    bar.appendChild(wrap);
+  };
+  initFeedFilter();
 
   const safeMarkdownHref = (href = '') => {
     const trimmed = String(href || '').trim();
@@ -687,13 +747,14 @@
 
   const sanitizeRenderedMarkdown = (html = '') => {
     if (typeof DOMParser === 'undefined') return String(html || '');
-    const allowedTags = new Set(['A', 'BR', 'CODE', 'EM', 'LI', 'P', 'PRE', 'STRONG', 'UL', 'OL', 'H1', 'H2', 'H3', 'H4', 'H5', 'H6', 'HR']);
+    const allowedTags = new Set(['A', 'BR', 'CODE', 'EM', 'LI', 'P', 'PRE', 'STRONG', 'UL', 'OL', 'H1', 'H2', 'H3', 'H4', 'H5', 'H6', 'HR', 'TABLE', 'THEAD', 'TBODY', 'TR', 'TH', 'TD']);
     const allowedClasses = {
       A: new Set(['md-link']),
       CODE: new Set(['md-code']),
       PRE: new Set(['md-pre']),
       UL: new Set(['md-ul']),
       OL: new Set(['md-ol']),
+      TABLE: new Set(['md-table']),
       H1: new Set(['md-h1']),
       H2: new Set(['md-h2']),
       H3: new Set(['md-h3']),
@@ -780,6 +841,14 @@
     });
     // 6. horizontal rule (---, ***, ___ on their own line)
     text = text.replace(/(?:^|\n)[ \t]{0,3}(?:-{3,}|\*{3,}|_{3,})[ \t]*(?=\n|$)/g, () => '\n\n' + stash('<hr class="md-hr">', 'R') + '\n\n');
+    // 6.5 GFM pipe tables — header row, |---| separator, body rows. Agents
+    //     output tables constantly; rendering them is table-stakes (sorry).
+    text = text.replace(/(?:^|\n)[ \t]*(\|[^\n]+\|)[ \t]*\n[ \t]*\|[ \t:|-]+\|[ \t]*\n((?:[ \t]*\|[^\n]+\|[ \t]*(?:\n|$))*)/g, (_, header, rows) => {
+      const cells = (line) => line.trim().replace(/^\|/, '').replace(/\|$/, '').split('|').map((c) => c.trim());
+      const ths = cells(header).map((c) => `<th>${c}</th>`).join('');
+      const trs = rows.split(/\n/).filter((r) => r.trim()).map((r) => '<tr>' + cells(r).map((c) => `<td>${c}</td>`).join('') + '</tr>').join('');
+      return '\n\n' + stash(`<table class="md-table"><thead><tr>${ths}</tr></thead>${trs ? `<tbody>${trs}</tbody>` : ''}</table>`, 'G') + '\n\n';
+    });
     // 7. ordered lists — group consecutive "1." / "1)" lines
     text = text.replace(/(?:^|\n)((?:[ \t]*\d+[.)] .+(?:\n|$))+)/g, (_, list) => {
       const items = list.trim().split(/\n/).map((l) => '<li>' + l.replace(/^[ \t]*\d+[.)] /, '') + '</li>').join('');
@@ -952,6 +1021,7 @@
 
   const appendMessage = (text, kind = 'system-note') => {
     removeWelcome();
+    if (kind === 'user') scrollFeed(true);  // sending re-engages follow mode
     const el = document.createElement('div');
     el.className = `message ${kind}`;
     if (kind === 'assistant') {
@@ -4164,6 +4234,11 @@
         '- **SQLite + SQLAlchemy** — models and migrations in place\n' +
         '- **JWT auth** — `/auth/login` with bcrypt password hashing\n' +
         '- **Tests** — `pytest -q` reports **2 passed** in 0.41s\n\n' +
+        '| Endpoint | Method | Auth |\n' +
+        '| --- | --- | --- |\n' +
+        '| `/api/items` | GET | none |\n' +
+        '| `/api/items` | POST | JWT |\n' +
+        '| `/auth/login` | POST | none |\n\n' +
         'Run it with `uvicorn app.main:app --reload` and hit `/docs` for the interactive API explorer.',
     });
   }
