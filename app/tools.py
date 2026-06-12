@@ -2648,6 +2648,72 @@ class ToolExecutor:
         )
         return ToolResult(ok=True, output="UIA matches:\n" + "\n".join(lines) + tok + self._app_rect_token(app, app_rect), data=data)
 
+    def adaptive_observe(self, app: str = "", cap: int = 90):
+        try:
+            from .adaptive_windows import (
+                analyze_windows_failure,
+                build_affordance_graph,
+                format_affordance_graph,
+                format_recovery_plan,
+            )
+            from .widget.desktop_features import foreground_window_info, survey_app_controls
+        except Exception as exc:
+            return ToolResult(ok=False, output=f"adaptive_observe unavailable: {exc}")
+
+        app_hint = (app or self._isolated_app or "").strip()
+        try:
+            cap_i = max(20, min(240, int(cap or 90)))
+        except Exception:
+            cap_i = 90
+        try:
+            survey = survey_app_controls(
+                app_hint,
+                cap=cap_i,
+                max_names=60,
+                fallback_foreground=not bool(app_hint),
+            )
+        except Exception:
+            survey = {"count": 0, "controls": []}
+        try:
+            fg = foreground_window_info()
+        except Exception:
+            fg = {}
+        observed_app = app_hint or str(fg.get("title") or "foreground")
+        graph = build_affordance_graph(
+            app=observed_app,
+            controls=survey.get("controls") or [],
+            count=int(survey.get("count") or 0),
+            source="uia",
+        )
+        app_rect = self._app_rect_payload(observed_app)
+        data = {
+            "ok": True,
+            "graph": graph,
+            "foreground": fg,
+            "overlay": _overlay_payload(
+                "app_focus" if app_rect else "status",
+                "adaptive_observe",
+                "inspect",
+                f"Mapped {graph['named_control_count']} controls",
+                app_rect=app_rect,
+                phase="done",
+                control_layer="Adaptive UIA map",
+                control_reason="one-pass UIA survey grouped into affordances",
+            ),
+        }
+        output = format_affordance_graph(graph)
+        if graph["named_control_count"] == 0:
+            analysis = analyze_windows_failure(
+                action="adaptive_observe",
+                query="",
+                app=observed_app,
+                result={"fallback_reason": "empty_accessibility_tree"},
+                output="The window exposes no interactive controls right now.",
+            )
+            data["adaptive"] = analysis.to_dict()
+            output += "\n" + format_recovery_plan(analysis)
+        return ToolResult(ok=True, output=output + self._app_rect_token(observed_app, app_rect), data=data)
+
     # ── Hybrid resolver fallbacks: UIA -> OCR pixel (local, no model) -> the
     #    agent escalates to the vision model only if both miss. ──────────────
     def _ocr_click_fallback(self, query: str, app: str):
@@ -3636,6 +3702,7 @@ class ToolExecutor:
             ActionType.analyze_folder: lambda a: self.analyze_folder(a.args.get("path", ""), a.args.get("action", "scan")),
             ActionType.show_widget: lambda a: self.show_widget(a.args),
             ActionType.screen_context: lambda a: self.screen_context(),
+            ActionType.adaptive_observe: lambda a: self.adaptive_observe(a.args.get("app", ""), a.args.get("cap", 90)),
             ActionType.uia_find: lambda a: self.uia_find(a.args["query"], a.args.get("app", ""), a.args.get("limit", 5)),
             ActionType.uia_click: lambda a: self.uia_click(a.args["query"], a.args.get("app", "")),
             ActionType.uia_click_sequence: lambda a: self.uia_click_sequence(a.args.get("targets") or a.args.get("queries") or a.args.get("query"), a.args.get("app", ""), a.args.get("stop_on_error", True), a.args.get("read_result", "")),

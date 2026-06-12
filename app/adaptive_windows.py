@@ -438,3 +438,102 @@ def format_recovery_plan(analysis: FailureAnalysis | dict[str, Any]) -> str:
 
 def resolver_ids(steps: Iterable[ResolverStep]) -> list[str]:
     return [step.id for step in steps]
+
+
+def _affordance_kind(name: str) -> str:
+    n = (name or "").strip().lower()
+    if not n:
+        return "unknown"
+    if any(word in n for word in (
+        "text", "editor", "message", "search", "file name", "username",
+        "password", "email", "input", "field", "address",
+    )):
+        return "text_input"
+    if any(word in n for word in (
+        "file", "edit", "view", "tools", "settings", "menu", "more",
+        "options", "help",
+    )):
+        return "menu_or_toolbar"
+    if any(word in n for word in (
+        "tab", "next", "back", "previous", "home", "server", "channel",
+        "page", "list",
+    )):
+        return "navigation"
+    if any(word in n for word in (
+        "save", "open", "send", "submit", "ok", "cancel", "delete",
+        "apply", "close", "clear", "equals", "plus", "minus", "multiply",
+        "divide", "bold", "italic",
+    )):
+        return "command"
+    if re.search(r"\bctrl\+|\balt\+|\bshift\+", n):
+        return "command"
+    return "control"
+
+
+def _preferred_actions(kind: str) -> list[str]:
+    if kind == "text_input":
+        return ["uia_type", "uia_find"]
+    if kind == "navigation":
+        return ["uia_click", "uia_wait"]
+    if kind in {"command", "menu_or_toolbar", "control"}:
+        return ["uia_click", "uia_find"]
+    return ["uia_find", "screen_context"]
+
+
+def build_affordance_graph(
+    *,
+    app: str = "",
+    controls: Iterable[str] = (),
+    count: int = 0,
+    source: str = "uia",
+) -> dict[str, Any]:
+    unique: list[str] = []
+    seen: set[str] = set()
+    for raw in controls:
+        name = str(raw or "").strip()
+        if not name:
+            continue
+        key = name.lower()
+        if key in seen:
+            continue
+        seen.add(key)
+        unique.append(name)
+
+    affordances = []
+    groups: dict[str, list[str]] = {}
+    for name in unique:
+        kind = _affordance_kind(name)
+        groups.setdefault(kind, []).append(name)
+        affordances.append({
+            "name": name,
+            "kind": kind,
+            "preferred_actions": _preferred_actions(kind),
+        })
+
+    return {
+        "app": app or "foreground",
+        "source": source,
+        "control_count": int(count or len(unique)),
+        "named_control_count": len(unique),
+        "controls": unique,
+        "groups": groups,
+        "affordances": affordances,
+    }
+
+
+def format_affordance_graph(graph: dict[str, Any], *, limit: int = 8) -> str:
+    app = graph.get("app") or "foreground"
+    count = int(graph.get("control_count") or 0)
+    named = int(graph.get("named_control_count") or 0)
+    groups = graph.get("groups") or {}
+    group_bits = []
+    for kind in ("text_input", "command", "menu_or_toolbar", "navigation", "control"):
+        names = list(groups.get(kind) or [])[:limit]
+        if names:
+            group_bits.append(f"{kind}: " + ", ".join(repr(n) for n in names))
+    if not group_bits:
+        group_bits.append("no named affordances exposed")
+    return (
+        f"Adaptive app map for {app}: {count} UIA nodes, {named} named controls. "
+        + " | ".join(group_bits)
+    )

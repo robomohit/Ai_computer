@@ -91,6 +91,7 @@ _DESKTOP_POST_ACTION_TYPES = {
 }
 
 _UIA_ACTION_TYPES = {
+    ActionType.adaptive_observe,
     ActionType.uia_find,
     ActionType.uia_click,
     ActionType.uia_click_sequence,
@@ -2014,7 +2015,8 @@ class AgentService:
                         "Windows UI Automation (UIA) by control NAME — never by pixels, screenshots, or "
                         "guessed names.\n\n"
                         "CORE KIT (covers almost every desktop task — prefer these):\n"
-                        "run_command \"start <app>\" → open app · uia_wait → wait for a control · "
+                        "run_command \"start <app>\" → open app · adaptive_observe → map unfamiliar controls · "
+                        "uia_wait → wait for a control · "
                         "focus_window → bring forward · uia_find → locate/read a control · uia_click → "
                         "press one button · uia_click_sequence → many buttons in ONE call (+read_result "
                         "reads the answer back) · uia_type → enter text · keyboard_type / key_combo → "
@@ -2097,6 +2099,8 @@ class AgentService:
                         "DECISION TABLE:\n"
                         "- App not open → <action type=\"run_command\">{\"command\": \"start calc\"}</action> "
                         "(the result includes the window's control menu).\n"
+                        "- Unfamiliar/complex app → <action type=\"adaptive_observe\">{\"app\": \"AppName\"}</action> "
+                        "to map controls before guessing.\n"
                         "- Window result lists \"Visible controls: ...\" → those are the ONLY valid names; "
                         "copy them EXACTLY. A uia_find miss lists the controls that DO exist — pick from "
                         "that list, NEVER re-guess.\n"
