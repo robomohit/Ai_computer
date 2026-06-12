@@ -25,6 +25,16 @@ class FailureClass(str, Enum):
     unknown = "unknown"
 
 
+class SurfaceRuntime(str, Enum):
+    window_missing = "window_missing"
+    uia_rich = "uia_rich"
+    uia_sparse = "uia_sparse"
+    electron_locked = "electron_locked"
+    visual_text = "visual_text"
+    custom_rendered = "custom_rendered"
+    unknown = "unknown"
+
+
 @dataclass
 class ResolverStep:
     id: str
@@ -46,6 +56,21 @@ class FailureAnalysis:
     def to_dict(self) -> dict[str, Any]:
         payload = asdict(self)
         payload["failure_class"] = self.failure_class.value
+        return payload
+
+
+@dataclass
+class RuntimePlan:
+    runtime: SurfaceRuntime
+    confidence: float
+    summary: str
+    primary_layer: str
+    next_tools: list[str]
+    evidence: dict[str, Any] = field(default_factory=dict)
+
+    def to_dict(self) -> dict[str, Any]:
+        payload = asdict(self)
+        payload["runtime"] = self.runtime.value
         return payload
 
 
@@ -438,6 +463,131 @@ def format_recovery_plan(analysis: FailureAnalysis | dict[str, Any]) -> str:
 
 def resolver_ids(steps: Iterable[ResolverStep]) -> list[str]:
     return [step.id for step in steps]
+
+
+def classify_surface_runtime(
+    *,
+    app: str = "",
+    graph: dict[str, Any] | None = None,
+    app_rect: dict[str, Any] | None = None,
+    electron_hint: dict[str, Any] | None = None,
+    ocr_available: bool = False,
+    visual_word_count: int | None = None,
+    model_vision: bool = False,
+) -> RuntimePlan:
+    """Choose the next Windows-control runtime from cheap local evidence."""
+    graph = graph or {}
+    controls = graph.get("controls") or []
+    named = int(graph.get("named_control_count") or len(controls) or 0)
+    control_count = int(graph.get("control_count") or 0)
+    rect = app_rect or {}
+    width = int(rect.get("width") or 0)
+    height = int(rect.get("height") or 0)
+    window_found = width > 0 and height > 0
+    word_count = None if visual_word_count is None else max(0, int(visual_word_count or 0))
+    evidence = {
+        "app": app or graph.get("app") or "foreground",
+        "window_found": window_found,
+        "uia_control_count": control_count,
+        "named_control_count": named,
+        "ocr_available": bool(ocr_available),
+        "visual_word_count": word_count,
+        "electron_hint": bool(electron_hint),
+        "model_vision": bool(model_vision),
+    }
+
+    if named >= 12:
+        return RuntimePlan(
+            runtime=SurfaceRuntime.uia_rich,
+            confidence=0.93,
+            summary="The app exposes a rich UI Automation tree; use exact UIA names first.",
+            primary_layer="uia",
+            next_tools=["uia_find", "uia_click", "uia_type", "uia_wait"],
+            evidence=evidence,
+        )
+
+    if electron_hint:
+        return RuntimePlan(
+            runtime=SurfaceRuntime.electron_locked,
+            confidence=0.88,
+            summary="This looks like an Electron/Chromium shell with little or no exposed UIA tree.",
+            primary_layer="electron_accessibility",
+            next_tools=["electron_check", "electron_unlock", "uia_wait", "adaptive_observe"],
+            evidence=evidence,
+        )
+
+    if named > 0:
+        return RuntimePlan(
+            runtime=SurfaceRuntime.uia_sparse,
+            confidence=0.78,
+            summary="The app exposes some UIA controls, but expect gaps and keep OCR/keyboard fallback ready.",
+            primary_layer="uia_then_ocr",
+            next_tools=["uia_find", "adaptive_observe", "uia_wait", "screen_context"],
+            evidence=evidence,
+        )
+
+    if not window_found and app:
+        return RuntimePlan(
+            runtime=SurfaceRuntime.window_missing,
+            confidence=0.9,
+            summary="No verified target window bounds yet; resolve or open the app before acting.",
+            primary_layer="window_resolution",
+            next_tools=["wait_for_window", "focus_window", "adaptive_observe"],
+            evidence=evidence,
+        )
+
+    if word_count and word_count > 0:
+        return RuntimePlan(
+            runtime=SurfaceRuntime.visual_text,
+            confidence=0.8,
+            summary="UIA is empty, but local OCR sees text; use OCR targeting before model vision.",
+            primary_layer="ocr",
+            next_tools=["uia_find", "screen_context", "key_combo", "mouse_click"],
+            evidence=evidence,
+        )
+
+    if window_found and ocr_available:
+        return RuntimePlan(
+            runtime=SurfaceRuntime.visual_text,
+            confidence=0.66,
+            summary="UIA is empty; local OCR is available for visible text targets.",
+            primary_layer="ocr",
+            next_tools=["uia_find", "screen_context", "key_combo", "mouse_click"],
+            evidence=evidence,
+        )
+
+    if window_found:
+        tools = ["key_combo", "screen_context", "mouse_click"]
+        if model_vision:
+            tools.append("computer")
+        return RuntimePlan(
+            runtime=SurfaceRuntime.custom_rendered,
+            confidence=0.7,
+            summary="The window exists but exposes no accessible controls; treat it like a custom/game surface.",
+            primary_layer="keyboard_visual",
+            next_tools=tools,
+            evidence=evidence,
+        )
+
+    return RuntimePlan(
+        runtime=SurfaceRuntime.unknown,
+        confidence=0.4,
+        summary="The available local signals do not identify a reliable Windows-control runtime yet.",
+        primary_layer="observe",
+        next_tools=["adaptive_observe", "screen_context", "wait_for_window"],
+        evidence=evidence,
+    )
+
+
+def format_runtime_plan(plan: RuntimePlan | dict[str, Any]) -> str:
+    payload = plan.to_dict() if isinstance(plan, RuntimePlan) else plan
+    tools = ", ".join(str(tool) for tool in (payload.get("next_tools") or [])[:5])
+    suffix = f" Next: {tools}." if tools else ""
+    return (
+        f"Runtime plan ({payload.get('runtime', 'unknown')}, "
+        f"{float(payload.get('confidence', 0.0)):.2f}): "
+        f"{str(payload.get('summary') or '').strip()}{suffix}"
+    )
 
 
 def _affordance_kind(name: str) -> str:

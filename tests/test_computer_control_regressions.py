@@ -172,6 +172,7 @@ async def test_desktop_control_profile_is_injected_before_first_model_turn(monke
     profile_events = [data for event, data in events if event == "control_profile"]
     assert profile_events
     assert profile_events[-1]["primary_route"] == "Electron unlock"
+    assert profile_events[-1]["runtime"]["runtime"] == "electron_locked"
     assert profile_events[-1]["electron_hint"]["exe"].endswith("Discord.exe")
 
 
@@ -208,6 +209,7 @@ def test_full_desktop_control_profile_surveys_foreground_window(monkeypatch):
     assert profile["uia_control_count"] == 4
     assert profile["controls"] == ["File", "Edit", "Search"]
     assert profile["primary_route"] == "UIA exact"
+    assert profile["runtime"]["runtime"] == "uia_sparse"
     assert profile["foreground_window"]["title"] == "Untitled - Notepad"
     assert "Target app: Untitled - Notepad" in _desktop_control_profile_text(profile)
     assert "Foreground window: Untitled - Notepad" in _desktop_control_profile_text(profile)

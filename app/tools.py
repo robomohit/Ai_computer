@@ -2653,10 +2653,18 @@ class ToolExecutor:
             from .adaptive_windows import (
                 analyze_windows_failure,
                 build_affordance_graph,
+                classify_surface_runtime,
                 format_affordance_graph,
                 format_recovery_plan,
+                format_runtime_plan,
             )
-            from .widget.desktop_features import foreground_window_info, survey_app_controls
+            from .widget.desktop_features import (
+                electron_hint_for_app,
+                foreground_window_info,
+                ocr_available,
+                survey_app_controls,
+                win_ocr_words,
+            )
         except Exception as exc:
             return ToolResult(ok=False, output=f"adaptive_observe unavailable: {exc}")
 
@@ -2718,9 +2726,38 @@ class ToolExecutor:
             source="uia",
         )
         app_rect = self._app_rect_payload(observed_app)
+        try:
+            electron_hint = electron_hint_for_app(observed_app)
+        except Exception:
+            electron_hint = None
+        try:
+            ocr_ready = bool(ocr_available())
+        except Exception:
+            ocr_ready = False
+        visual_word_count = None
+        if graph["named_control_count"] == 0 and app_rect and ocr_ready:
+            try:
+                words = win_ocr_words(
+                    int(app_rect["left"]),
+                    int(app_rect["top"]),
+                    int(app_rect["width"]),
+                    int(app_rect["height"]),
+                )
+                visual_word_count = len(words or [])
+            except Exception:
+                visual_word_count = None
+        runtime_plan = classify_surface_runtime(
+            app=observed_app,
+            graph=graph,
+            app_rect=app_rect,
+            electron_hint=electron_hint,
+            ocr_available=ocr_ready,
+            visual_word_count=visual_word_count,
+        )
         data = {
             "ok": True,
             "graph": graph,
+            "runtime": runtime_plan.to_dict(),
             "overlay": _overlay_payload(
                 "app_focus" if app_rect else "status",
                 "adaptive_observe",
@@ -2739,6 +2776,7 @@ class ToolExecutor:
         if recovered_by:
             data["recovered_by"] = recovered_by
         output = format_affordance_graph(graph)
+        output += "\n" + format_runtime_plan(runtime_plan)
         if recovered_by:
             output += f"\nRecovered empty UIA map via {recovered_by}."
         if graph["named_control_count"] == 0:

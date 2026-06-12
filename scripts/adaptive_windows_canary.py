@@ -73,6 +73,7 @@ def _adaptive_map_step(name: str, fn: Callable[[], Any]) -> dict[str, Any]:
         res = fn()
         data = getattr(res, "data", None) or {}
         graph = data.get("graph") or {}
+        runtime = data.get("runtime") or {}
         groups = graph.get("groups") or {}
         adaptive = data.get("adaptive") or {}
         overlay = data.get("overlay") or {}
@@ -94,6 +95,11 @@ def _adaptive_map_step(name: str, fn: Callable[[], Any]) -> dict[str, Any]:
                 },
                 "recovered_by": data.get("recovered_by", ""),
                 "recovery_attempts": data.get("recovery_attempts", []),
+                "runtime": {
+                    "runtime": runtime.get("runtime", ""),
+                    "primary_layer": runtime.get("primary_layer", ""),
+                    "confidence": runtime.get("confidence"),
+                },
                 "adaptive_failure_class": adaptive.get("failure_class", ""),
                 "adaptive_resolvers": [r.get("id") for r in adaptive.get("resolvers") or []],
                 "overlay": {

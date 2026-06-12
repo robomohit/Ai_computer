@@ -4,8 +4,11 @@ import pytest
 
 from app.adaptive_windows import (
     FailureClass,
+    SurfaceRuntime,
     analyze_windows_failure,
     build_affordance_graph,
+    classify_surface_runtime,
+    format_runtime_plan,
     format_recovery_plan,
     remember_resolver_outcome,
     resolver_ids,
@@ -103,6 +106,58 @@ def test_build_affordance_graph_groups_common_controls():
     assert graph["groups"]["menu_or_toolbar"] == ["File"]
     assert graph["groups"]["navigation"] == ["Next tab"]
     assert graph["affordances"][0]["preferred_actions"] == ["uia_type", "uia_find"]
+
+
+def test_classify_surface_runtime_prefers_rich_uia():
+    graph = build_affordance_graph(
+        app="Settings",
+        count=80,
+        controls=[f"Control {idx}" for idx in range(12)],
+    )
+
+    plan = classify_surface_runtime(
+        app="Settings",
+        graph=graph,
+        app_rect={"left": 0, "top": 0, "width": 800, "height": 600},
+        ocr_available=True,
+    )
+
+    assert plan.runtime == SurfaceRuntime.uia_rich
+    assert plan.primary_layer == "uia"
+    assert plan.next_tools[0] == "uia_find"
+    assert "Runtime plan" in format_runtime_plan(plan)
+
+
+def test_classify_surface_runtime_detects_electron_lock():
+    graph = build_affordance_graph(app="Discord", count=0, controls=[])
+
+    plan = classify_surface_runtime(
+        app="Discord",
+        graph=graph,
+        app_rect={"left": 0, "top": 0, "width": 800, "height": 600},
+        electron_hint={"exe": r"C:\Discord\Discord.exe"},
+        ocr_available=True,
+    )
+
+    assert plan.runtime == SurfaceRuntime.electron_locked
+    assert plan.primary_layer == "electron_accessibility"
+    assert "electron_unlock" in plan.next_tools
+
+
+def test_classify_surface_runtime_detects_custom_surface_without_ocr():
+    graph = build_affordance_graph(app="Game", count=0, controls=[])
+
+    plan = classify_surface_runtime(
+        app="Game",
+        graph=graph,
+        app_rect={"left": 0, "top": 0, "width": 1280, "height": 720},
+        ocr_available=False,
+        model_vision=True,
+    )
+
+    assert plan.runtime == SurfaceRuntime.custom_rendered
+    assert plan.primary_layer == "keyboard_visual"
+    assert plan.next_tools[:2] == ["key_combo", "screen_context"]
 
 
 def test_adaptive_observe_schema_is_in_uia_pack():
@@ -281,6 +336,8 @@ async def test_tool_executor_adaptive_observe_maps_controls(monkeypatch, workspa
 
     assert result.ok is True
     assert "Adaptive app map for Notepad" in result.output
+    assert "Runtime plan" in result.output
+    assert result.data["runtime"]["runtime"] == SurfaceRuntime.uia_sparse.value
     assert result.data["graph"]["groups"]["text_input"] == ["Text editor"]
     assert result.data["graph"]["groups"]["command"] == ["Save"]
 

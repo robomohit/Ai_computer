@@ -626,19 +626,55 @@ def _desktop_control_profile(
     except Exception:
         pass
 
-    count = int(profile.get("uia_control_count") or 0)
-    if target and count >= 12:
-        route = "UIA exact"
-    elif target and profile.get("electron_hint"):
-        route = "Electron unlock"
-    elif not target:
-        route = "UIA exact"
-    elif profile.get("ocr_available"):
-        route = "OCR fallback"
-    elif model_sees:
-        route = "Screenshot fallback"
-    else:
-        route = "UIA degraded"
+    try:
+        from .adaptive_windows import (
+            SurfaceRuntime,
+            build_affordance_graph,
+            classify_surface_runtime,
+        )
+        foreground = profile.get("foreground_window") if isinstance(profile.get("foreground_window"), dict) else {}
+        runtime_app = target or str(foreground.get("title") or "foreground")
+        graph = build_affordance_graph(
+            app=runtime_app,
+            count=int(profile.get("uia_control_count") or 0),
+            controls=profile.get("controls") or [],
+            source="uia",
+        )
+        runtime_plan = classify_surface_runtime(
+            app=runtime_app,
+            graph=graph,
+            app_rect=profile.get("app_rect") or None,
+            electron_hint=profile.get("electron_hint"),
+            ocr_available=bool(profile.get("ocr_available")),
+            model_vision=bool(model_sees),
+        )
+        profile["runtime"] = runtime_plan.to_dict()
+        if runtime_plan.runtime in {SurfaceRuntime.uia_rich, SurfaceRuntime.uia_sparse}:
+            route = "UIA exact"
+        elif runtime_plan.runtime == SurfaceRuntime.electron_locked:
+            route = "Electron unlock"
+        elif runtime_plan.runtime == SurfaceRuntime.visual_text:
+            route = "OCR fallback"
+        elif runtime_plan.runtime == SurfaceRuntime.window_missing:
+            route = "Window resolution"
+        elif runtime_plan.runtime == SurfaceRuntime.custom_rendered and model_sees:
+            route = "Screenshot fallback"
+        else:
+            route = "UIA degraded"
+    except Exception:
+        count = int(profile.get("uia_control_count") or 0)
+        if target and count >= 12:
+            route = "UIA exact"
+        elif target and profile.get("electron_hint"):
+            route = "Electron unlock"
+        elif not target:
+            route = "UIA exact"
+        elif profile.get("ocr_available"):
+            route = "OCR fallback"
+        elif model_sees:
+            route = "Screenshot fallback"
+        else:
+            route = "UIA degraded"
     profile["primary_route"] = route
     return profile
 
@@ -663,6 +699,12 @@ def _desktop_control_profile_text(profile: Dict[str, Any]) -> str:
         f"- OCR fallback: {ocr}",
         f"- Screenshot/vision fallback: {vision}",
     ]
+    runtime = profile.get("runtime") if isinstance(profile.get("runtime"), dict) else {}
+    if runtime.get("runtime"):
+        lines.append(
+            f"- Surface runtime: {runtime.get('runtime')} "
+            f"({runtime.get('primary_layer', 'unknown')})"
+        )
     if foreground_title and not profile.get("target_app"):
         if foreground_exe:
             lines.append(f"- Foreground window: {foreground_title} ({foreground_exe})")

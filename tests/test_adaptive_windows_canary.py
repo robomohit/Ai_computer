@@ -108,6 +108,11 @@ def test_adaptive_map_step_redacts_control_labels():
                 "controls": ["secret channel"],
                 "groups": {"text_input": ["secret channel"]},
             },
+            "runtime": {
+                "runtime": "uia_sparse",
+                "primary_layer": "uia_then_ocr",
+                "confidence": 0.78,
+            },
             "overlay": {"control_layer": "Adaptive UIA map"},
         },
     )
@@ -116,6 +121,7 @@ def test_adaptive_map_step_redacts_control_labels():
 
     assert step["ok"] is True
     assert step["data"]["graph"]["named_control_count"] == 1
+    assert step["data"]["runtime"]["runtime"] == "uia_sparse"
     assert "secret" not in json.dumps(step).lower()
 
 
