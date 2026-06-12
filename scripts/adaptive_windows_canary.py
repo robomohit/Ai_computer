@@ -40,6 +40,115 @@ def _tool_step(name: str, fn: Callable[[], Any]) -> dict[str, Any]:
         }
 
 
+def _window_probe_step(name: str, fn: Callable[[], Any]) -> dict[str, Any]:
+    """Run a window-targeting tool without serializing app titles/control names."""
+    started = time.perf_counter()
+    try:
+        res = fn()
+        data = getattr(res, "data", None) or {}
+        return {
+            "name": name,
+            "ok": bool(getattr(res, "ok", False)),
+            "duration_s": round(time.perf_counter() - started, 3),
+            "output": "window ready" if getattr(res, "ok", False) else str(getattr(res, "output", ""))[:240],
+            "data": {
+                "hwnd_present": bool(data.get("hwnd")),
+                "pid_present": bool(data.get("pid")),
+                "title_present": bool(data.get("title")),
+            },
+        }
+    except Exception as exc:
+        return {
+            "name": name,
+            "ok": False,
+            "duration_s": round(time.perf_counter() - started, 3),
+            "error": str(exc),
+        }
+
+
+def _adaptive_map_step(name: str, fn: Callable[[], Any]) -> dict[str, Any]:
+    """Summarize an adaptive map without dumping private control labels."""
+    started = time.perf_counter()
+    try:
+        res = fn()
+        data = getattr(res, "data", None) or {}
+        graph = data.get("graph") or {}
+        groups = graph.get("groups") or {}
+        adaptive = data.get("adaptive") or {}
+        overlay = data.get("overlay") or {}
+        return {
+            "name": name,
+            "ok": bool(getattr(res, "ok", False)),
+            "duration_s": round(time.perf_counter() - started, 3),
+            "output": (
+                f"mapped {int(graph.get('named_control_count') or 0)} named controls"
+                if getattr(res, "ok", False)
+                else str(getattr(res, "output", ""))[:240]
+            ),
+            "data": {
+                "graph": {
+                    "app": graph.get("app"),
+                    "control_count": int(graph.get("control_count") or 0),
+                    "named_control_count": int(graph.get("named_control_count") or 0),
+                    "group_counts": {k: len(v or []) for k, v in groups.items()},
+                },
+                "recovered_by": data.get("recovered_by", ""),
+                "recovery_attempts": data.get("recovery_attempts", []),
+                "adaptive_failure_class": adaptive.get("failure_class", ""),
+                "adaptive_resolvers": [r.get("id") for r in adaptive.get("resolvers") or []],
+                "overlay": {
+                    "control_layer": overlay.get("control_layer", ""),
+                },
+            },
+            "control_layer": overlay.get("control_layer", ""),
+        }
+    except Exception as exc:
+        return {
+            "name": name,
+            "ok": False,
+            "duration_s": round(time.perf_counter() - started, 3),
+            "error": str(exc),
+        }
+
+
+def _find_summary_step(name: str, fn: Callable[[], Any]) -> dict[str, Any]:
+    """Summarize a selector probe without returning matched labels."""
+    started = time.perf_counter()
+    try:
+        res = fn()
+        data = getattr(res, "data", None) or {}
+        items = data.get("items") or []
+        top = items[0] if items else {}
+        overlay = data.get("overlay") or {}
+        adaptive = data.get("adaptive") or {}
+        return {
+            "name": name,
+            "ok": bool(getattr(res, "ok", False)),
+            "duration_s": round(time.perf_counter() - started, 3),
+            "output": f"{len(items)} match(es)" if getattr(res, "ok", False) else str(getattr(res, "output", ""))[:240],
+            "data": {
+                "item_count": len(items),
+                "top_name_present": bool(top.get("name")),
+                "top_control_type": top.get("control_type", ""),
+                "top_score": top.get("score"),
+                "top_has_rect": bool((top.get("width") or 0) and (top.get("height") or 0)),
+                "adaptive_failure_class": adaptive.get("failure_class", ""),
+                "overlay": {
+                    "control_layer": overlay.get("control_layer", ""),
+                    "fallback_reason": overlay.get("fallback_reason", ""),
+                },
+            },
+            "control_layer": overlay.get("control_layer", ""),
+        }
+    except Exception as exc:
+        return {
+            "name": name,
+            "ok": False,
+            "duration_s": round(time.perf_counter() - started, 3),
+            "error": str(exc),
+        }
+
+
 def _kill_started_process(proc: subprocess.Popen | None) -> None:
     if proc is None:
         return
@@ -175,6 +284,112 @@ def run_calculator_canary(workspace: Path) -> dict[str, Any]:
     return result
 
 
+def _running_process_exe(process_name: str) -> str:
+    try:
+        import psutil
+    except Exception:
+        return ""
+    wanted = process_name.lower()
+    for proc in psutil.process_iter(["name", "exe"]):
+        try:
+            if (proc.info.get("name") or "").lower() == wanted:
+                exe = proc.info.get("exe") or ""
+                if exe:
+                    return exe
+        except Exception:
+            pass
+    return ""
+
+
+def run_settings_canary(workspace: Path) -> dict[str, Any]:
+    started = time.perf_counter()
+    steps: list[dict[str, Any]] = []
+    tools = ToolExecutor(workspace)
+    try:
+        subprocess.Popen(["explorer.exe", "ms-settings:"], close_fds=True)
+        time.sleep(0.8)
+    except Exception as exc:
+        steps.append({
+            "name": "open_settings",
+            "ok": False,
+            "duration_s": 0,
+            "error": str(exc),
+        })
+    steps.append(_window_probe_step(
+        "wait_for_settings",
+        lambda: tools.wait_for_window("Settings", timeout=8.0, paint_seconds=0.3),
+    ))
+    steps.append(_adaptive_map_step(
+        "map_settings",
+        lambda: tools.adaptive_observe("Settings", cap=240),
+    ))
+    steps.append(_find_summary_step(
+        "find_settings_search",
+        lambda: tools.uia_find("Search box", "Settings", limit=5),
+    ))
+    result = _canary_result("settings", started, steps)
+    mapped = next((step for step in steps if step["name"] == "map_settings"), {})
+    graph = ((mapped.get("data") or {}).get("graph") or {})
+    if mapped.get("ok") and int(graph.get("named_control_count") or 0) < 8:
+        result["ok"] = False
+        result["failed_steps"].append("settings_map_too_sparse")
+    return result
+
+
+def run_discord_canary(workspace: Path) -> dict[str, Any]:
+    started = time.perf_counter()
+    steps: list[dict[str, Any]] = []
+    tools = ToolExecutor(workspace)
+    exe = _running_process_exe("Discord.exe")
+    if exe:
+        steps.append({
+            "name": "locate_discord_process",
+            "ok": True,
+            "duration_s": 0,
+            "data": {"exe_basename": Path(exe).name},
+        })
+        steps.append(_tool_step("electron_check", lambda: tools.electron_check(exe)))
+        try:
+            subprocess.Popen([exe], close_fds=True)
+            time.sleep(2.0)
+            steps.append({"name": "surface_discord_window", "ok": True, "duration_s": 2.0})
+        except Exception as exc:
+            steps.append({
+                "name": "surface_discord_window",
+                "ok": False,
+                "duration_s": 0,
+                "error": str(exc),
+            })
+    else:
+        steps.append({
+            "name": "locate_discord_process",
+            "ok": True,
+            "duration_s": 0,
+            "output": "process path not resolved; probing visible window",
+            "data": {"exe_basename": "", "found_process": False},
+        })
+
+    steps.append(_window_probe_step(
+        "wait_for_discord",
+        lambda: tools.wait_for_window("Discord", timeout=8.0, paint_seconds=0.3),
+    ))
+    steps.append(_adaptive_map_step(
+        "map_discord",
+        lambda: tools.adaptive_observe("Discord", cap=240),
+    ))
+    steps.append(_find_summary_step(
+        "find_discord_search",
+        lambda: tools.uia_find("Search", "Discord", limit=5),
+    ))
+    result = _canary_result("discord", started, steps)
+    mapped = next((step for step in steps if step["name"] == "map_discord"), {})
+    graph = ((mapped.get("data") or {}).get("graph") or {})
+    if mapped.get("ok") and int(graph.get("named_control_count") or 0) < 8:
+        result["ok"] = False
+        result["failed_steps"].append("discord_map_too_sparse")
+    return result
+
+
 def summarize_results(results: list[dict[str, Any]]) -> dict[str, Any]:
     failed = [result for result in results if not result.get("ok")]
     return {
@@ -191,6 +406,8 @@ def run_canaries(names: list[str], workspace: Path) -> dict[str, Any]:
     runners = {
         "notepad": run_notepad_canary,
         "calculator": run_calculator_canary,
+        "settings": run_settings_canary,
+        "discord": run_discord_canary,
     }
     old_workspace = os.environ.get("ORYNN_WORKSPACE")
     os.environ["ORYNN_WORKSPACE"] = str(workspace)
@@ -227,7 +444,7 @@ def main() -> int:
     parser.add_argument(
         "--canary",
         action="append",
-        choices=["notepad", "calculator"],
+        choices=["notepad", "calculator", "settings", "discord"],
         help="Canary to run. Repeatable. Defaults to notepad.",
     )
     parser.add_argument("--workspace", default="", help="State/workspace directory for ToolExecutor.")

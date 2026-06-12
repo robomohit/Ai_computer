@@ -10,7 +10,7 @@ from app.adaptive_windows import (
     remember_resolver_outcome,
     resolver_ids,
 )
-from app.models import Action, ActionType
+from app.models import Action, ActionType, ToolResult
 from app.tools import ToolExecutor
 
 
@@ -163,12 +163,62 @@ def test_tool_executor_adaptive_observe_empty_tree_adds_recovery_plan(monkeypatc
     )
     monkeypatch.setattr(desktop_features, "foreground_window_info", lambda: {"title": "Canvas"})
     monkeypatch.setattr(ToolExecutor, "_app_rect_payload", staticmethod(lambda app: None))
+    monkeypatch.setattr(
+        ToolExecutor,
+        "wait_for_window",
+        lambda self, title, timeout=10.0, paint_seconds=0.35: ToolResult(ok=False, output="missing"),
+    )
 
     result = ToolExecutor(workspace).adaptive_observe("Canvas")
 
     assert result.ok is True
     assert "Adaptive recovery plan" in result.output
     assert result.data["adaptive"]["failure_class"] == FailureClass.empty_accessibility_tree.value
+
+
+def test_tool_executor_adaptive_observe_recovers_after_focus_resurvey(monkeypatch, workspace):
+    import app.widget.desktop_features as desktop_features
+
+    surveys = [
+        {"count": 1, "controls": []},
+        {"count": 42, "controls": ["Search box, Find a setting", "System", "Apps"]},
+    ]
+    calls = []
+
+    def fake_survey(app, cap=90, max_names=60, fallback_foreground=False):
+        calls.append((app, fallback_foreground))
+        return surveys.pop(0)
+
+    monkeypatch.setattr(desktop_features, "survey_app_controls", fake_survey)
+    monkeypatch.setattr(
+        desktop_features,
+        "foreground_window_info",
+        lambda: {"title": "Unrelated foreground"},
+    )
+    monkeypatch.setattr(ToolExecutor, "_app_rect_payload", staticmethod(lambda app: None))
+    monkeypatch.setattr(
+        ToolExecutor,
+        "wait_for_window",
+        lambda self, title, timeout=10.0, paint_seconds=0.35: ToolResult(
+            ok=True,
+            output="ready",
+            data={"title": title, "hwnd": 123},
+        ),
+    )
+    monkeypatch.setattr(
+        ToolExecutor,
+        "focus_window",
+        lambda self, title: ToolResult(ok=True, output=f"Focused {title}"),
+    )
+
+    result = ToolExecutor(workspace).adaptive_observe("Settings")
+
+    assert result.ok is True
+    assert result.data["recovered_by"] == "focus_wait_resurvey"
+    assert result.data["graph"]["named_control_count"] == 3
+    assert "foreground" not in result.data
+    assert result.data["recovery_attempts"][-1]["named_control_count"] == 3
+    assert calls == [("Settings", False), ("Settings", False)]
 
 
 def test_verify_typed_reads_legacy_accessible_value(monkeypatch, workspace):

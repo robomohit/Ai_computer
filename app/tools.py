@@ -2665,19 +2665,51 @@ class ToolExecutor:
             cap_i = max(20, min(240, int(cap or 90)))
         except Exception:
             cap_i = 90
-        try:
-            survey = survey_app_controls(
-                app_hint,
-                cap=cap_i,
-                max_names=60,
-                fallback_foreground=not bool(app_hint),
-            )
-        except Exception:
-            survey = {"count": 0, "controls": []}
-        try:
-            fg = foreground_window_info()
-        except Exception:
-            fg = {}
+        def _survey_once(fallback_foreground: bool = False) -> Dict[str, Any]:
+            try:
+                return survey_app_controls(
+                    app_hint,
+                    cap=cap_i,
+                    max_names=60,
+                    fallback_foreground=fallback_foreground,
+                )
+            except Exception as exc:
+                return {"count": 0, "controls": [], "error": str(exc)}
+
+        survey = _survey_once(fallback_foreground=not bool(app_hint))
+        recovery_attempts: list[dict[str, Any]] = []
+        recovered_by = ""
+        if app_hint and not (survey.get("controls") or []):
+            wait_result = self.wait_for_window(app_hint, timeout=1.6, paint_seconds=0.25)
+            recovery_attempts.append({
+                "step": "wait_for_window",
+                "ok": bool(wait_result.ok),
+            })
+            if wait_result.ok:
+                focus_result = self.focus_window(app_hint)
+                recovery_attempts.append({
+                    "step": "focus_window",
+                    "ok": bool(focus_result.ok),
+                })
+                time.sleep(0.2)
+                retry = _survey_once(fallback_foreground=False)
+                retry_controls = retry.get("controls") or []
+                recovery_attempts.append({
+                    "step": "resurvey_after_focus",
+                    "ok": bool(retry_controls),
+                    "count": int(retry.get("count") or 0),
+                    "named_control_count": len(retry_controls),
+                })
+                if len(retry_controls) > len(survey.get("controls") or []):
+                    survey = retry
+                    recovered_by = "focus_wait_resurvey"
+
+        fg = {}
+        if not app_hint:
+            try:
+                fg = foreground_window_info()
+            except Exception:
+                fg = {}
         observed_app = app_hint or str(fg.get("title") or "foreground")
         graph = build_affordance_graph(
             app=observed_app,
@@ -2689,7 +2721,6 @@ class ToolExecutor:
         data = {
             "ok": True,
             "graph": graph,
-            "foreground": fg,
             "overlay": _overlay_payload(
                 "app_focus" if app_rect else "status",
                 "adaptive_observe",
@@ -2701,7 +2732,15 @@ class ToolExecutor:
                 control_reason="one-pass UIA survey grouped into affordances",
             ),
         }
+        if fg:
+            data["foreground"] = fg
+        if recovery_attempts:
+            data["recovery_attempts"] = recovery_attempts
+        if recovered_by:
+            data["recovered_by"] = recovered_by
         output = format_affordance_graph(graph)
+        if recovered_by:
+            output += f"\nRecovered empty UIA map via {recovered_by}."
         if graph["named_control_count"] == 0:
             analysis = analyze_windows_failure(
                 action="adaptive_observe",
