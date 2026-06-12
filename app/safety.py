@@ -89,6 +89,8 @@ class SafetyManager:
             "double_click",
             "right_click",
             "middle_click",
+            "mouse_down",
+            "mouse_up",
             "browser_click",
             "browser_click_coords",
             "browser_type",

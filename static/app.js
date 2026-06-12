@@ -997,8 +997,12 @@
       scrollFeed();
     };
     const tick = () => {
-      i = Math.min(total, i + perTick);
-      el.innerHTML = renderMarkdown(tokens.slice(0, i).join(''));
+      // Append plain text only — running the full markdown+sanitize pipeline on
+      // the whole accumulated reply every 26ms is O(n²) and janks long answers.
+      // The clean markdown render happens exactly once, in finalize().
+      const next = Math.min(total, i + perTick);
+      el.insertAdjacentText('beforeend', tokens.slice(i, next).join(''));
+      i = next;
       scrollFeed();
       if (i < total) _replyStreamTimer = setTimeout(tick, 26);
       else finalize();
@@ -4150,7 +4154,18 @@
 
     await delay(400);
     clearInterval(budgetInterval);
-    processTaskEvent({ type: 'done', complete: true });
+    // A real run always ends with the model's answer — the demo should too
+    // (this also exercises the streamed-reply path end to end).
+    processTaskEvent({
+      type: 'done',
+      complete: true,
+      reason: 'Scaffolded the FastAPI dashboard and wired everything up:\n\n' +
+        '- **app/main.py** — FastAPI app with the `/api` router\n' +
+        '- **SQLite + SQLAlchemy** — models and migrations in place\n' +
+        '- **JWT auth** — `/auth/login` with bcrypt password hashing\n' +
+        '- **Tests** — `pytest -q` reports **2 passed** in 0.41s\n\n' +
+        'Run it with `uvicorn app.main:app --reload` and hit `/docs` for the interactive API explorer.',
+    });
   }
 
   async function playWidgetGallery() {

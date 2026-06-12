@@ -16,9 +16,9 @@
   --lg-panel-dark: rgba(18, 19, 24, 0.54);
   --lg-panel-light: rgba(255, 255, 255, 0.78);
   --lg-rail-dark: rgba(13, 14, 18, 0.52);
-  --lg-rail-light: rgba(230, 232, 235, 0.82);
+  --lg-rail-light: rgba(221, 226, 233, 0.88);
   --lg-hairline-dark: rgba(255, 255, 255, 0.11);
-  --lg-hairline-light: rgba(28, 32, 40, 0.12);
+  --lg-hairline-light: rgba(28, 32, 40, 0.17);
 }
 
 /* ---------- dashboard app surfaces ---------- */
@@ -160,8 +160,10 @@ body[data-glass="on"]:not(.widget-shell) .onb-card {
 }
 
 [data-theme="light"] body[data-glass="on"]:not(.widget-shell) .sidebar {
+  /* Less white over the gray rail tint — at 0.72/0.42 the sidebar blurred
+     cream-over-cream and was indistinguishable from the feed. */
   background:
-    linear-gradient(180deg, rgba(255,255,255,0.72), rgba(255,255,255,0.42)),
+    linear-gradient(180deg, rgba(255,255,255,0.42), rgba(255,255,255,0.16)),
     var(--lg-rail-light);
   border-right-color: var(--lg-hairline-light);
   box-shadow: inset -1px 0 0 rgba(255,255,255,0.54);

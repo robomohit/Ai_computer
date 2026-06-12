@@ -71,6 +71,8 @@ _DESKTOP_ACTIONS = {
     "middle_click",
     "mouse_move",
     "left_click_drag",
+    "mouse_down",
+    "mouse_up",
     "key_combo",
     "hold_key",
     "cursor_position",

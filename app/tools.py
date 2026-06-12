@@ -770,16 +770,112 @@ class ToolExecutor:
             )},
         )
 
-    def left_click_drag(self, x: int, y: int, sw=1280, sh=800):
+    def left_click_drag(self, x: int, y: int, sw=1280, sh=800,
+                        start_x: Optional[int] = None, start_y: Optional[int] = None,
+                        duration: Optional[float] = None, button: str = "left"):
+        """Drag from start_x/start_y (or the current cursor position) to x/y.
+
+        Built for timeline/canvas surfaces (CapCut clips, sliders, game pieces):
+        press → short hold so the app registers drag mode → smooth interpolated
+        glide → settle pause so the drop target reads the final position →
+        release. pyautogui.dragTo skips both pauses, which is why drags silently
+        failed in editors that need a press-and-hold before movement counts.
+        """
         import pyautogui
         rx, ry = self._scale(x, y, sw, sh)
-        # Smooth drag
-        pyautogui.dragTo(rx, ry, duration=0.8, tween=pyautogui.easeInOutQuad, button="left")
+        screen_w, screen_h = pyautogui.size()
+        rx = max(0, min(rx, screen_w - 1))
+        ry = max(0, min(ry, screen_h - 1))
+        polite = self._input_politeness_gate()
+        try:
+            if start_x is not None and start_y is not None:
+                sx, sy = self._scale(int(start_x), int(start_y), sw, sh)
+                sx = max(0, min(sx, screen_w - 1))
+                sy = max(0, min(sy, screen_h - 1))
+                _flash_pointer(sx, sy)
+                pyautogui.moveTo(sx, sy, duration=0.35, tween=pyautogui.easeInOutQuad)
+            from_x, from_y = pyautogui.position()
+            dist = ((rx - from_x) ** 2 + (ry - from_y) ** 2) ** 0.5
+            if duration is None:
+                # Scale glide time with distance — fast for short nudges, slow
+                # enough for long drags that apps track every intermediate move.
+                glide = max(0.45, min(2.0, 0.35 + dist / 900.0))
+            else:
+                glide = max(0.2, min(4.0, float(duration)))
+            pyautogui.mouseDown(button=button)
+            time.sleep(0.15)   # drag-registration hold (apps ignore instant moves)
+            pyautogui.moveTo(rx, ry, duration=glide, tween=pyautogui.easeInOutQuad)
+            time.sleep(0.12)   # settle so the drop target reads the final spot
+            pyautogui.mouseUp(button=button)
+            self._note_synthetic_input()
+        except Exception as e:
+            try:
+                pyautogui.mouseUp(button=button)  # never leave the button stuck down
+            except Exception:
+                pass
+            return ToolResult(ok=False, output=f"Drag to {rx},{ry} failed: {e}")
         return ToolResult(
             ok=True,
-            output=f"Dragged to {rx}, {ry}",
+            output=f"Dragged from {from_x}, {from_y} to {rx}, {ry}" + polite,
             data={"overlay": _overlay_payload(
                 "point", "left_click_drag", "drag", "Dragging", point={"x": rx, "y": ry},
+                control_layer="Screenshot fallback", control_reason="desktop pixel coordinate action",
+            )},
+        )
+
+    def mouse_down(self, x: Optional[int] = None, y: Optional[int] = None,
+                   button: str = "left", sw=1280, sh=800):
+        """Press AND HOLD a mouse button (moving to x,y first when given).
+
+        Pair with mouse_move + screenshot + mouse_up for inspectable drags —
+        e.g. grab a clip's trim handle, nudge it, check the frame, release."""
+        import pyautogui
+        polite = self._input_politeness_gate()
+        try:
+            if x is not None and y is not None:
+                rx, ry = self._scale(int(x), int(y), sw, sh)
+                screen_w, screen_h = pyautogui.size()
+                rx = max(0, min(rx, screen_w - 1))
+                ry = max(0, min(ry, screen_h - 1))
+                _flash_pointer(rx, ry)
+                pyautogui.moveTo(rx, ry, duration=0.35, tween=pyautogui.easeInOutQuad)
+            px, py = pyautogui.position()
+            pyautogui.mouseDown(button=button)
+            time.sleep(0.12)   # drag-registration hold before any follow-up move
+            self._note_synthetic_input()
+        except Exception as e:
+            return ToolResult(ok=False, output=f"mouse_down failed: {e}")
+        return ToolResult(
+            ok=True,
+            output=f"Holding {button} button down at {px}, {py} — move the mouse to drag, then mouse_up to drop" + polite,
+            data={"overlay": _overlay_payload(
+                "point", "mouse_down", "drag", "Pressing", point={"x": px, "y": py},
+                control_layer="Screenshot fallback", control_reason="desktop pixel coordinate action",
+            )},
+        )
+
+    def mouse_up(self, x: Optional[int] = None, y: Optional[int] = None,
+                 button: str = "left", sw=1280, sh=800):
+        """Release a held mouse button (optionally gliding to x,y first)."""
+        import pyautogui
+        try:
+            if x is not None and y is not None:
+                rx, ry = self._scale(int(x), int(y), sw, sh)
+                screen_w, screen_h = pyautogui.size()
+                rx = max(0, min(rx, screen_w - 1))
+                ry = max(0, min(ry, screen_h - 1))
+                pyautogui.moveTo(rx, ry, duration=0.35, tween=pyautogui.easeInOutQuad)
+                time.sleep(0.1)   # settle before release so the drop registers
+            px, py = pyautogui.position()
+            pyautogui.mouseUp(button=button)
+            self._note_synthetic_input()
+        except Exception as e:
+            return ToolResult(ok=False, output=f"mouse_up failed: {e}")
+        return ToolResult(
+            ok=True,
+            output=f"Released {button} button at {px}, {py}",
+            data={"overlay": _overlay_payload(
+                "point", "mouse_up", "drag", "Releasing", point={"x": px, "y": py},
                 control_layer="Screenshot fallback", control_reason="desktop pixel coordinate action",
             )},
         )
@@ -825,23 +921,81 @@ class ToolExecutor:
         return ToolResult(ok=True, output=f"Held {key} for {duration}s (background)")
 
     def hold_key(self, key: str, duration: float = 0.5):
+        """Hold a key — or a combo like 'shift+w' — down for duration seconds.
+
+        Built for games (hold W to walk, hold space to charge) and hold-to-
+        repeat UI. Keys release in reverse order and ALWAYS release, even if
+        the sleep is interrupted — a stuck modifier key would wreck the
+        user's session."""
         import pyautogui
-        pyautogui.keyDown(key)
-        time.sleep(duration)
-        pyautogui.keyUp(key)
-        return ToolResult(ok=True, output=f"Held {key} for {duration}s")
+        parts = [p.strip() for p in str(key or "").split("+") if p.strip()]
+        if not parts:
+            return ToolResult(ok=False, output="hold_key needs a key, e.g. 'w' or 'shift+w'.")
+        try:
+            duration = max(0.05, min(15.0, float(duration)))
+        except (TypeError, ValueError):
+            duration = 0.5
+        polite = self._input_politeness_gate()
+        pressed: list[str] = []
+        try:
+            for p in parts:
+                pyautogui.keyDown(p)
+                pressed.append(p)
+            time.sleep(duration)
+        except Exception as e:
+            return ToolResult(ok=False, output=f"hold_key failed: {e}")
+        finally:
+            for p in reversed(pressed):
+                try:
+                    pyautogui.keyUp(p)
+                except Exception:
+                    pass
+        self._note_synthetic_input()
+        return ToolResult(ok=True, output=f"Held {'+'.join(parts)} for {duration:.2f}s" + polite)
 
     async def _scroll_bg(self, amount: int, x: Optional[int] = None, y: Optional[int] = None, sw=1280, sh=800):
         await self._bg_browser.scroll(delta_y=amount * 120, x=x, y=y)
         return ToolResult(ok=True, output=f"Scrolled {amount} (background)")
 
-    def scroll(self, amount: int, x: Optional[int] = None, y: Optional[int] = None, sw=1280, sh=800):
+    def scroll(self, amount: int, x: Optional[int] = None, y: Optional[int] = None,
+               sw=1280, sh=800, axis: str = "vertical", modifier: Optional[str] = None):
+        """Scroll the wheel at (x,y). axis='horizontal' pans sideways (timeline
+        panning in editors); modifier holds ctrl/shift/alt during the scroll —
+        ctrl+scroll is zoom in most editors (CapCut/Premiere timelines, browsers,
+        maps), shift+scroll is horizontal pan in many apps."""
         import pyautogui
-        if x is not None and y is not None:
-            rx, ry = self._scale(x, y, sw, sh)
-            pyautogui.moveTo(rx, ry)
-        pyautogui.scroll(amount)
-        return ToolResult(ok=True, output=f"Scrolled {amount}")
+        try:
+            amount = max(-50, min(50, int(amount)))
+        except (TypeError, ValueError):
+            return ToolResult(ok=False, output="scroll amount must be an integer")
+        mod = str(modifier or "").strip().lower()
+        if mod and mod not in {"ctrl", "shift", "alt"}:
+            return ToolResult(ok=False, output=f"Unsupported scroll modifier '{mod}' — use ctrl, shift, or alt.")
+        horizontal = str(axis or "vertical").strip().lower() in {"h", "horizontal", "x"}
+        try:
+            if x is not None and y is not None:
+                rx, ry = self._scale(x, y, sw, sh)
+                pyautogui.moveTo(rx, ry)
+            if mod:
+                pyautogui.keyDown(mod)
+            try:
+                if horizontal:
+                    pyautogui.hscroll(amount)
+                else:
+                    pyautogui.scroll(amount)
+            finally:
+                if mod:
+                    try:
+                        pyautogui.keyUp(mod)
+                    except Exception:
+                        pass
+            self._note_synthetic_input()
+        except Exception as e:
+            return ToolResult(ok=False, output=f"Scroll failed: {e}")
+        desc = f"Scrolled {amount} {'horizontally' if horizontal else 'vertically'}"
+        if mod:
+            desc += f" with {mod} held"
+        return ToolResult(ok=True, output=desc)
 
     async def _type_with_delay_bg(self, text: str, delay: float = 0.05):
         await self._bg_browser.type_text(text, delay=delay)
@@ -2410,13 +2564,28 @@ class ToolExecutor:
         if action == "middle_click":
             return self.mouse_click(kwargs["x"], kwargs["y"], "middle", 1, kwargs.get("sw", 1280), kwargs.get("sh", 800))
         if action == "left_click_drag":
-            return self.left_click_drag(kwargs["x"], kwargs["y"], kwargs.get("sw", 1280), kwargs.get("sh", 800))
+            return self.left_click_drag(
+                kwargs["x"], kwargs["y"], kwargs.get("sw", 1280), kwargs.get("sh", 800),
+                start_x=kwargs.get("start_x", kwargs.get("from_x")),
+                start_y=kwargs.get("start_y", kwargs.get("from_y")),
+                duration=kwargs.get("duration"),
+            )
+        if action in ("mouse_down", "left_mouse_down"):
+            return self.mouse_down(kwargs.get("x"), kwargs.get("y"), kwargs.get("button", "left"), kwargs.get("sw", 1280), kwargs.get("sh", 800))
+        if action in ("mouse_up", "left_mouse_up"):
+            return self.mouse_up(kwargs.get("x"), kwargs.get("y"), kwargs.get("button", "left"), kwargs.get("sw", 1280), kwargs.get("sh", 800))
+        if action == "hold_key":
+            return self.hold_key(kwargs.get("key", kwargs.get("keys", "")), kwargs.get("duration", 0.5))
         if action == "key":
             return self.key(kwargs["keys"])
         if action == "type":
             return self.keyboard_type(kwargs["text"])
         if action == "scroll":
-            return self.scroll(kwargs.get("amount", 0), kwargs.get("x"), kwargs.get("y"), kwargs.get("sw", 1280), kwargs.get("sh", 800))
+            return self.scroll(
+                kwargs.get("amount", 0), kwargs.get("x"), kwargs.get("y"),
+                kwargs.get("sw", 1280), kwargs.get("sh", 800),
+                axis=kwargs.get("axis", "vertical"), modifier=kwargs.get("modifier"),
+            )
         if action == "cursor_position":
             return self.cursor_position()
         if action == "wait":
@@ -3448,11 +3617,22 @@ class ToolExecutor:
             ActionType.double_click: lambda a: self.mouse_click(a.args["x"], a.args["y"], "left", 2, sw, sh),
             ActionType.right_click: lambda a: self.mouse_click(a.args["x"], a.args["y"], "right", 1, sw, sh),
             ActionType.middle_click: lambda a: self.mouse_click(a.args["x"], a.args["y"], "middle", 1, sw, sh),
-            ActionType.left_click_drag: lambda a: self.left_click_drag(a.args["x"], a.args["y"], sw, sh),
+            ActionType.left_click_drag: lambda a: self.left_click_drag(
+                a.args["x"], a.args["y"], sw, sh,
+                start_x=a.args.get("start_x", a.args.get("from_x")),
+                start_y=a.args.get("start_y", a.args.get("from_y")),
+                duration=a.args.get("duration"),
+                button=a.args.get("button", "left"),
+            ),
+            ActionType.mouse_down: lambda a: self.mouse_down(a.args.get("x"), a.args.get("y"), a.args.get("button", "left"), sw, sh),
+            ActionType.mouse_up: lambda a: self.mouse_up(a.args.get("x"), a.args.get("y"), a.args.get("button", "left"), sw, sh),
             ActionType.keyboard_type: lambda a: self.keyboard_type(a.args["text"]),
             ActionType.key_combo: lambda a: self.key(a.args["keys"]),
-            ActionType.hold_key: lambda a: self.hold_key(a.args["key"], a.args.get("duration", 0.5)),
-            ActionType.scroll: lambda a: self.scroll(a.args.get("amount", 0), a.args.get("x"), a.args.get("y"), sw, sh),
+            ActionType.hold_key: lambda a: self.hold_key(a.args.get("key", a.args.get("keys", "")), a.args.get("duration", 0.5)),
+            ActionType.scroll: lambda a: self.scroll(
+                a.args.get("amount", 0), a.args.get("x"), a.args.get("y"), sw, sh,
+                axis=a.args.get("axis", "vertical"), modifier=a.args.get("modifier"),
+            ),
             ActionType.type_with_delay: lambda a: self.type_with_delay(a.args["text"], a.args.get("delay", 0.05)),
             ActionType.find_on_screen: lambda a: self.find_on_screen(a.args["image_path"]),
             ActionType.get_clipboard: lambda a: self.get_clipboard(),

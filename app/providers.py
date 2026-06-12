@@ -1202,7 +1202,7 @@ class PlannerProvider:
     def _is_ollama(self) -> bool:
         return self.model.startswith("ollama/")
 
-    def _chat_ollama(self, system: str, prompt: str, screenshot_b64: Optional[str] = None) -> str:
+    def _chat_ollama(self, system: str, prompt: str, screenshot_b64: Optional[str] = None, json_mode: bool = False) -> str:
         if screenshot_b64:
             prompt = f"{prompt}\n\n[Note: local Ollama text mode cannot inspect screenshots in this build.]"
         payload = {
@@ -1213,12 +1213,16 @@ class PlannerProvider:
                 {"role": "user", "content": prompt},
             ],
         }
+        if json_mode:
+            payload["format"] = "json"
         resp = self._http_client.post(f"{self._ollama_base_url}/api/chat", json=payload)
         resp.raise_for_status()
         data = resp.json()
         return str((data.get("message") or {}).get("content") or data.get("response") or "")
 
-    def _chat_anthropic(self, system: str, prompt: str, screenshot_b64: Optional[str] = None) -> str:
+    def _chat_anthropic(self, system: str, prompt: str, screenshot_b64: Optional[str] = None, json_mode: bool = False) -> str:
+        # json_mode accepted for interface parity; the Messages API has no JSON
+        # mode — Claude models follow the "ONLY valid JSON" prompts reliably.
         if not self._anthropic_key:
             raise RuntimeError("ANTHROPIC_API_KEY not set")
             
@@ -1264,7 +1268,7 @@ class PlannerProvider:
                 raise
         raise last_err or RuntimeError("All API retries exhausted")
 
-    def _chat_openai(self, system: str, prompt: str, screenshot_b64: Optional[str] = None) -> str:
+    def _chat_openai(self, system: str, prompt: str, screenshot_b64: Optional[str] = None, json_mode: bool = False) -> str:
         if not self._openai_key:
             raise RuntimeError("OPENAI_API_KEY not set")
             
@@ -1279,6 +1283,8 @@ class PlannerProvider:
             {"role": "user", "content": content},
         ]
         payload = {"model": self.model, "max_tokens": 4096, "messages": messages}
+        if json_mode:
+            payload["response_format"] = {"type": "json_object"}
         last_err = None
         for attempt in range(3):
             try:
@@ -1301,7 +1307,7 @@ class PlannerProvider:
                 raise
         raise last_err or RuntimeError("All API retries exhausted")
 
-    def _chat_openrouter(self, system: str, prompt: str, screenshot_b64: Optional[str] = None, _model_override: Optional[str] = None) -> str:
+    def _chat_openrouter(self, system: str, prompt: str, screenshot_b64: Optional[str] = None, _model_override: Optional[str] = None, json_mode: bool = False) -> str:
         if not self._openrouter_key:
             raise RuntimeError("OPENROUTER_API_KEY not set")
 
@@ -1331,6 +1337,11 @@ class PlannerProvider:
                     {"role": "user", "content": content},
                 ]
                 payload = {"model": current_model, "messages": messages}
+                if json_mode:
+                    # Constrained decoding: a malformed plan/reflection becomes
+                    # structurally impossible on models that support JSON mode.
+                    # OpenRouter drops the param for models that don't.
+                    payload["response_format"] = {"type": "json_object"}
 
                 is_last_model = (current_model == models_to_try[-1])
                 for attempt in range(3 if is_last_model else 1):
@@ -1471,7 +1482,7 @@ class PlannerProvider:
             )
         return deduped
 
-    def _chat_google(self, system: str, prompt: str, screenshot_b64: Optional[str] = None) -> str:
+    def _chat_google(self, system: str, prompt: str, screenshot_b64: Optional[str] = None, json_mode: bool = False) -> str:
         if not self._google_key:
             raise RuntimeError("GOOGLE_API_KEY not set")
             
@@ -1488,6 +1499,8 @@ class PlannerProvider:
             "contents": [{"role": "user", "parts": parts}],
             "generationConfig": {"maxOutputTokens": 4096}
         }
+        if json_mode:
+            payload["generationConfig"]["response_mime_type"] = "application/json"
         
         last_err = None
         for attempt in range(3):
@@ -1507,7 +1520,7 @@ class PlannerProvider:
                 raise
         raise last_err or RuntimeError("All API retries exhausted")
 
-    def _chat_groq(self, system: str, prompt: str, screenshot_b64: Optional[str] = None) -> str:
+    def _chat_groq(self, system: str, prompt: str, screenshot_b64: Optional[str] = None, json_mode: bool = False) -> str:
         if not self._groq_key:
             raise RuntimeError("GROQ_API_KEY not set")
             
@@ -1524,7 +1537,9 @@ class PlannerProvider:
             {"role": "user", "content": content},
         ]
         payload = {"model": model, "max_tokens": 4096, "messages": messages}
-        
+        if json_mode:
+            payload["response_format"] = {"type": "json_object"}
+
         last_err = None
         for attempt in range(3):
             try:
@@ -1552,7 +1567,7 @@ class PlannerProvider:
         "openrouter/nousresearch/hermes-3-llama-3.1-405b:free",
     ]
 
-    def _call_llm(self, system: str, prompt: str, screenshot_b64: Optional[str] = None) -> str:
+    def _call_llm(self, system: str, prompt: str, screenshot_b64: Optional[str] = None, json_mode: bool = False) -> str:
         # 1. Try the primary provider
         primary_fn = None
         if self._is_ollama():
@@ -1567,10 +1582,22 @@ class PlannerProvider:
             primary_fn = self._chat_openai
         else:
             # Already OpenRouter — no fallback needed, it has its own retry chain
-            return self._chat_openrouter(system, prompt, screenshot_b64)
+            try:
+                return self._chat_openrouter(system, prompt, screenshot_b64, json_mode=json_mode)
+            except httpx.HTTPStatusError as e:
+                # A 400 with json_mode usually means the model rejects
+                # response_format — retry once without constrained decoding.
+                if json_mode and e.response.status_code == 400:
+                    return self._chat_openrouter(system, prompt, screenshot_b64, json_mode=False)
+                raise
 
         try:
-            return primary_fn(system, prompt, screenshot_b64)
+            try:
+                return primary_fn(system, prompt, screenshot_b64, json_mode=json_mode)
+            except httpx.HTTPStatusError as e:
+                if json_mode and e.response.status_code == 400:
+                    return primary_fn(system, prompt, screenshot_b64, json_mode=False)
+                raise
         except (httpx.HTTPStatusError, RuntimeError) as primary_err:
             # Check if this is a rate-limit (429) or server error (5xx)
             is_retryable = False
@@ -1588,7 +1615,7 @@ class PlannerProvider:
             for fallback_model in self._FALLBACK_MODELS:
                 try:
                     print(f"[FALLBACK] Trying {fallback_model}...", flush=True)
-                    result = self._chat_openrouter(system, prompt, screenshot_b64, _model_override=fallback_model)
+                    result = self._chat_openrouter(system, prompt, screenshot_b64, _model_override=fallback_model, json_mode=json_mode)
                     print(f"[FALLBACK] Success with {fallback_model}", flush=True)
                     return result
                 except Exception as fallback_err:
@@ -1782,9 +1809,11 @@ class PlannerProvider:
                 last_err = None
                 _streamed_any = False
                 try:
-                    async for event in self._stream_chat_with_tools_single(
-                        system, messages, tools, screenshot_b64
-                    ):
+                    if self._swarm_race_enabled() and self.model == _original_model:
+                        _stream = self._race_tool_streams(system, messages, tools, screenshot_b64)
+                    else:
+                        _stream = self._stream_chat_with_tools_single(system, messages, tools, screenshot_b64)
+                    async for event in _stream:
                         _streamed_any = True
                         yield event
                     return  # chain succeeded
@@ -1824,17 +1853,108 @@ class PlannerProvider:
         finally:
             self.model = _original_model
 
-    async def _stream_chat_with_tools_single(self, system: str, messages: List[Dict[str, Any]], tools: List[Dict[str, Any]], screenshot_b64: Optional[str] = None):
+    async def _race_tool_streams(self, system: str, messages: List[Dict[str, Any]], tools: List[Dict[str, Any]], screenshot_b64: Optional[str] = None):
+        """SWARM RACING — run the same step on multiple free providers at once
+        and stream whichever produces a token first.
+
+        Free tokens cost $0 and rate limits are PER PROVIDER, so parallelism is
+        free capacity: latency becomes min(providers) instead of one provider's
+        TTFT (5-15s on busy free tiers), and one provider's outage or rate
+        limit becomes invisible. Losers are cancelled the moment a winner
+        speaks, so the extra usage is a few wasted prefill tokens.
+        """
+        candidates = [
+            ("groq", None),  # None → self.model (the fast primary)
+            ("openrouter", DEFAULT_OPENROUTER_MODEL),
+        ]
+        gens = [
+            (label, self._stream_chat_with_tools_single(system, messages, tools, screenshot_b64, model_override=mo))
+            for label, mo in candidates
+        ]
+        first_tasks = {
+            asyncio.create_task(g.__anext__()): (label, g) for label, g in gens
+        }
+        pending = set(first_tasks)
+        winner_label: Optional[str] = None
+        winner_gen = None
+        first_event: Optional[Dict[str, Any]] = None
+        errors: list[Exception] = []
+        while pending and winner_gen is None:
+            done, pending = await asyncio.wait(pending, return_when=asyncio.FIRST_COMPLETED)
+            for t in done:
+                label, g = first_tasks[t]
+                try:
+                    ev = t.result()
+                except (StopAsyncIteration, asyncio.CancelledError):
+                    continue
+                except Exception as e:
+                    errors.append(e)
+                    continue
+                if winner_gen is None:
+                    winner_label, winner_gen, first_event = label, g, ev
+
+        # Cancel the losers' pending first-token waits, then close their
+        # generators in the background so the winner's stream isn't blocked.
+        for t in pending:
+            t.cancel()
+        if pending:
+            await asyncio.gather(*pending, return_exceptions=True)
+        for label, g in gens:
+            if g is winner_gen:
+                continue
+            try:
+                asyncio.ensure_future(g.aclose())
+            except Exception:
+                pass
+
+        if winner_gen is None:
+            if errors:
+                raise errors[0]
+            raise RuntimeError("Swarm race: no candidate produced any output.")
+
+        yield {
+            "type": "provider_info",
+            "race_winner": winner_label,
+            "message": f"⚡ {winner_label} answered first — racing free providers in parallel.",
+        }
+        yield first_event
+        async for ev in winner_gen:
+            yield ev
+
+    def _swarm_race_enabled(self) -> bool:
+        """Race only when there are genuinely two independent free providers:
+        a Groq primary plus an OpenRouter key. Opt out with ORYNN_SWARM_RACE=0."""
+        return (
+            os.environ.get("ORYNN_SWARM_RACE", "1") != "0"
+            and self._is_groq()
+            and bool(self._groq_key)
+            and bool(self._openrouter_key)
+        )
+
+    async def _stream_chat_with_tools_single(self, system: str, messages: List[Dict[str, Any]], tools: List[Dict[str, Any]], screenshot_b64: Optional[str] = None, model_override: Optional[str] = None):
         """Async generator that streams tool calls via native function calling.
 
         Yields dicts with structure:
             {"type": "thought", "content": "..."} — assistant reasoning text
             {"type": "tool_call", "name": "...", "args": {...}} — structured tool call
             {"type": "done"} — stream finished
+
+        model_override lets the swarm racer run this stream against a model
+        other than self.model (e.g. the OpenRouter chain) without mutating
+        shared provider state mid-flight.
         """
         import httpx
 
-        if self._is_ollama():
+        eff_model = model_override or self.model
+        _em = eff_model.lower()
+        if model_override is None:
+            eff_is_ollama, eff_is_openai, eff_is_groq = self._is_ollama(), self._is_openai(), self._is_groq()
+        else:
+            eff_is_ollama = _em.startswith("ollama/")
+            eff_is_groq = _em.startswith("groq/")
+            eff_is_openai = False if "/" in _em.replace("openrouter/", "x") else ("gpt" in _em)
+
+        if eff_is_ollama:
             text = ""
             async for chunk in self.stream_chat(system, messages, screenshot_b64):
                 text += chunk
@@ -1847,24 +1967,24 @@ class PlannerProvider:
             raise RuntimeError("No API key available for streaming (OPENROUTER/OPENAI/GROQ).")
 
         # Determine endpoint and key
-        if self._is_openai():
+        if eff_is_openai:
             url = "https://api.openai.com/v1/chat/completions"
             key = self._openai_key
-            model = self.model
-        elif self._is_groq():
+            model = eff_model
+        elif eff_is_groq:
             url = "https://api.groq.com/openai/v1/chat/completions"
             key = self._groq_key
-            model = self.model.replace("groq/", "")
+            model = eff_model.replace("groq/", "")
             models_to_try = [model]
         else:
             url = "https://openrouter.ai/api/v1/chat/completions"
             key = self._openrouter_key
             models_to_try = self._openrouter_models_to_try(
-                self.model.replace("openrouter/", ""), screenshot_b64
+                eff_model.replace("openrouter/", ""), screenshot_b64
             )
             model = models_to_try[0]
 
-        if not self._is_openai() and not self._is_groq():
+        if not eff_is_openai and not eff_is_groq:
             pass
         else:
             models_to_try = [model]
@@ -1915,6 +2035,12 @@ class PlannerProvider:
                 # providers that cap completion tokens below the context window.
                 "max_tokens": 8192,
             }
+            if eff_is_groq or eff_is_openai:
+                # Let the model emit several independent calls in one turn —
+                # the agent queues and executes them in order, saving a full
+                # round-trip per action. (OpenRouter is skipped: models vary
+                # in support and some reject the param outright.)
+                payload["parallel_tool_calls"] = True
 
             thought_buffer = ""
             # Keyed by tool_call index; each entry: {id, name, args_buffer}
@@ -1926,7 +2052,7 @@ class PlannerProvider:
             # Groq has only its single model here, but when an OpenRouter key exists
             # the wrapper cross-provider falls back — so fail FAST instead of burning
             # ~50s of in-place Groq backoff before that switch can happen.
-            _groq_failfast = self._is_groq() and bool(self._openrouter_key)
+            _groq_failfast = eff_is_groq and bool(self._openrouter_key)
             _retry_delays = [] if (len(models_to_try) > 1 or _groq_failfast) else [5, 15, 30]
             for _attempt, _delay in enumerate([0] + _retry_delays):
                 if _delay:
@@ -1992,20 +2118,29 @@ class PlannerProvider:
                                             for idx in sorted(tool_calls_accum):
                                                 entry = tool_calls_accum[idx]
                                                 buf = entry["args_buffer"]
+                                                args_error = ""
                                                 try:
                                                     args = json.loads(buf) if buf else {}
                                                 except json.JSONDecodeError:
                                                     try:
                                                         args = json.loads(_sanitize_json_text(buf))
                                                     except (json.JSONDecodeError, ValueError, TypeError):
+                                                        # DON'T execute with empty args — a write_file
+                                                        # without content or a click without coords is
+                                                        # worse than no action. Surface the parse error
+                                                        # so the agent bounces it back to the model.
                                                         args = {}
-                                                yield {
+                                                        args_error = buf[:300]
+                                                event = {
                                                     "type": "tool_call",
                                                     "id": entry["id"],
                                                     "name": entry["name"],
                                                     "args": args,
                                                     "thought": thought_buffer,
                                                 }
+                                                if args_error:
+                                                    event["args_error"] = args_error
+                                                yield event
                                             return
 
                                         if finish_reason == "stop" and not tool_calls_accum:
@@ -2077,12 +2212,12 @@ class PlannerProvider:
             system = f"{system}\n\n{system_prompt_extension}"
 
         if mode == "coding":
-            raw_text = self._call_llm(system, prompt)  # no screenshot for coding
+            raw_text = self._call_llm(system, prompt, json_mode=True)  # no screenshot for coding
         elif mode == "computer_use":
-            raw_text = self._call_llm(system, prompt)  # no screenshot — DOM-based
+            raw_text = self._call_llm(system, prompt, json_mode=True)  # no screenshot — DOM-based
         else:
-            raw_text = self._call_llm(system, prompt, latest_screenshot_b64)
-            
+            raw_text = self._call_llm(system, prompt, latest_screenshot_b64, json_mode=True)
+
         return HierarchicalPlan.model_validate(_normalize_hierarchical_plan(_extract_json(raw_text)))
 
     def reflect_on_subtask(
@@ -2105,7 +2240,7 @@ class PlannerProvider:
                 f"Results (stdout/stderr/file contents):\n{json.dumps(results, indent=2)}\n\n"
                 "Based on the action results, did this sub-task succeed?"
             )
-            raw_text = self._call_llm(CODING_REFLECT_PROMPT.format(tool_guidance=tool_guidance), prompt)  # no screenshot
+            raw_text = self._call_llm(CODING_REFLECT_PROMPT.format(tool_guidance=tool_guidance), prompt, json_mode=True)  # no screenshot
         elif mode == "computer_use":
             prompt = (
                 f"Sub-task: {description}\n\n"
@@ -2113,7 +2248,7 @@ class PlannerProvider:
                 f"Results (page text / accessibility trees / URLs):\n{json.dumps([r[:2500] for r in results])}\n\n"
                 "Based on the action results, did this sub-task succeed?"
             )
-            raw_text = self._call_llm(COMPUTER_USE_REFLECT_PROMPT.format(tool_guidance=tool_guidance), prompt)  # no screenshot
+            raw_text = self._call_llm(COMPUTER_USE_REFLECT_PROMPT.format(tool_guidance=tool_guidance), prompt, json_mode=True)  # no screenshot
         else:
             prompt = (
                 f"Sub-task: {description}\n\n"
@@ -2124,7 +2259,7 @@ class PlannerProvider:
             system = REFLECT_SYSTEM_PROMPT
             if system_prompt_extension:
                 system = f"{system}\n\n{system_prompt_extension}"
-            raw_text = self._call_llm(system, prompt, post_screenshot_b64)
+            raw_text = self._call_llm(system, prompt, post_screenshot_b64, json_mode=True)
         try:
             result = _extract_json(raw_text)
             if not isinstance(result, dict):
@@ -2143,14 +2278,14 @@ class PlannerProvider:
         recent = history[-20:]
         prompt = f"Goal: {goal}\n\nRecent action history:\n" + "\n".join(recent) + "\n\nIs the overall goal now complete?"
         if mode == "coding":
-            raw_text = self._call_llm(CODING_EVALUATE_PROMPT, prompt)  # no screenshot
+            raw_text = self._call_llm(CODING_EVALUATE_PROMPT, prompt, json_mode=True)  # no screenshot
         elif mode == "computer_use":
-            raw_text = self._call_llm(COMPUTER_USE_EVALUATE_PROMPT, prompt)  # no screenshot
+            raw_text = self._call_llm(COMPUTER_USE_EVALUATE_PROMPT, prompt, json_mode=True)  # no screenshot
         else:
             system = EVALUATE_SYSTEM_PROMPT
             if system_prompt_extension:
                 system = f"{system}\n\n{system_prompt_extension}"
-            raw_text = self._call_llm(system, prompt, latest_screenshot_b64)
+            raw_text = self._call_llm(system, prompt, latest_screenshot_b64, json_mode=True)
         try:
             result = _extract_json(raw_text)
             if not isinstance(result, dict):

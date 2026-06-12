@@ -38,6 +38,20 @@ TOOL_DESCRIPTIONS = {
     ActionType.browser_close: "browser_close: {} — close the browser.",
     ActionType.wait_action: "wait_action: {\"seconds\": float} — pause execution for a few seconds.",
     ActionType.mouse_click: "mouse_click: {\"x\": int, \"y\": int, \"button\": \"left\"|\"right\"|\"middle\"} — click at coordinates.",
+    ActionType.double_click: "double_click: {\"x\": int, \"y\": int} — double-click at coordinates (open an item, select a word).",
+    ActionType.right_click: "right_click: {\"x\": int, \"y\": int} — right-click at coordinates to open the context menu (e.g. clip options in a video editor).",
+    ActionType.middle_click: "middle_click: {\"x\": int, \"y\": int} — middle-click at coordinates (close a tab, open in background).",
+    ActionType.mouse_move: "mouse_move: {\"x\": int, \"y\": int} — move the cursor WITHOUT clicking (hover a menu, reveal a scrub preview, aim before mouse_down).",
+    ActionType.left_click_drag: "left_click_drag: {\"start_x\": int, \"start_y\": int, \"x\": int, \"y\": int, \"duration\": float|null} — press at start_x,start_y, glide smoothly, release at x,y. THE tool for moving a clip on a timeline, dragging a slider or trim handle, drag-selecting, or moving a game piece. Omit start_x/start_y to drag from the current cursor position. Screenshot afterwards to verify the drop landed where intended.",
+    ActionType.mouse_down: "mouse_down: {\"x\": int, \"y\": int, \"button\": str} — press AND HOLD the mouse button (moves to x,y first when given). For precise, inspectable drags: mouse_down on a clip's trim handle → mouse_move a little → screenshot to check the frame → mouse_up to drop. Always finish with mouse_up.",
+    ActionType.mouse_up: "mouse_up: {\"x\": int, \"y\": int, \"button\": str} — release the held mouse button (optionally gliding to x,y first), completing a mouse_down drag.",
+    ActionType.key_combo: "key_combo: {\"keys\": str} — press a hotkey combo once, e.g. 'ctrl+z' (undo), 'ctrl+c'/'ctrl+v', 'space' (play/pause in most editors), 'delete'.",
+    ActionType.hold_key: "hold_key: {\"key\": str, \"duration\": float} — hold a key or combo (e.g. 'w', 'shift+w') down for duration seconds, then release. For games (hold W to walk forward) and hold-to-repeat UI. Max 15s per call — chain calls for longer holds.",
+    ActionType.scroll: "scroll: {\"amount\": int, \"x\": int, \"y\": int, \"axis\": \"vertical\"|\"horizontal\", \"modifier\": \"ctrl\"|\"shift\"|\"alt\"|null} — scroll the wheel at (x,y). positive amount = up/left, negative = down/right. axis 'horizontal' pans sideways (timeline panning). modifier 'ctrl' is zoom in most editors and browsers (ctrl+scroll = timeline zoom in CapCut/Premiere).",
+    ActionType.cursor_position: "cursor_position: {} — read the current mouse position.",
+    ActionType.type_with_delay: "type_with_delay: {\"text\": str, \"delay\": float} — type text with a fixed per-character delay for inputs that drop fast keystrokes.",
+    ActionType.find_on_screen: "find_on_screen: {\"image_path\": str} — locate a saved template image on the screen and return its coordinates.",
+    ActionType.ocr_image: "ocr_image: {} — OCR the current screen and return the text found.",
     ActionType.keyboard_type: "keyboard_type: {\"text\": str} — type text globally.",
     ActionType.focus_window: "focus_window: {\"title\": str} — bring a visible window with matching title to the foreground.",
     ActionType.screenshot: "screenshot: {} — take a screenshot of the desktop.",
@@ -51,7 +65,7 @@ TOOL_DESCRIPTIONS = {
     ActionType.api_call: "api_call: {\"method\": str, \"url\": str, \"headers\": dict, \"body\": dict} — make an HTTP(S) API call. Only public http(s) URLs are allowed.",
     ActionType.request_permission: "request_permission: {\"scope\": str, \"reason\": str} — ask user for permission.",
     ActionType.enable_desktop_control: "enable_desktop_control: {\"reason\": str, \"target_app\": str} — ask the user to allow desktop view/control only when you need to interact with the visible computer or a desktop app. Explain the concrete reason, e.g. 'open Notepad and type the requested text'. After the user allows it, the next turn will include UIA, window, screenshot, mouse, and keyboard tools.",
-    ActionType.computer: "computer: {\"action\": str, \"x\": int, \"y\": int, \"text\": str, \"keys\": str} — high-level computer action (screenshot, mouse_move, left_click, right_click, double_click, key, type, scroll, cursor_position).",
+    ActionType.computer: "computer: {\"action\": str, \"x\": int, \"y\": int, \"text\": str, \"keys\": str, \"key\": str, \"duration\": float, \"start_x\": int, \"start_y\": int, \"axis\": str, \"modifier\": str} — high-level computer action (screenshot, mouse_move, left_click, right_click, double_click, left_click_drag with start_x/start_y, mouse_down, mouse_up, key, hold_key, type, scroll with axis/modifier, cursor_position).",
     ActionType.virtual_input: "virtual_input: {\"action\": str, \"text\": str, \"keys\": str} — alias for high-level isolated input.",
     ActionType.list_mcp_servers: "list_mcp_servers: {} — discover the MCP servers currently registered for this workspace.",
     ActionType.list_mcp_tools: "list_mcp_tools: {\"server_name\": str} — list the tools exposed by one MCP server.",
@@ -82,7 +96,7 @@ TOOL_PACKS = {
     "terminal": [ActionType.run_command, ActionType.bash, ActionType.wait_for_window, ActionType.git, ActionType.run_tests, ActionType.lint_code, ActionType.find_symbol, ActionType.delegate_coding, ActionType.list_processes, ActionType.kill_process, ActionType.run_and_watch],
     "editing": [ActionType.text_view, ActionType.text_create, ActionType.text_str_replace, ActionType.text_insert, ActionType.text_undo_edit, ActionType.text_editor],
     "browser": [ActionType.browser_open, ActionType.browser_accessibility_tree, ActionType.browser_click, ActionType.browser_type, ActionType.browser_scroll, ActionType.browser_get_text, ActionType.browser_navigate_back, ActionType.browser_close, ActionType.wait_action],
-    "computer": [ActionType.mouse_click, ActionType.keyboard_type, ActionType.focus_window, ActionType.wait_for_window, ActionType.force_close_window, ActionType.screenshot, ActionType.ocr_image, ActionType.scroll, ActionType.double_click, ActionType.right_click, ActionType.middle_click, ActionType.mouse_move, ActionType.left_click_drag, ActionType.key_combo, ActionType.hold_key, ActionType.cursor_position, ActionType.type_with_delay, ActionType.find_on_screen, ActionType.computer, ActionType.pixel_color_at, ActionType.ui_critique],
+    "computer": [ActionType.mouse_click, ActionType.keyboard_type, ActionType.focus_window, ActionType.wait_for_window, ActionType.force_close_window, ActionType.screenshot, ActionType.ocr_image, ActionType.scroll, ActionType.double_click, ActionType.right_click, ActionType.middle_click, ActionType.mouse_move, ActionType.left_click_drag, ActionType.mouse_down, ActionType.mouse_up, ActionType.key_combo, ActionType.hold_key, ActionType.cursor_position, ActionType.type_with_delay, ActionType.find_on_screen, ActionType.computer, ActionType.pixel_color_at, ActionType.ui_critique],
     "uia": [ActionType.uia_find, ActionType.uia_click, ActionType.uia_click_sequence, ActionType.uia_type, ActionType.uia_wait, ActionType.electron_check, ActionType.electron_unlock, ActionType.focus_window, ActionType.wait_for_window],
     "web": [ActionType.web_fetch, ActionType.web_search, ActionType.extract_links],
     # Real API connectors — free, no-auth, single-call. The reliable surface on a
@@ -109,6 +123,28 @@ def get_tool_guidance(packs: List[str], exclude_actions: Optional[Iterable[Actio
                     guidance.append(f"- {TOOL_DESCRIPTIONS[action_type]}")
                     seen_actions.add(action_type)
     return "\n".join(guidance)
+
+
+def _compact_description(description: str) -> str:
+    """Compress a teaching-prose tool description into a schema-sized one.
+
+    The full descriptions are great prompt guidance but were embedded verbatim
+    into EVERY native tool schema — ~4.4-5K tokens of schemas on every model
+    call. The args example is redundant there (parameters carry it), so keep
+    only the explanation's first sentence or two, capped.
+    """
+    text = description
+    dash = text.find("—")
+    if dash != -1:
+        text = text[dash + 1:].strip()
+    if len(text) <= 180:
+        return text
+    # Cut at the first sentence boundary past 60 chars (skipping "e.g." style
+    # abbreviations is not worth the complexity — a slightly odd cut is fine).
+    m = re.search(r"(?<=[.!?])\s", text[60:300])
+    if m:
+        return text[:60 + m.start()].strip()
+    return text[:180].rstrip() + "…"
 
 
 def _json_schema_from_description(action_type: ActionType, description: str) -> Dict[str, Any]:
@@ -147,7 +183,7 @@ def _json_schema_from_description(action_type: ActionType, description: str) -> 
         "type": "function",
         "function": {
             "name": action_type.value,
-            "description": description,
+            "description": _compact_description(description),
             "parameters": {
                 "type": "object",
                 "properties": properties,
@@ -181,6 +217,101 @@ UNIFIED_PACKS = [
     "core", "filesystem", "editing", "editing_extras", "terminal",
     "uia", "computer", "browser", "web", "connectors", "utilities",
 ]
+
+# ── Goal-relevance pack selection (free-model token diet) ────────────────────
+# The unified surface is 44 tools ≈ 4.4-5K tokens of schemas on EVERY model
+# call. Small free models both pay that latency and follow long tool lists
+# poorly. Score each pack against the goal and send only what's plausibly
+# needed; the request_more_tools escape hatch (offered alongside) unlocks the
+# full catalog in one turn if the trim guessed wrong.
+_PACK_HINTS: Dict[str, List[str]] = {
+    "filesystem": ["file", "folder", "directory", "read", "write", "save", "rename",
+                   "move", "organize", "clean", "downloads", "desktop", "document",
+                   "list", "path", "delete", "tidy"],
+    "editing": ["edit", "refactor", "fix", "code", "function", "class", "bug",
+                "implement", "patch", "rewrite", "modify", "change", "create",
+                "script", "test", "add"],
+    "editing_extras": ["diff", "compare"],
+    "terminal": ["run", "command", "install", "test", "build", "git", "commit",
+                 "compile", "script", "python", "node", "npm", "pip", "shell",
+                 "execute", "start", "launch", "open", "process", "kill", "server"],
+    "browser": ["browser", "website", "web page", "webpage", "url", "login",
+                "form", "scrape", "navigate", "http", "site", "online", "cowork"],
+    "web": ["search", "look up", "lookup", "research", "news", "fetch", "website",
+            "url", "online", "internet", "find out", "google", "latest"],
+    "connectors": ["weather", "forecast", "wikipedia", "hacker news", "github",
+                   "repo", "define", "definition", "dictionary", "word", "trending"],
+    # "app" deliberately appears only as a phrase ("the app", "an app") — the
+    # bare word matches "app.py" at a word boundary and dragged the whole
+    # desktop surface into ordinary coding goals.
+    "uia": ["the app", "an app", "window", "click", "button", "calculator",
+            "notepad", "paint", "settings", "menu", "type into", "discord",
+            "slack", "spotify", "excel", "word", "capcut", "control",
+            "desktop", "open"],
+    "computer": ["screen", "screenshot", "click", "mouse", "keyboard", "type",
+                 "scroll", "drag", "press", "key", "desktop", "window",
+                 "the app", "an app", "game", "play", "capcut", "timeline",
+                 "see", "look"],
+    "utilities": ["clipboard", "copy", "paste", "notify", "notification", "api",
+                  "mcp", "integration"],
+}
+
+# Without any keyword signal (ambiguous/chatty goals) fall back to the packs
+# that cover the most common asks cheaply. The escape hatch covers the rest.
+_DEFAULT_RELEVANT = ["core", "filesystem", "editing", "terminal", "web"]
+
+
+def select_relevant_packs(goal: str, packs: List[str]) -> List[str]:
+    """Return the subset of `packs` plausibly relevant to `goal` (order kept).
+
+    Conservative by design: "core" always survives, any keyword hit keeps a
+    pack, and a goal with no signal at all gets a sensible default set rather
+    than nothing. Callers MUST offer request_more_tools alongside the trimmed
+    surface so a wrong guess costs one cheap turn, not the task.
+    """
+    g = str(goal or "").lower()
+    scored: List[str] = []
+    any_hit = False
+    for pack in packs:
+        if pack == "core":
+            scored.append(pack)
+            continue
+        hints = _PACK_HINTS.get(pack, [])
+        # Word-boundary match — bare substrings are too eager ("app" must not
+        # match "app.py" and drag the whole desktop surface into coding goals).
+        if any(re.search(rf"\b{re.escape(h)}\b", g) for h in hints):
+            scored.append(pack)
+            any_hit = True
+    if not any_hit:
+        return [p for p in packs if p in _DEFAULT_RELEVANT or p == "core"] or list(packs)
+    # Workbench bundle: file, editing, and shell tools travel together in
+    # practice ("list the files" usually ends in run_command or an edit) —
+    # if any of them matched, include them all.
+    _workbench = {"filesystem", "editing", "editing_extras", "terminal"}
+    if _workbench & set(scored):
+        scored = [p for p in packs if p in set(scored) | _workbench]
+    return scored
+
+
+REQUEST_MORE_TOOLS_NAME = "request_more_tools"
+REQUEST_MORE_TOOLS_GUIDANCE = (
+    'request_more_tools: {"need": str} — if NONE of the available tools fits the '
+    "next step, call this with what you need (e.g. 'control a desktop app', "
+    "'check the weather'); the full tool catalog unlocks on the next turn."
+)
+REQUEST_MORE_TOOLS_SCHEMA: Dict[str, Any] = {
+    "type": "function",
+    "function": {
+        "name": REQUEST_MORE_TOOLS_NAME,
+        "description": "Unlock the full tool catalog when none of the currently available tools fits the next step.",
+        "parameters": {
+            "type": "object",
+            "properties": {"need": {"type": "string"}},
+            "required": ["need"],
+            "additionalProperties": False,
+        },
+    },
+}
 
 
 def get_unified_packs() -> List[str]:

@@ -60,10 +60,9 @@ def test_explicit_desktop_model_still_wins_over_groq(monkeypatch):
 
 @pytest.mark.asyncio
 async def test_groq_failure_falls_back_to_openrouter(monkeypatch):
-    """A Groq primary that fails before streaming a token transparently switches
-    to the OpenRouter chain, emits a fallback notice, retries immediately (no
-    backoff), and restores the fast model afterwards for the next step."""
-    import asyncio as _asyncio
+    """A Groq failure must never cost the user the step. With swarm racing the
+    OpenRouter candidate is ALREADY in flight when Groq 429s, so it wins the
+    race outright — no model swap, no backoff, answer still arrives."""
     import httpx as _httpx
     from app.providers import PlannerProvider, DEFAULT_OPENROUTER_MODEL
 
@@ -74,8 +73,9 @@ async def test_groq_failure_falls_back_to_openrouter(monkeypatch):
     calls: list[str] = []
 
     async def _by_model(*args, **kwargs):
-        calls.append(provider.model)
-        if provider.model.startswith("groq/"):
+        effective = kwargs.get("model_override") or provider.model
+        calls.append(effective)
+        if effective.startswith("groq/"):
             raise _httpx.HTTPStatusError(
                 "429", request=MagicMock(), response=MagicMock(status_code=429)
             )
@@ -83,12 +83,6 @@ async def test_groq_failure_falls_back_to_openrouter(monkeypatch):
         yield {"type": "text_only", "content": "openrouter-success"}
 
     monkeypatch.setattr(provider, "_stream_chat_with_tools_single", _by_model)
-    sleeps: list[float] = []
-
-    async def _fake_sleep(n):
-        sleeps.append(n)
-
-    monkeypatch.setattr(_asyncio, "sleep", _fake_sleep)
 
     events = [
         e async for e in provider.stream_chat_with_tools(
@@ -96,16 +90,12 @@ async def test_groq_failure_falls_back_to_openrouter(monkeypatch):
         )
     ]
 
-    # Groq first, then OpenRouter after the swap.
-    assert calls[0].startswith("groq/")
-    assert calls[1] == DEFAULT_OPENROUTER_MODEL
-    # A fallback notice was surfaced to the UI.
-    assert any(e.get("fallback") and e.get("model") == "openrouter" for e in events)
-    # OpenRouter produced the answer.
+    # Both providers were raced; Groq failed, OpenRouter delivered.
+    assert any(c.startswith("groq/") for c in calls)
+    assert DEFAULT_OPENROUTER_MODEL in calls
+    assert any(e.get("race_winner") == "openrouter" for e in events)
     assert any(e.get("content") == "openrouter-success" for e in events)
-    # The switch was immediate — no backoff sleep before the OpenRouter retry.
-    assert sleeps == []
-    # The fast model is restored so the next agent step tries Groq again.
+    # The fast model is never swapped away — next step races Groq again.
     assert provider.model == "groq/llama-3.3-70b-versatile"
 
 

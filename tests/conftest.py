@@ -24,6 +24,14 @@ def workspace(tmp_path):
 
 
 @pytest.fixture(autouse=True)
+def isolated_trace_store(tmp_path, monkeypatch):
+    """Keep the workflow-compiler trace store out of the user's real home dir —
+    and out of other tests (a trace saved by one test replaying in another
+    would change model-call counts and make the suite order-dependent)."""
+    monkeypatch.setenv("ORYNN_TRACE_STORE", str(tmp_path / "traces-test.json"))
+
+
+@pytest.fixture(autouse=True)
 def mock_keys(monkeypatch):
     monkeypatch.setenv("AGENT_API_KEY", "testtoken")
     monkeypatch.setenv("OPENAI_API_KEY", "sk-raw-openai")

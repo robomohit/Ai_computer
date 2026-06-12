@@ -18,9 +18,12 @@ async def test_new_actions(monkeypatch, workspace):
     pg = types.SimpleNamespace(
         moveTo=lambda *a, **k: calls.setdefault("moveTo", []).append((a, k)),
         scroll=lambda v: calls.setdefault("scroll", []).append(v),
+        hscroll=lambda v: calls.setdefault("hscroll", []).append(v),
         doubleClick=lambda *a, **k: calls.setdefault("doubleClick", []).append((a, k)),
         click=lambda *a, **k: calls.setdefault("click", []).append((a, k)),
         dragTo=lambda *a, **k: calls.setdefault("dragTo", []).append((a, k)),
+        mouseDown=lambda **k: calls.setdefault("mouseDown", []).append(k),
+        mouseUp=lambda **k: calls.setdefault("mouseUp", []).append(k),
         hotkey=lambda *a: calls.setdefault("hotkey", []).append(a),
         keyDown=lambda k: calls.setdefault("keyDown", []).append(k),
         keyUp=lambda k: calls.setdefault("keyUp", []).append(k),
@@ -49,8 +52,52 @@ async def test_new_actions(monkeypatch, workspace):
     assert (await t.run_action(Action(id="6", type=ActionType.middle_click, args={"x": 1, "y": 1}))).ok
     
     assert (await t.run_action(Action(id="7", type=ActionType.mouse_move, args={"x": 1, "y": 1}))).ok
-    assert (await t.run_action(Action(id="8", type=ActionType.left_click_drag, args={"x": 2, "y": 2}))).ok
+
+    # drag without a start point: press → glide → release from current cursor
+    drag_out = await t.run_action(Action(id="8", type=ActionType.left_click_drag, args={"x": 2, "y": 2}))
+    assert drag_out.ok
+    assert calls["mouseDown"][-1] == {"button": "left"}
+    assert calls["mouseUp"][-1] == {"button": "left"}
+
+    # drag WITH a start point (timeline clip move): moves to start first
+    calls["moveTo"] = []
+    drag_from = await t.run_action(Action(
+        id="8b", type=ActionType.left_click_drag,
+        args={"start_x": 100, "start_y": 400, "x": 640, "y": 400, "duration": 0.5},
+    ))
+    assert drag_from.ok
+    # first moveTo goes to the scaled start point (100*1920/1280=150, 400*1080/800=540)
+    assert calls["moveTo"][0][0][:2] == (150, 540)
+    assert "Dragged from" in drag_from.output
+
     assert (await t.run_action(Action(id="9", type=ActionType.hold_key, args={"key": "a", "duration": 1}))).ok
+
+    # hold_key with a combo: presses in order, releases in reverse, clamps duration
+    calls["keyDown"] = []; calls["keyUp"] = []; slept.clear()
+    combo_out = await t.run_action(Action(id="9b", type=ActionType.hold_key, args={"key": "shift+w", "duration": 999}))
+    assert combo_out.ok
+    assert calls["keyDown"] == ["shift", "w"]
+    assert calls["keyUp"] == ["w", "shift"]
+    assert max(slept) <= 15.0
+
+    # press-and-hold drag primitives for inspectable drags
+    down_out = await t.run_action(Action(id="9c", type=ActionType.mouse_down, args={"x": 10, "y": 10}))
+    assert down_out.ok and "Holding left button" in down_out.output
+    up_out = await t.run_action(Action(id="9d", type=ActionType.mouse_up, args={}))
+    assert up_out.ok and "Released left button" in up_out.output
+
+    # horizontal scroll with a held modifier (timeline pan / ctrl-zoom)
+    calls["keyDown"] = []; calls["keyUp"] = []
+    hscroll_out = await t.run_action(Action(
+        id="9e", type=ActionType.scroll,
+        args={"amount": -5, "axis": "horizontal", "modifier": "ctrl"},
+    ))
+    assert hscroll_out.ok
+    assert calls["hscroll"][-1] == -5
+    assert calls["keyDown"] == ["ctrl"] and calls["keyUp"] == ["ctrl"]
+
+    bad_mod = await t.run_action(Action(id="9f", type=ActionType.scroll, args={"amount": 1, "modifier": "win"}))
+    assert bad_mod.ok is False
     
     out = await t.run_action(Action(id="10", type=ActionType.cursor_position, args={}))
     assert out.data == {"x": 5, "y": 7}
@@ -101,6 +148,35 @@ async def test_new_actions(monkeypatch, workspace):
     )
     assert computer_out.ok
     assert calls["hotkey"][-1] == ("ctrl", "l")
+
+def test_safety_and_permissions_classify_drag_primitives():
+    s = SafetyManager()
+    down = s.evaluate(Action(id="d", type=ActionType.mouse_down, args={"x": 1, "y": 1}), safe_mode=False)
+    up = s.evaluate(Action(id="u", type=ActionType.mouse_up, args={}), safe_mode=False)
+    assert down.danger.value == "medium"
+    assert down.requires_approval is False
+    assert up.danger.value == "medium"
+    assert scope_for_action("mouse_down") == PermissionScope.desktop
+    assert scope_for_action("mouse_up") == PermissionScope.desktop
+    assert scope_for_action("hold_key") == PermissionScope.desktop
+    assert scope_for_action("left_click_drag") == PermissionScope.desktop
+
+
+def test_tool_guidance_documents_drag_and_hold_primitives():
+    """The model can only use tools it can SEE — drag/hold/scroll docs must be
+    in the computer pack guidance (they were silently missing before, which
+    made timeline drags and game-style key holds undiscoverable)."""
+    from app.tool_registry import get_tool_guidance
+
+    text = get_tool_guidance(["computer"])
+    assert "left_click_drag" in text
+    assert "start_x" in text
+    assert "mouse_down" in text
+    assert "mouse_up" in text
+    assert "hold_key" in text
+    assert "horizontal" in text  # scroll axis for timeline panning
+    assert "modifier" in text    # ctrl+scroll zoom
+
 
 def test_safety_key_combo():
     s = SafetyManager()

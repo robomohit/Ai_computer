@@ -3996,6 +3996,8 @@ def main(port: int = 8000) -> int:
             """Sample a thin ring of screen pixels just OUTSIDE the capsule to
             estimate backdrop luminance, then adapt the glass. Cheap; runs on a
             slow timer and after drags."""
+            if not self.isVisible():
+                return  # don't grab the screen every 1.5s for a hidden capsule
             try:
                 import PIL.ImageGrab as ig
                 tl = self.mapToGlobal(QPoint(0, 0))

@@ -1505,8 +1505,12 @@ async def test_unified_surface_desktop_task_can_reach_browser_web_and_files(monk
     names = captured["names"]
     # Desktop control stays available …
     assert {"uia_find", "uia_click", "uia_type", "finish"} <= names
-    # … AND every other surface is now reachable by the model:
-    assert {"browser_open", "web_search", "read_file", "write_file", "run_command"} <= names
+    # … the workbench surface rides along (file/shell tools) …
+    assert {"read_file", "write_file", "run_command"} <= names
+    # … and every other surface stays REACHABLE via the token-diet escape
+    # hatch (browser/web schemas are no longer pre-loaded on every call —
+    # they cost ~5K tokens per step; request_more_tools unlocks them).
+    assert ("request_more_tools" in names) or ({"browser_open", "web_search"} <= names)
     assert "make_subtasks" in names
     # Text-only model still drives blind — no pixel/vision tools:
     assert {"screenshot", "mouse_click", "computer"}.isdisjoint(names)
@@ -1525,7 +1529,10 @@ async def test_dynamic_surface_starts_without_desktop_until_requested(monkeypatc
 
     names = captured["names"]
     assert {"read_file", "write_file", "run_command", "finish"} <= names
-    assert {"browser_open", "web_search", "enable_desktop_control"} <= names
+    assert "enable_desktop_control" in names
+    # Browser/web aren't pre-loaded for a file-listing goal (token diet) but
+    # stay one request_more_tools call away.
+    assert ("request_more_tools" in names) or ({"browser_open", "web_search"} <= names)
     assert "uia_find" not in names
 
 

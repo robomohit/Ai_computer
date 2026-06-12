@@ -515,3 +515,166 @@ def test_thinking_budget_off_omits_thinking_param(monkeypatch):
     p._http_client.post = fake_post
     p._chat_anthropic("sys", "prompt")
     assert "thinking" not in captured["payload"]
+
+
+# ── Constrained decoding (json_mode) + tool-call arg integrity ───────────────
+
+def _mock_async_client_for(sse_lines):
+    """Build a patched httpx.AsyncClient context manager that streams sse_lines."""
+    from unittest.mock import AsyncMock, MagicMock
+
+    async def fake_aiter_lines():
+        for line in sse_lines:
+            yield line
+
+    mock_resp = AsyncMock()
+    mock_resp.status_code = 200
+    mock_resp.raise_for_status = MagicMock()
+    mock_resp.aiter_lines = fake_aiter_lines
+
+    mock_stream_cm = AsyncMock()
+    mock_stream_cm.__aenter__ = AsyncMock(return_value=mock_resp)
+    mock_stream_cm.__aexit__ = AsyncMock(return_value=False)
+
+    mock_client = AsyncMock()
+    mock_client.stream = MagicMock(return_value=mock_stream_cm)
+
+    mock_client_cm = AsyncMock()
+    mock_client_cm.__aenter__ = AsyncMock(return_value=mock_client)
+    mock_client_cm.__aexit__ = AsyncMock(return_value=False)
+    return mock_client_cm
+
+
+@pytest.mark.asyncio
+async def test_tool_call_with_unparseable_args_flags_args_error(provider):
+    """Busted JSON args must NOT silently execute as {} — the event carries
+    args_error so the agent bounces it back to the model."""
+    sse = _sse_lines(
+        {"choices": [{"delta": {"tool_calls": [{"index": 0, "id": "c1", "function": {"name": "write_file", "arguments": "not json at all {{{"}}]}, "finish_reason": None}]},
+        {"choices": [{"delta": {}, "finish_reason": "tool_calls"}]},
+    )
+    with patch("app.providers.httpx.AsyncClient", return_value=_mock_async_client_for(sse)):
+        events = [e async for e in provider.stream_chat_with_tools("sys", [{"role": "user", "content": "go"}], [])]
+
+    tool_calls = [e for e in events if e["type"] == "tool_call"]
+    assert len(tool_calls) == 1
+    assert tool_calls[0]["args"] == {}
+    assert tool_calls[0].get("args_error")
+
+
+def test_chat_groq_json_mode_sets_response_format(monkeypatch):
+    monkeypatch.setenv("GROQ_API_KEY", "gk")
+    from app.providers import PlannerProvider
+    p = PlannerProvider(model="groq/llama-3.3-70b-versatile")
+    seen = {}
+
+    class FakeResp:
+        status_code = 200
+        def raise_for_status(self): pass
+        def json(self):
+            return {"choices": [{"message": {"content": "{\"ok\": true}"}}]}
+
+    class FakeClient:
+        def __init__(self, *a, **k): pass
+        def __enter__(self): return self
+        def __exit__(self, *a): return False
+        def post(self, url, headers=None, json=None):
+            seen["payload"] = json
+            return FakeResp()
+
+    monkeypatch.setattr("app.providers.httpx.Client", FakeClient)
+    out = p._chat_groq("Return ONLY valid JSON", "prompt", json_mode=True)
+    assert seen["payload"]["response_format"] == {"type": "json_object"}
+    assert out == "{\"ok\": true}"
+
+    seen.clear()
+    p._chat_groq("sys", "prompt", json_mode=False)
+    assert "response_format" not in seen["payload"]
+
+
+def test_call_llm_retries_without_json_mode_on_400(monkeypatch):
+    """Models that reject response_format must not kill the call — retry plain."""
+    import httpx as _httpx
+    monkeypatch.setenv("GROQ_API_KEY", "gk")
+    monkeypatch.delenv("OPENROUTER_API_KEY", raising=False)
+    from app.providers import PlannerProvider
+    p = PlannerProvider(model="groq/llama-3.3-70b-versatile")
+    calls = []
+
+    def fake_groq(system, prompt, screenshot_b64=None, json_mode=False):
+        calls.append(json_mode)
+        if json_mode:
+            req = _httpx.Request("POST", "http://test")
+            raise _httpx.HTTPStatusError("bad request", request=req, response=_httpx.Response(400, request=req))
+        return "{\"complete\": true}"
+
+    monkeypatch.setattr(p, "_chat_groq", fake_groq)
+    out = p._call_llm("sys", "prompt", json_mode=True)
+    assert calls == [True, False]
+    assert out == "{\"complete\": true}"
+
+
+# ── Swarm racing: parallel free providers, fastest valid stream wins ─────────
+
+@pytest.mark.asyncio
+async def test_swarm_race_streams_fastest_provider(monkeypatch):
+    import asyncio
+    monkeypatch.setenv("GROQ_API_KEY", "gk")
+    monkeypatch.setenv("OPENROUTER_API_KEY", "ok")
+    from app.providers import PlannerProvider
+    p = PlannerProvider(model="groq/llama-3.3-70b-versatile")
+    assert p._swarm_race_enabled() is True
+
+    async def fake_single(system, messages, tools, screenshot_b64=None, model_override=None):
+        if model_override is None:   # groq primary — slow today
+            await asyncio.sleep(0.25)
+            yield {"type": "tool_call", "id": "g", "name": "slow_tool", "args": {}, "thought": ""}
+        else:                        # openrouter chain — fast
+            await asyncio.sleep(0.01)
+            yield {"type": "thought", "content": "fast thinking"}
+            yield {"type": "tool_call", "id": "o", "name": "fast_tool", "args": {}, "thought": ""}
+
+    monkeypatch.setattr(p, "_stream_chat_with_tools_single", fake_single)
+    events = [e async for e in p.stream_chat_with_tools("sys", [{"role": "user", "content": "go"}], [])]
+
+    winners = [e for e in events if e.get("race_winner")]
+    assert winners and winners[0]["race_winner"] == "openrouter"
+    names = [e["name"] for e in events if e.get("type") == "tool_call"]
+    assert names == ["fast_tool"], f"only the winner streams: {events}"
+
+
+@pytest.mark.asyncio
+async def test_swarm_race_survives_one_provider_failing(monkeypatch):
+    import asyncio
+    monkeypatch.setenv("GROQ_API_KEY", "gk")
+    monkeypatch.setenv("OPENROUTER_API_KEY", "ok")
+    from app.providers import PlannerProvider
+    p = PlannerProvider(model="groq/llama-3.3-70b-versatile")
+
+    async def fake_single(system, messages, tools, screenshot_b64=None, model_override=None):
+        if model_override is None:   # groq hard-down
+            raise RuntimeError("groq 429 rate limited")
+            yield  # pragma: no cover — makes this an async generator
+        await asyncio.sleep(0.01)
+        yield {"type": "tool_call", "id": "o", "name": "rescue_tool", "args": {}, "thought": ""}
+
+    monkeypatch.setattr(p, "_stream_chat_with_tools_single", fake_single)
+    events = [e async for e in p.stream_chat_with_tools("sys", [{"role": "user", "content": "go"}], [])]
+    names = [e["name"] for e in events if e.get("type") == "tool_call"]
+    assert names == ["rescue_tool"]
+    winners = [e for e in events if e.get("race_winner")]
+    assert winners and winners[0]["race_winner"] == "openrouter"
+
+
+def test_swarm_race_gating(monkeypatch):
+    from app.providers import PlannerProvider
+    monkeypatch.setenv("GROQ_API_KEY", "gk")
+    monkeypatch.setenv("OPENROUTER_API_KEY", "ok")
+    assert PlannerProvider(model="groq/llama-3.3-70b-versatile")._swarm_race_enabled() is True
+    # Kill switch.
+    monkeypatch.setenv("ORYNN_SWARM_RACE", "0")
+    assert PlannerProvider(model="groq/llama-3.3-70b-versatile")._swarm_race_enabled() is False
+    monkeypatch.delenv("ORYNN_SWARM_RACE")
+    # No second provider → no race.
+    monkeypatch.delenv("OPENROUTER_API_KEY")
+    assert PlannerProvider(model="groq/llama-3.3-70b-versatile")._swarm_race_enabled() is False

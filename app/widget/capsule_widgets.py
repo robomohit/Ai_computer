@@ -255,12 +255,26 @@ CARD_MORE = "#4B5563"
 # carry their OWN opaque-enough surface or the desktop bleeds through the text.
 CARD_BG = "rgba(28,32,42,0.55)"
 CARD_BD = "rgba(255,255,255,0.10)"
+# List-item + button chrome — these MUST flip with the card surface too, or
+# light-mode cards render near-white text on a near-white card (invisible).
+ITEM_TEXT = "#E2E4E8"
+ITEM_DETAIL = "#6B7280"
+ITEM_HOVER = "rgba(255,255,255,0.04)"
+DIVIDER = "rgba(255,255,255,0.06)"
+ICON_MUTED = "#7A7F88"
+BTN_TEXT = "#D1D5DB"
+BTN_TEXT_HOVER = "#FFFFFF"
+BTN_BG = "rgba(255,255,255,0.06)"
+BTN_BD = "rgba(255,255,255,0.08)"
+BTN_HBG = "rgba(255,255,255,0.10)"
 
 
 def set_card_palette(light: bool) -> None:
     """Switch card text + surface between dark-mode and light-mode so answer/
     result cards stay legible on the clear-glass body over any backdrop."""
     global CARD_TITLE, CARD_SUB, CARD_BODY, CARD_MORE, CARD_BG, CARD_BD
+    global ITEM_TEXT, ITEM_DETAIL, ITEM_HOVER, DIVIDER, ICON_MUTED
+    global BTN_TEXT, BTN_TEXT_HOVER, BTN_BG, BTN_BD, BTN_HBG
     if light:
         CARD_TITLE = "#10131A"; CARD_SUB = "#5B6472"
         CARD_BODY = "#283340"; CARD_MORE = "#7A828F"
@@ -268,11 +282,27 @@ def set_card_palette(light: bool) -> None:
         # over ANY backdrop (just a hint of translucency keeps them glassy).
         CARD_BG = "rgba(250,251,253,0.92)"
         CARD_BD = "rgba(20,24,32,0.13)"
+        ITEM_TEXT = "#1A2230"; ITEM_DETAIL = "#5B6472"
+        ITEM_HOVER = "rgba(20,24,32,0.05)"
+        DIVIDER = "rgba(20,24,32,0.08)"
+        ICON_MUTED = "#5B6472"
+        BTN_TEXT = "#283340"; BTN_TEXT_HOVER = "#10131A"
+        BTN_BG = "rgba(20,24,32,0.05)"
+        BTN_BD = "rgba(20,24,32,0.12)"
+        BTN_HBG = "rgba(20,24,32,0.09)"
     else:
         CARD_TITLE = "#FFFFFF"; CARD_SUB = "#6B7280"
         CARD_BODY = "#D1D5DB"; CARD_MORE = "#4B5563"
         CARD_BG = "rgba(22,26,35,0.85)"
         CARD_BD = "rgba(255,255,255,0.12)"
+        ITEM_TEXT = "#E2E4E8"; ITEM_DETAIL = "#6B7280"
+        ITEM_HOVER = "rgba(255,255,255,0.04)"
+        DIVIDER = "rgba(255,255,255,0.06)"
+        ICON_MUTED = "#7A7F88"
+        BTN_TEXT = "#D1D5DB"; BTN_TEXT_HOVER = "#FFFFFF"
+        BTN_BG = "rgba(255,255,255,0.06)"
+        BTN_BD = "rgba(255,255,255,0.08)"
+        BTN_HBG = "rgba(255,255,255,0.10)"
 
 _FILE_ICON_MAP = {
     "pdf": "file-text", "doc": "file-text", "docx": "file-text",
@@ -372,18 +402,18 @@ class CapabilityBar(QWidget):
 # ── Small helpers ────────────────────────────────────────────────────────────
 def _dismiss_btn() -> QPushButton:
     btn = QPushButton()
-    btn.setIcon(QIcon(_render_icon("x", 12, "#6B7280")))
+    btn.setIcon(QIcon(_render_icon("x", 12, ICON_MUTED)))
     btn.setIconSize(QSize(12, 12)); btn.setFixedSize(26, 26)
     btn.setCursor(Qt.PointingHandCursor)
     btn.setStyleSheet(
-        "QPushButton{background:rgba(255,255,255,0.05);border:none;border-radius:13px;}"
+        f"QPushButton{{background:{BTN_BG};border:none;border-radius:13px;}}"
         "QPushButton:hover{background:rgba(239,68,68,0.2);}")
     return btn
 
 
 def _divider() -> QFrame:
     d = QFrame(); d.setFixedHeight(1)
-    d.setStyleSheet("background:rgba(255,255,255,0.06);border:none;")
+    d.setStyleSheet(f"background:{DIVIDER};border:none;")
     return d
 
 
@@ -499,7 +529,7 @@ class DynamicWidget(CapsuleCard):
         row_w.setFixedHeight(38)
         row_w.setStyleSheet(
             "QWidget{background:transparent;border:none;border-radius:8px;}"
-            "QWidget:hover{background:rgba(255,255,255,0.04);}")
+            f"QWidget:hover{{background:{ITEM_HOVER};}}")
         row = QHBoxLayout(row_w)
         row.setContentsMargins(8, 0, 12, 0); row.setSpacing(10)
 
@@ -507,13 +537,13 @@ class DynamicWidget(CapsuleCard):
         icon = item.get("icon") or _guess_icon(name)
         detail = item.get("detail", item.get("subtitle", ""))
 
-        row.addWidget(_icon_label(icon, 15, "#7A7F88"))
+        row.addWidget(_icon_label(icon, 15, ICON_MUTED))
         nm = _plain_label(name); nm.setFont(QFont("Segoe UI Variable Text", 10))
-        nm.setStyleSheet(f"color:#E2E4E8;{_NO_BG}"); row.addWidget(nm, 1)
+        nm.setStyleSheet(f"color:{ITEM_TEXT};{_NO_BG}"); row.addWidget(nm, 1)
 
         if detail:
             dt = _plain_label(str(detail)); dt.setFont(QFont("Segoe UI", 9))
-            dt.setStyleSheet(f"color:#6B7280;{_NO_BG}"); row.addWidget(dt)
+            dt.setStyleSheet(f"color:{ITEM_DETAIL};{_NO_BG}"); row.addWidget(dt)
         return row_w
 
     def _make_button(self, bspec: dict) -> QPushButton:
@@ -531,7 +561,7 @@ class DynamicWidget(CapsuleCard):
         btn.setFixedHeight(38)
 
         if icon_name:
-            ic = "#0A1A16" if style == "primary" else "#B0B4BC"
+            ic = "#0A1A16" if style == "primary" else ICON_MUTED
             btn.setIcon(QIcon(_render_icon(icon_name, 14, ic, 2.0)))
             btn.setIconSize(QSize(14, 14))
 
@@ -545,15 +575,15 @@ class DynamicWidget(CapsuleCard):
             if not label:  # icon-only danger button
                 btn.setFixedSize(38, 38)
             btn.setStyleSheet(
-                "QPushButton{background:rgba(255,255,255,0.04);"
-                "border:1px solid rgba(255,255,255,0.06);border-radius:10px;"
-                "padding:0 12px;color:#D1D5DB;}"
-                "QPushButton:hover{background:rgba(239,68,68,0.15);color:#FCA5A5;}")
+                f"QPushButton{{background:{BTN_BG};"
+                f"border:1px solid {BTN_BD};border-radius:10px;"
+                f"padding:0 12px;color:{BTN_TEXT};}}"
+                "QPushButton:hover{background:rgba(239,68,68,0.15);color:#EF4444;}")
         else:  # secondary
             btn.setStyleSheet(
-                "QPushButton{background:rgba(255,255,255,0.06);color:#D1D5DB;"
-                "border:1px solid rgba(255,255,255,0.08);border-radius:10px;padding:0 18px;}"
-                "QPushButton:hover{background:rgba(255,255,255,0.10);color:#FFFFFF;}")
+                f"QPushButton{{background:{BTN_BG};color:{BTN_TEXT};"
+                f"border:1px solid {BTN_BD};border-radius:10px;padding:0 18px;}}"
+                f"QPushButton:hover{{background:{BTN_HBG};color:{BTN_TEXT_HOVER};}}")
 
         # Wire the action
         btn.clicked.connect(lambda _, a=action, p=payload, b=btn: self._execute_action(a, p, b))
@@ -587,6 +617,25 @@ class DynamicWidget(CapsuleCard):
 
         # HTTP actions — POST to backend
         if action.startswith("/"):
+            # Destructive endpoints need a second tap — a stray click on an
+            # icon-only trash button must never wipe a whole file list.
+            if "delete" in action and not getattr(btn, "_confirm_armed", False):
+                btn._confirm_armed = True
+                original_text = btn.text()
+                btn.setText("  Click again to confirm")
+                self._set_status("This deletes the listed files — click again to confirm.", "#F59E0B")
+
+                def _disarm():
+                    if getattr(btn, "_confirm_armed", False):
+                        btn._confirm_armed = False
+                        try:
+                            btn.setText(original_text)
+                            self._status.hide()
+                        except RuntimeError:
+                            pass  # card already dismissed
+                QTimer.singleShot(4000, _disarm)
+                return
+            btn._confirm_armed = False
             btn.setEnabled(False)
             self._set_status("Working...")
             threading.Thread(
@@ -602,11 +651,19 @@ class DynamicWidget(CapsuleCard):
             with httpx.Client(timeout=30) as client:
                 client.post(f"{_API_BASE}/api/session")
                 r = client.post(url, json=payload)
-            result = r.json() if r.status_code < 400 else {"error": r.text}
+            if r.status_code < 400:
+                try:
+                    result = r.json()
+                except Exception:
+                    result = {}
+                if not isinstance(result, dict):
+                    result = {}
+            else:
+                result = {"error": r.text or f"HTTP {r.status_code}"}
 
             if "error" in result:
                 QTimer.singleShot(0, lambda: self._set_status(
-                    f"Error: {result['error'][:80]}", "#EF4444"))
+                    f"Error: {str(result['error'])[:80]}", "#EF4444"))
             else:
                 count = result.get("count", "")
                 msg = result.get("message", f"✓ Done{f' ({count} items)' if count else ''}")

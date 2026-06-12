@@ -40,6 +40,8 @@ class ActionType(str, Enum):
     middle_click = "middle_click"
     mouse_move = "mouse_move"
     left_click_drag = "left_click_drag"
+    mouse_down = "mouse_down"
+    mouse_up = "mouse_up"
     key_combo = "key_combo"
     hold_key = "hold_key"
     wait_action = "wait_action"

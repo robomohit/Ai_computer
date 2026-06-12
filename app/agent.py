@@ -70,6 +70,8 @@ _SCREENSHOT_ACTIONS = {
     ActionType.middle_click,
     ActionType.mouse_move,
     ActionType.left_click_drag,
+    ActionType.mouse_down,
+    ActionType.mouse_up,
     ActionType.key_combo,
 }
 
@@ -82,6 +84,8 @@ _DESKTOP_POST_ACTION_TYPES = {
     ActionType.middle_click,
     ActionType.mouse_move,
     ActionType.left_click_drag,
+    ActionType.mouse_down,
+    ActionType.mouse_up,
     ActionType.key_combo,
     ActionType.hold_key,
     ActionType.type_with_delay,
@@ -107,6 +111,8 @@ _VISUAL_DESKTOP_ACTION_TYPES = {
     ActionType.middle_click,
     ActionType.mouse_move,
     ActionType.left_click_drag,
+    ActionType.mouse_down,
+    ActionType.mouse_up,
     ActionType.keyboard_type,
     ActionType.type_with_delay,
     ActionType.scroll,
@@ -254,7 +260,17 @@ def _coerce_history_messages(history, *, max_messages: int = 16, max_chars: int 
         content = str(turn.get("content") or "").strip()
         if not content:
             continue
-        out.append({"role": role, "content": content[:2000]})
+        if len(content) > 2000:
+            # Cut at a line boundary and SAY it was cut — a mid-word slice can
+            # leave a half-open code fence or sentence that derails free models.
+            trimmed = content[:2000]
+            nl = trimmed.rfind("\n", 1200)
+            if nl > 0:
+                trimmed = trimmed[:nl]
+            if trimmed.count("```") % 2 == 1:
+                trimmed += "\n```"          # close a dangling code fence
+            content = trimmed + "\n…[earlier content trimmed]"
+        out.append({"role": role, "content": content})
     out = out[-max_messages:]
     while len(out) > 1 and sum(len(m["content"]) for m in out) > max_chars:
         out.pop(0)
@@ -464,6 +480,8 @@ def _overlay_for_action_start(action: Action, *, visual_fallback: bool = False) 
         ActionType.middle_click,
         ActionType.mouse_move,
         ActionType.left_click_drag,
+        ActionType.mouse_down,
+        ActionType.mouse_up,
     }:
         try:
             point = {"x": int(args["x"]), "y": int(args["y"])}
@@ -479,6 +497,10 @@ def _overlay_for_action_start(action: Action, *, visual_fallback: bool = False) 
             point_kind, point_label = "move", "Moving cursor"
         elif action.type == ActionType.left_click_drag:
             point_kind, point_label = "drag", "Dragging"
+        elif action.type == ActionType.mouse_down:
+            point_kind, point_label = "drag", "Pressing mouse"
+        elif action.type == ActionType.mouse_up:
+            point_kind, point_label = "drag", "Releasing mouse"
     elif action.type == ActionType.computer:
         try:
             if "x" in args and "y" in args:
@@ -496,6 +518,10 @@ def _overlay_for_action_start(action: Action, *, visual_fallback: bool = False) 
             point_kind, point_label = "move", "Moving cursor"
         elif computer_action == "left_click_drag":
             point_kind, point_label = "drag", "Dragging"
+        elif computer_action in ("mouse_down", "left_mouse_down"):
+            point_kind, point_label = "drag", "Pressing mouse"
+        elif computer_action in ("mouse_up", "left_mouse_up"):
+            point_kind, point_label = "drag", "Releasing mouse"
 
     if visual_fallback:
         label = "No accessible control found; using visual fallback"
@@ -1194,6 +1220,9 @@ class AgentService:
         self._killed_tasks: Set[str] = set()
         self._total_tokens_spent: int = 0
         self._token_budgets: Dict[str, int] = {}
+        # Workflow compiler — successful runs become replayable traces.
+        from .trace_store import TraceStore
+        self.trace_store = TraceStore()
         # Register emergency cleanup so Playwright Chromium processes are killed
         # even if Python crashes or is terminated without running the finally block
         import atexit
@@ -1945,20 +1974,47 @@ class AgentService:
                 # screen capture, browser, web research, files, shell. The one
                 # exception is headless browser mode (computer_use): it has no
                 # real desktop, so it stays browser + web + file focused.
-                packs = ["core", "browser", "web", "filesystem", "utilities"] if _is_browser_use else get_unified_packs()
+                from .tool_registry import (
+                    select_relevant_packs,
+                    REQUEST_MORE_TOOLS_NAME,
+                    REQUEST_MORE_TOOLS_GUIDANCE,
+                    REQUEST_MORE_TOOLS_SCHEMA,
+                )
+                _full_packs = ["core", "browser", "web", "filesystem", "utilities"] if _is_browser_use else get_unified_packs()
+                # Token diet: send only goal-relevant packs (the full unified
+                # surface is ~4.4-5K tokens of schemas PER CALL — latency and
+                # rate-limit budget free models can't spare). request_more_tools
+                # unlocks the full catalog in one turn if the trim guessed wrong.
+                packs = select_relevant_packs(goal, _full_packs)
+                if _is_computer_desktop:
+                    # Desktop mode from the start — the desktop packs are the
+                    # task's core surface regardless of goal wording.
+                    _kept = set(packs) | {"uia", "computer"}
+                    packs = [p for p in _full_packs if p in _kept]
+                _tools_trimmed = packs != _full_packs
                 tool_excludes = _tool_excludes_for_dynamic_surface(
                     desktop_enabled=_is_computer_desktop,
                     model_sees=_model_sees,
                     goal=goal,
                 )
-                tool_guidance = get_tool_guidance(packs, exclude_actions=tool_excludes)
-                tool_schemas = get_tool_schemas(packs, exclude_actions=tool_excludes)
 
-                # make_subtasks (optional decomposition) is offered in every
-                # reactive mode — the model calls it only when a task genuinely
-                # benefits from a worker split; otherwise it uses tools directly.
-                tool_guidance = f"{MAKE_SUBTASKS_TOOL_GUIDANCE}\n{tool_guidance}" if tool_guidance else MAKE_SUBTASKS_TOOL_GUIDANCE
-                tool_schemas = [MAKE_SUBTASKS_TOOL_SCHEMA, *tool_schemas]
+                def _build_tool_surface(active_packs, excludes, trimmed):
+                    # Guidance always carries the FULL catalog — it gets baked
+                    # into system prompts once and would go stale after a
+                    # request_more_tools unlock. The native SCHEMAS are the big
+                    # per-call token cost, so the relevance trim applies there.
+                    guidance = get_tool_guidance(_full_packs, exclude_actions=excludes)
+                    schemas = get_tool_schemas(active_packs, exclude_actions=excludes)
+                    # make_subtasks (optional decomposition) is offered in every
+                    # reactive mode — the model calls it only when a task genuinely
+                    # benefits from a worker split; otherwise it uses tools directly.
+                    guidance = f"{MAKE_SUBTASKS_TOOL_GUIDANCE}\n{guidance}" if guidance else MAKE_SUBTASKS_TOOL_GUIDANCE
+                    schemas = [MAKE_SUBTASKS_TOOL_SCHEMA, *schemas]
+                    if trimmed:
+                        schemas = [*schemas, REQUEST_MORE_TOOLS_SCHEMA]
+                    return guidance, schemas
+
+                tool_guidance, tool_schemas = _build_tool_surface(packs, tool_excludes, _tools_trimmed)
 
                 if _is_browser_use:
                     system = (
@@ -2028,7 +2084,12 @@ class AgentService:
                         "2. Every later thought = ONE line: \"STEP <k> of <plan>: <what now>\". Re-read "
                         "the goal first; a goal with two clauses ('do X, then Y') is done only when BOTH "
                         "are verified.\n"
-                        "3. ONE tool call per turn. Never repeat a call that already succeeded.\n\n"
+                        "3. Default to ONE tool call per turn. EXCEPTION — batching: when the next few "
+                        "calls are INDEPENDENT and need no observation between them (focus a window then "
+                        "type; several clicks you are already certain of), emit them as MULTIPLE tool "
+                        "calls in ONE turn. They execute strictly in order and stop at the first failure "
+                        "— each batched call saves a full model round-trip. Never repeat a call that "
+                        "already succeeded.\n\n"
                         "READ THE MENUS — they remove all guessing:\n"
                         "- When a window opens or focuses, the result lists \"Visible controls: ...\" — "
                         "those are the ONLY valid names. Copy them EXACTLY (case, spaces, quotes).\n"
@@ -2144,7 +2205,11 @@ class AgentService:
                         "- NEVER use list_directory just to confirm a file you just wrote exists.\n"
                         "- NEVER use web_fetch on a URL you already fetched — use the content already returned.\n"
                         "- Use list_mcp_servers and list_mcp_tools to discover workspace MCP integrations before calling mcp_tool.\n"
-                        "- After getting data you need, synthesize it and call finish — don't loop.\n\n"
+                        "- After getting data you need, synthesize it and call finish — don't loop.\n"
+                        "- BATCH independent actions: when the next several calls need no observation "
+                        "between them (write two files, then run the tests), emit them as MULTIPLE tool "
+                        "calls in one message — they run in order and halt on the first failure, saving "
+                        "a full model round-trip per action.\n\n"
                         "WHEN WRITING/EDITING CODE:\n"
                         "- Read files before editing. Use text_str_replace for targeted edits.\n"
                         "- After edits: run lint_code. After features: run run_tests.\n"
@@ -2172,6 +2237,18 @@ class AgentService:
                 if relevant_history_block:
                     system += f"\n\n{relevant_history_block}"
                     xml_system += f"\n\n{relevant_history_block}"
+                # Retrieval-augmented acting: a near-miss compiled trace becomes
+                # a few-shot hint — weak models imitate a winning sequence far
+                # better than they derive one.
+                _trace_hint = ""
+                try:
+                    if not history:
+                        _trace_hint = await asyncio.to_thread(self.trace_store.hint_text, goal, mode)
+                except Exception:
+                    _trace_hint = ""
+                if _trace_hint:
+                    system += f"\n\n{_trace_hint}"
+                    xml_system += f"\n\n{_trace_hint}"
 
                 # ── Auto-inject workspace tree when workspace has files ────────
                 auto_context = ""
@@ -2203,6 +2280,35 @@ class AgentService:
                 _finish_bounced = False
                 _preserve_screenshot_once = False
                 xml_fallback_steps = 0
+                # Parallel tool calls the model emitted in one turn, awaiting
+                # execution — each drains on a later loop step WITHOUT another
+                # model round-trip (the free-tier latency win). Cleared whenever
+                # an action fails so the model re-plans from the failure.
+                _queued_tool_calls: list[dict] = []
+                # ── Workflow compiler ────────────────────────────────────────
+                # A previously successful run of this exact goal replays through
+                # the same queue: every action still passes safety/approval/
+                # verification, but the model is only consulted once at the end.
+                _replayed_trace = None
+                _trace_actions: list[dict] = []
+                _trace_had_failure = False
+                try:
+                    if not _prior_turns:
+                        _replayed_trace = await asyncio.to_thread(self.trace_store.find_exact, goal, mode)
+                except Exception:
+                    _replayed_trace = None
+                if not isinstance(_replayed_trace, dict):
+                    _replayed_trace = None
+                if _replayed_trace and _replayed_trace.get("actions"):
+                    _queued_tool_calls = [
+                        {"name": a.get("type"), "args": a.get("args", {}), "thought": "", "id": "", "args_error": ""}
+                        for a in _replayed_trace["actions"] if a.get("type")
+                    ]
+                    await self._emit(task_id, "status", {
+                        "message": f"⚡ Replaying a previously successful run ({len(_queued_tool_calls)} compiled steps, zero model calls) — verifying as it goes.",
+                    })
+                elif _replayed_trace:
+                    _replayed_trace = None
                 max_steps = (
                     BROWSER_MAX_STEPS if _is_browser_use
                     else DESKTOP_MAX_STEPS if _is_computer_desktop
@@ -2227,6 +2333,20 @@ class AgentService:
                     thought_text = ""
                     tool_call_id = None
                     agent_reply_emitted = False
+                    _args_parse_error = ""
+
+                    # ── Drain batched tool calls first: a queued action skips
+                    # the model entirely and goes straight to execution.
+                    if _queued_tool_calls:
+                        _q = _queued_tool_calls.pop(0)
+                        action_type = _q.get("name") or None
+                        args = _q.get("args", {})
+                        thought_text = _q.get("thought", "")
+                        tool_call_id = _q.get("id") or f"call-{step}"
+                        _args_parse_error = _q.get("args_error", "")
+                        await self._emit(task_id, "status", {
+                            "message": f"Running batched action {action_type} ({len(_queued_tool_calls)} more queued) — no extra model call.",
+                        })
 
                     def _step_elapsed() -> int:
                         return int(asyncio.get_event_loop().time() - step_start)
@@ -2234,13 +2354,18 @@ class AgentService:
                     desktop_now = self.permissions.is_granted(task_id, "desktop") or mode in ("computer", "computer_isolated")
                     if desktop_now != _is_computer_desktop:
                         _is_computer_desktop = desktop_now
+                        if _is_computer_desktop:
+                            # Desktop was just granted — the relevance trim may
+                            # have dropped the desktop packs; force them in.
+                            _kept = set(packs) | {"uia", "computer"}
+                            packs = [p for p in _full_packs if p in _kept]
+                            _tools_trimmed = packs != _full_packs
                         tool_excludes = _tool_excludes_for_dynamic_surface(
                             desktop_enabled=_is_computer_desktop,
                             model_sees=_model_sees,
                             goal=goal,
                         )
-                        tool_guidance = get_tool_guidance(packs, exclude_actions=tool_excludes)
-                        tool_schemas = get_tool_schemas(packs, exclude_actions=tool_excludes)
+                        tool_guidance, tool_schemas = _build_tool_surface(packs, tool_excludes, _tools_trimmed)
                         use_native_tools = len(tool_schemas) > 0 and inspect.isasyncgenfunction(
                             getattr(provider, "stream_chat_with_tools", None)
                         )
@@ -2278,7 +2403,19 @@ class AgentService:
                         messages = sys_prefix + tail
 
                     # ── History compression: truncate old observation results and assistant tool calls ──
-                    if len(messages) > 6:
+                    # Budget-triggered, not every step: mutating old messages each
+                    # step changes the prompt PREFIX every call, which defeats
+                    # provider-side prompt caching (Groq/OpenRouter cache identical
+                    # prefixes for much faster TTFT). Short tasks now never mutate;
+                    # long tasks compress in occasional batches.
+                    _history_chars = sum(
+                        len(m.get("content") or "") + sum(
+                            len(tc.get("function", {}).get("arguments", "") or "")
+                            for tc in m.get("tool_calls", [])
+                        )
+                        for m in messages
+                    )
+                    if _history_chars > 28000 and len(messages) > 6:
                         for i in range(1, len(messages) - 4):
                             m = messages[i]
                             if m["role"] == "tool" and len(m.get("content", "")) > 500:
@@ -2310,7 +2447,9 @@ class AgentService:
 
                     try:
                         # ── TRY NATIVE TOOL CALLING FIRST ──
-                        if use_native_tools:
+                        # (skipped entirely when a batched action was dequeued —
+                        # action_type is already set and no model call is needed)
+                        if use_native_tools and action_type is None:
                             try:
                                 await self._emit(task_id, "status", {"message": f"Thinking through step {step+1}…"})
                                 native_stream = self._stream_with_idle_timeout(
@@ -2370,19 +2509,35 @@ class AgentService:
                                                 "live": True,
                                                 "elapsed_seconds": _step_elapsed(),
                                             })
+                                    elif event["type"] == "provider_info" and event.get("message"):
+                                        await self._emit(task_id, "status", {"message": event["message"]})
                                     elif event["type"] == "tool_call":
-                                        action_type = event["name"]
-                                        args = event.get("args", {})
-                                        thought_text = event.get("thought", thought_text)
-                                        tool_call_id = event.get("id", f"call-{step}")
-                                        # Always emit a finalized reasoning card to show real elapsed time
-                                        await self._emit(task_id, "reasoning", {
-                                            "stage": f"Step {step+1}",
-                                            "summary": (thought_text[:50] + "...") if thought_text else f"→ {action_type}",
-                                            "detail": thought_text,
-                                            "live": False,
-                                            "elapsed_seconds": _step_elapsed(),
-                                        })
+                                        if action_type is None:
+                                            action_type = event["name"]
+                                            args = event.get("args", {})
+                                            thought_text = event.get("thought", thought_text)
+                                            tool_call_id = event.get("id", f"call-{step}")
+                                            _args_parse_error = event.get("args_error", "")
+                                            # Always emit a finalized reasoning card to show real elapsed time
+                                            await self._emit(task_id, "reasoning", {
+                                                "stage": f"Step {step+1}",
+                                                "summary": (thought_text[:50] + "...") if thought_text else f"→ {action_type}",
+                                                "detail": thought_text,
+                                                "live": False,
+                                                "elapsed_seconds": _step_elapsed(),
+                                            })
+                                        else:
+                                            # Parallel tool call — queue it; later loop
+                                            # steps execute it with NO model round-trip.
+                                            # (Previously these overwrote the first call
+                                            # and were silently dropped.)
+                                            _queued_tool_calls.append({
+                                                "name": event["name"],
+                                                "args": event.get("args", {}),
+                                                "thought": "",
+                                                "id": event.get("id", ""),
+                                                "args_error": event.get("args_error", ""),
+                                            })
                                     elif event["type"] == "text_only":
                                         thought_text = event.get("content", "")
                                         if thought_text:
@@ -2492,6 +2647,15 @@ class AgentService:
                                 messages.append({"role": "user", "content": f"<observation>\n{delegate_output}\n</observation>"})
                                 continue
 
+                            # Repair ladder, rung 1: the stream may have died
+                            # before </action> — salvage the body instead of
+                            # treating it as an empty-args call.
+                            if action_type and not action_args_json and "<action" in buffer:
+                                _tail = buffer[buffer.find(">", buffer.find("<action")) + 1:]
+                                _tail = _tail.split("</action>")[0].strip()
+                                if _tail.startswith("{"):
+                                    action_args_json = _tail
+
                             if action_type and action_args_json:
                                 try:
                                     args = json.loads(action_args_json)
@@ -2500,7 +2664,11 @@ class AgentService:
                                     try:
                                         args = json.loads(_sanitize_json_text(action_args_json))
                                     except Exception:
+                                        # Rung 2 failed too — bounce the raw text
+                                        # back to the model rather than executing
+                                        # the action with silently-empty args.
                                         args = {}
+                                        _args_parse_error = action_args_json[:300]
                                         _log.warning(f"Failed to parse action args JSON for '{action_type}': {action_args_json!r}")
                             elif action_type and not action_args_json:
                                 _log.warning(f"Action '{action_type}' had no args between tags; executing with empty args")
@@ -2531,6 +2699,27 @@ class AgentService:
                             await self._emit(task_id, "done", {"complete": True, "reason": "Done.", "finished_at": datetime.now(timezone.utc).isoformat()})
                         return
                         
+                    # ── Malformed args: bounce instead of executing with {} ──
+                    # A write_file without content or a click without coords is
+                    # worse than no action; feed the parse error back so the
+                    # model resends the call correctly.
+                    if _args_parse_error:
+                        _err_obs = (
+                            f"[args rejected] Your {action_type} call's arguments were not valid JSON "
+                            f"(raw: {_args_parse_error!r}). The action was NOT executed. "
+                            "Resend the call with complete, valid JSON arguments."
+                        )
+                        if use_native_tools and tool_call_id:
+                            messages.append({"role": "assistant", "content": thought_text, "tool_calls": [{"id": tool_call_id, "type": "function", "function": {"name": action_type, "arguments": "{}"}}]})
+                            messages.append({"role": "tool", "tool_call_id": tool_call_id, "content": _err_obs})
+                        else:
+                            messages.append({"role": "assistant", "content": thought_text})
+                            messages.append({"role": "user", "content": f"<observation>\n{_err_obs}\n</observation>"})
+                        if _queued_tool_calls:
+                            _queued_tool_calls.clear()  # later calls may build on the broken one
+                        await self._emit(task_id, "status", {"message": f"Model sent malformed arguments for {action_type} — asking it to retry."})
+                        continue
+
                     # Execute action
                     from .models import Action, ActionType as AT, ToolResult
 
@@ -2591,6 +2780,25 @@ class AgentService:
                     _recent_calls.append(_call_key)
                     if len(_recent_calls) > 5:
                         _recent_calls.pop(0)
+
+                    if action_type == REQUEST_MORE_TOOLS_NAME:
+                        # Escape hatch for the token-diet trim: unlock the full
+                        # catalog and tell the model what's now available.
+                        packs = list(_full_packs)
+                        _tools_trimmed = False
+                        tool_guidance, tool_schemas = _build_tool_surface(packs, tool_excludes, False)
+                        _unlocked = ", ".join(
+                            s.get("function", {}).get("name", "") for s in tool_schemas
+                        )
+                        _more_obs = f"Full tool catalog unlocked. Available tools now: {_unlocked}"
+                        if use_native_tools and tool_call_id:
+                            messages.append({"role": "assistant", "content": thought_text, "tool_calls": [{"id": tool_call_id, "type": "function", "function": {"name": action_type, "arguments": json.dumps(args)}}]})
+                            messages.append({"role": "tool", "tool_call_id": tool_call_id, "content": _more_obs})
+                        else:
+                            messages.append({"role": "assistant", "content": f"<thought>{thought_text}</thought>\n<action type=\"{action_type}\">\n{json.dumps(args)}\n</action>"})
+                            messages.append({"role": "user", "content": f"<observation>\n{_more_obs}\n</observation>"})
+                        await self._emit(task_id, "status", {"message": f"Unlocking the full tool catalog ({str(args.get('need', ''))[:60]})."})
+                        continue
 
                     if action_type == MAKE_SUBTASKS_TOOL_NAME:
                         action_id = f"act-{step}"
@@ -2672,6 +2880,7 @@ class AgentService:
                     try:
                         act = Action(id=f"act-{step}", type=AT(action_type), args=args, explanation=thought_text)
                     except ValueError:
+                        _queued_tool_calls.clear()
                         messages.append({"role": "assistant", "content": thought_text})
                         messages.append({"role": "user", "content": f"Invalid action type: {action_type}. Use only the provided tools."})
                         continue
@@ -2813,6 +3022,7 @@ class AgentService:
                                 "content": f"<thought>{thought_text}</thought>\n<action type=\"{action_type}\">\n{json.dumps(args)}\n</action>",
                             })
                             messages.append({"role": "user", "content": f"<observation>\n{_guard_obs}\n</observation>"})
+                        _queued_tool_calls.clear()  # batched follow-ups assumed this action ran
                         continue
 
                     # Approval handling
@@ -2919,6 +3129,32 @@ class AgentService:
                             # `messages` not in scope here for some code paths; ignore.
                             pass
                         
+                    # ── Batching checkpoint: an action failed, so any queued
+                    # parallel calls were planned on a now-false assumption.
+                    # Drop them and let the model see the failure next turn.
+                    if _queued_tool_calls and not res.ok:
+                        await self._emit(task_id, "status", {
+                            "message": f"Action failed — discarding {len(_queued_tool_calls)} queued batched action(s) so the agent can re-plan.",
+                        })
+                        _queued_tool_calls.clear()
+                    if not res.ok and _replayed_trace is not None:
+                        # Replay diverged — the world changed since this trace
+                        # was compiled. Drop it and let live planning recover.
+                        try:
+                            await asyncio.to_thread(self.trace_store.invalidate, _replayed_trace)
+                        except Exception:
+                            pass
+                        _replayed_trace = None
+                        await self._emit(task_id, "status", {
+                            "message": "Replay diverged from reality — trace retired, switching to live planning.",
+                        })
+
+                    # ── Workflow compiler: record the verified action stream.
+                    if res.ok and act.type != AT.finish:
+                        _trace_actions.append({"type": act.type.value, "args": args})
+                    elif not res.ok:
+                        _trace_had_failure = True
+
                     _result_overlay = _overlay_from_result(res)
                     await self._emit(task_id, "action_result", {
                         "action_id": act.id,
@@ -3047,6 +3283,18 @@ class AgentService:
                     await self._emit(task_id, "usage_update", {"total_tokens": provider.total_tokens})
                     
                     if act.type == AT.finish:
+                        # Compile this run: a clean multi-action success becomes
+                        # a replayable trace (skipped for replays and follow-ups
+                        # — their context isn't captured by the goal alone).
+                        if (_replayed_trace is None and not _trace_had_failure
+                                and not _prior_turns and len(_trace_actions) >= 2):
+                            try:
+                                if await asyncio.to_thread(self.trace_store.save, goal, mode, _trace_actions):
+                                    await self._emit(task_id, "status", {
+                                        "message": f"⚡ Compiled this run ({len(_trace_actions)} steps) — next time it replays instantly.",
+                                    })
+                            except Exception:
+                                pass
                         self._finalize(task_id, "done", res.output)
                         await self._emit(task_id, "done", {"complete": True, "reason": res.output, "finished_at": datetime.now(timezone.utc).isoformat()})
                         await asyncio.to_thread(self.memory.summarize_session, task_id, goal, True, res.output, mode)
@@ -3060,7 +3308,10 @@ class AgentService:
                     return
 
                 # If we loop max_steps times and don't finish
-                reason = f"Max steps reached ({max_steps}) without finish action."
+                reason = (
+                    f"I hit my {max_steps}-step budget before finishing. "
+                    "Progress so far is saved — send a follow-up like 'continue' to pick up where I left off."
+                )
                 self._finalize(task_id, "failed", reason)
                 await self._emit(task_id, "done", {"complete": False, "reason": reason, "finished_at": datetime.now(timezone.utc).isoformat()})
                 await asyncio.to_thread(self.memory.summarize_session, task_id, goal, False, reason, mode)
