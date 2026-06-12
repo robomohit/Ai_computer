@@ -169,3 +169,53 @@ def test_tool_executor_adaptive_observe_empty_tree_adds_recovery_plan(monkeypatc
     assert result.ok is True
     assert "Adaptive recovery plan" in result.output
     assert result.data["adaptive"]["failure_class"] == FailureClass.empty_accessibility_tree.value
+
+
+def test_verify_typed_reads_legacy_accessible_value(monkeypatch, workspace):
+    import app.widget.desktop_features as desktop_features
+
+    class LegacyPattern:
+        Value = "hello from legacy"
+
+    class Ctrl:
+        def GetValuePattern(self):
+            raise RuntimeError("no value pattern")
+
+        def GetLegacyIAccessiblePattern(self):
+            return LegacyPattern()
+
+        def GetTextPattern(self):
+            raise RuntimeError("no text pattern")
+
+    monkeypatch.setattr(
+        desktop_features,
+        "_find_uia_control",
+        lambda query, app: (Ctrl(), {"name": "Text editor"}),
+    )
+
+    assert ToolExecutor(workspace)._verify_typed("Text editor", "Notepad", "hello") is True
+
+
+def test_verify_typed_returns_false_when_readback_contradicts(monkeypatch, workspace):
+    import app.widget.desktop_features as desktop_features
+
+    class ValuePattern:
+        Value = "different value"
+
+    class Ctrl:
+        def GetValuePattern(self):
+            return ValuePattern()
+
+        def GetLegacyIAccessiblePattern(self):
+            raise RuntimeError("no legacy pattern")
+
+        def GetTextPattern(self):
+            raise RuntimeError("no text pattern")
+
+    monkeypatch.setattr(
+        desktop_features,
+        "_find_uia_control",
+        lambda query, app: (Ctrl(), {"name": "Text editor"}),
+    )
+
+    assert ToolExecutor(workspace)._verify_typed("Text editor", "Notepad", "expected") is False

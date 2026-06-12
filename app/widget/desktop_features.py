@@ -1409,7 +1409,11 @@ def type_into_ui_element(query: str, text: str, app_hint: str = "",
     #    accept SetValue into the DOM while their app state stays empty (the
     #    Discord bug) â€” those fall through to the focus+paste tier below.
     #    submit needs a real Enter keystroke, so it can't ride this tier.
-    if not submit:
+    control_type = str(info.get("control_type") or "")
+    # Document-style editors (modern Notepad, rich text surfaces, some custom
+    # controls) can reflect SetValue through accessibility without updating the
+    # app's real document model. Use paste for those so save/submit paths see it.
+    if not submit and control_type != "DocumentControl":
         bg = _try_background_setvalue(ctrl, text, clear_first)
         if bg:
             return {"ok": True, "method": "setvalue-background",
@@ -1438,11 +1442,17 @@ def type_into_ui_element(query: str, text: str, app_hint: str = "",
                 "found_at": info}
     try:
         time.sleep(0.08)  # let focus settle before sending keys
+        use_foreground_keys = control_type == "DocumentControl"
         # All keystrokes go through the control's own SendKeys (targeted
         # SendInput) â€” far more reliable than pyautogui's global hotkeys, which
         # drop/reorder chars and leak stray keys under rapid automation.
         if clear_first:
-            ctrl.SendKeys("{Ctrl}a{Delete}", waitTime=0)
+            if use_foreground_keys:
+                import pyautogui
+                pyautogui.hotkey("ctrl", "a")
+                pyautogui.press("delete")
+            else:
+                ctrl.SendKeys("{Ctrl}a{Delete}", waitTime=0)
             note_synthetic_input()
         # 2. Text entry via verified clipboard paste. Instant for any length AND
         #    fires the native paste/input events that React/Electron inputs
@@ -1469,7 +1479,11 @@ def type_into_ui_element(query: str, text: str, app_hint: str = "",
                     pass
                 time.sleep(0.01)
             if pasted_ok:
-                ctrl.SendKeys("{Ctrl}v", waitTime=0)
+                if use_foreground_keys:
+                    import pyautogui
+                    pyautogui.hotkey("ctrl", "v")
+                else:
+                    ctrl.SendKeys("{Ctrl}v", waitTime=0)
                 note_synthetic_input()
                 time.sleep(0.1)   # let the paste fully consume the clipboard
                 if saved:         # restore prior clipboard, after paste is done
@@ -1489,7 +1503,11 @@ def type_into_ui_element(query: str, text: str, app_hint: str = "",
         # 3. Optional submit (send / search) in the same focused control.
         if submit:
             time.sleep(0.04)
-            ctrl.SendKeys("{Enter}", waitTime=0)
+            if use_foreground_keys:
+                import pyautogui
+                pyautogui.press("enter")
+            else:
+                ctrl.SendKeys("{Enter}", waitTime=0)
             note_synthetic_input()
             method += "+enter"
         return {"ok": True, "method": method + politeness,

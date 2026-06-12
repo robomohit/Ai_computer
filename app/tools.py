@@ -3317,13 +3317,31 @@ class ToolExecutor:
             ctrl, _info = _find_uia_control(query, app)
             if ctrl is None:
                 return None
+            needle = str(text or "").strip()
+            if not needle:
+                return None
+            values = []
+            for getter_name, value_attr in (
+                ("GetValuePattern", "Value"),
+                ("GetLegacyIAccessiblePattern", "Value"),
+            ):
+                try:
+                    pattern = getattr(ctrl, getter_name)()
+                    val = getattr(pattern, value_attr)
+                    if val is not None:
+                        values.append(str(val))
+                except Exception:
+                    pass
             try:
-                val = ctrl.GetValuePattern().Value
+                pattern = ctrl.GetTextPattern()
+                val = pattern.DocumentRange.GetText(-1)
+                if val is not None:
+                    values.append(str(val))
             except Exception:
+                pass
+            if not values:
                 return None
-            if val is None:
-                return None
-            return (text or "").strip() in str(val)
+            return any(needle in val for val in values)
         except Exception:
             return None
 

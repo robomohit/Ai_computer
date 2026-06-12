@@ -1776,6 +1776,33 @@ def test_uia_type_uses_background_setvalue_without_stealing_focus(monkeypatch):
     assert ctrl._vp.Value == "hello world"
 
 
+def test_uia_type_skips_background_setvalue_for_document_controls(monkeypatch):
+    """Document controls can make accessibility read-back look updated while
+    the app's real document/save state remains unchanged, so they must use paste."""
+    import app.widget.desktop_features as df
+
+    ctrl = _FakeEditCtrl(_FakeValuePattern(value=""))
+    info = {"name": "Text editor", "automation_id": "doc1",
+            "control_type": "DocumentControl", "x": 5, "y": 5}
+    calls = {}
+    pg = types.SimpleNamespace(
+        hotkey=lambda *keys: calls.setdefault("hotkey", []).append(keys),
+        press=lambda key: calls.setdefault("press", []).append(key),
+    )
+    monkeypatch.setitem(sys.modules, "pyautogui", pg)
+    monkeypatch.setattr(df, "_find_uia_control", lambda q, a: (ctrl, info))
+    monkeypatch.setattr(df, "wait_for_user_idle",
+                        lambda *a, **k: {"waited": 0.0, "yielded": False,
+                                         "proceeded_anyway": False})
+
+    res = df.type_into_ui_element("Text editor", "hello world", "Notepad")
+    assert res["ok"] is True
+    assert res["method"] != "setvalue-background"
+    assert ctrl.focus_calls == 1
+    assert ctrl._vp.Value == ""
+    assert ("ctrl", "v") in calls["hotkey"]
+
+
 def test_uia_type_falls_back_to_paste_when_setvalue_lies(monkeypatch):
     """A React-style input that accepts SetValue into the DOM but desyncs app
     state is detected by the read-back and falls through to focus+paste."""
