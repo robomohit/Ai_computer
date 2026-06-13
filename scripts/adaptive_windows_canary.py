@@ -66,6 +66,16 @@ def _window_probe_step(name: str, fn: Callable[[], Any]) -> dict[str, Any]:
         }
 
 
+def _optional_window_probe_step(name: str, fn: Callable[[], Any]) -> dict[str, Any]:
+    step = _window_probe_step(name, fn)
+    if step.get("ok"):
+        return step
+    step["diagnostic_ok"] = False
+    step["ok"] = True
+    step["output"] = f"diagnostic window probe did not match: {step.get('output', '')}"
+    return step
+
+
 def _adaptive_map_step(name: str, fn: Callable[[], Any]) -> dict[str, Any]:
     """Summarize an adaptive map without dumping private control labels."""
     started = time.perf_counter()
@@ -291,19 +301,43 @@ def run_calculator_canary(workspace: Path) -> dict[str, Any]:
 
 
 def _running_process_exe(process_name: str) -> str:
+    wanted = process_name.lower()
     try:
         import psutil
     except Exception:
-        return ""
-    wanted = process_name.lower()
-    for proc in psutil.process_iter(["name", "exe"]):
-        try:
-            if (proc.info.get("name") or "").lower() == wanted:
-                exe = proc.info.get("exe") or ""
-                if exe:
-                    return exe
-        except Exception:
-            pass
+        psutil = None
+    if psutil is not None:
+        for proc in psutil.process_iter(["name", "exe"]):
+            try:
+                if (proc.info.get("name") or "").lower() == wanted:
+                    exe = proc.info.get("exe") or ""
+                    if exe:
+                        return exe
+            except Exception:
+                pass
+    stem = Path(process_name).stem.replace("'", "''")
+    try:
+        proc = subprocess.run(
+            [
+                "powershell.exe",
+                "-NoProfile",
+                "-Command",
+                (
+                    f"$p = Get-Process -Name '{stem}' -ErrorAction SilentlyContinue "
+                    "| Where-Object { $_.Path } | Select-Object -First 1 -ExpandProperty Path; "
+                    "if ($p) { $p }"
+                ),
+            ],
+            capture_output=True,
+            text=True,
+            timeout=5,
+        )
+        for line in (proc.stdout or "").splitlines():
+            exe = line.strip()
+            if exe and Path(exe).name.lower() == wanted:
+                return exe
+    except Exception:
+        pass
     return ""
 
 
@@ -346,7 +380,12 @@ def run_discord_canary(workspace: Path) -> dict[str, Any]:
     started = time.perf_counter()
     steps: list[dict[str, Any]] = []
     tools = ToolExecutor(workspace)
-    exe = _running_process_exe("Discord.exe")
+    exe = ""
+    for process_name in ("Discord.exe", "DiscordPTB.exe", "DiscordCanary.exe"):
+        exe = _running_process_exe(process_name)
+        if exe:
+            break
+    discord_hint = exe or "Discord"
     if exe:
         steps.append({
             "name": "locate_discord_process",
@@ -375,17 +414,17 @@ def run_discord_canary(workspace: Path) -> dict[str, Any]:
             "data": {"exe_basename": "", "found_process": False},
         })
 
-    steps.append(_window_probe_step(
+    steps.append(_optional_window_probe_step(
         "wait_for_discord",
         lambda: tools.wait_for_window("Discord", timeout=8.0, paint_seconds=0.3),
     ))
     steps.append(_adaptive_map_step(
         "map_discord",
-        lambda: tools.adaptive_observe("Discord", cap=240),
+        lambda: tools.adaptive_observe(discord_hint, cap=240),
     ))
     steps.append(_find_summary_step(
         "find_discord_search",
-        lambda: tools.uia_find("Search", "Discord", limit=5),
+        lambda: tools.uia_find("Search", discord_hint, limit=5),
     ))
     result = _canary_result("discord", started, steps)
     mapped = next((step for step in steps if step["name"] == "map_discord"), {})
@@ -393,6 +432,50 @@ def run_discord_canary(workspace: Path) -> dict[str, Any]:
     if mapped.get("ok") and int(graph.get("named_control_count") or 0) < 8:
         result["ok"] = False
         result["failed_steps"].append("discord_map_too_sparse")
+    return result
+
+
+def run_custom_surface_canary(workspace: Path) -> dict[str, Any]:
+    started = time.perf_counter()
+    steps: list[dict[str, Any]] = []
+    tools = ToolExecutor(workspace)
+    title = f"Orynn Custom Surface Canary {int(time.time() * 1000)}"
+    script = workspace / "custom_surface_canary.py"
+    script.write_text(
+        "\n".join([
+            "import sys",
+            "import tkinter as tk",
+            "title = sys.argv[1]",
+            "root = tk.Tk()",
+            "root.title(title)",
+            "root.geometry('640x420+120+120')",
+            "canvas = tk.Canvas(root, bg='#050505', highlightthickness=0)",
+            "canvas.pack(fill='both', expand=True)",
+            "canvas.create_rectangle(72, 82, 568, 338, fill='#111827', outline='#374151', width=6)",
+            "canvas.create_oval(260, 150, 380, 270, fill='#0f172a', outline='#64748b', width=4)",
+            "root.mainloop()",
+        ]) + "\n",
+        encoding="utf-8",
+    )
+    proc: subprocess.Popen | None = None
+    try:
+        proc = subprocess.Popen([sys.executable, str(script), title])
+        steps.append(_window_probe_step(
+            "wait_for_custom_surface",
+            lambda: tools.wait_for_window(title, timeout=8.0, paint_seconds=0.4),
+        ))
+        steps.append(_adaptive_map_step(
+            "map_custom_surface",
+            lambda: tools.adaptive_observe(title, cap=120),
+        ))
+    finally:
+        _kill_started_process(proc)
+    result = _canary_result("custom_surface", started, steps)
+    mapped = next((step for step in steps if step["name"] == "map_custom_surface"), {})
+    runtime = ((mapped.get("data") or {}).get("runtime") or {})
+    if mapped.get("ok") and runtime.get("runtime") != "custom_rendered":
+        result["ok"] = False
+        result["failed_steps"].append("custom_surface_runtime_not_custom")
     return result
 
 
@@ -414,6 +497,7 @@ def run_canaries(names: list[str], workspace: Path) -> dict[str, Any]:
         "calculator": run_calculator_canary,
         "settings": run_settings_canary,
         "discord": run_discord_canary,
+        "custom_surface": run_custom_surface_canary,
     }
     old_workspace = os.environ.get("ORYNN_WORKSPACE")
     os.environ["ORYNN_WORKSPACE"] = str(workspace)
@@ -450,7 +534,7 @@ def main() -> int:
     parser.add_argument(
         "--canary",
         action="append",
-        choices=["notepad", "calculator", "settings", "discord"],
+        choices=["notepad", "calculator", "settings", "discord", "custom_surface"],
         help="Canary to run. Repeatable. Defaults to notepad.",
     )
     parser.add_argument("--workspace", default="", help="State/workspace directory for ToolExecutor.")

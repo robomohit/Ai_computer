@@ -465,6 +465,35 @@ def resolver_ids(steps: Iterable[ResolverStep]) -> list[str]:
     return [step.id for step in steps]
 
 
+_CHROME_ONLY_NAMES = {
+    "system",
+    "minimize",
+    "maximize",
+    "restore",
+    "close",
+}
+
+
+def _meaningful_runtime_controls(controls: Iterable[str]) -> list[str]:
+    meaningful: list[str] = []
+    for raw in controls:
+        name = str(raw or "").strip()
+        key = name.lower()
+        if not name:
+            continue
+        if key in _CHROME_ONLY_NAMES or key.startswith("close "):
+            continue
+        meaningful.append(name)
+    return meaningful
+
+
+def meaningful_runtime_control_count(controls: Iterable[str], fallback: int = 0) -> int:
+    names = list(controls or [])
+    if not names:
+        return int(fallback or 0)
+    return len(_meaningful_runtime_controls(names))
+
+
 def classify_surface_runtime(
     *,
     app: str = "",
@@ -479,6 +508,7 @@ def classify_surface_runtime(
     graph = graph or {}
     controls = graph.get("controls") or []
     named = int(graph.get("named_control_count") or len(controls) or 0)
+    meaningful_named = meaningful_runtime_control_count(controls, named)
     control_count = int(graph.get("control_count") or 0)
     rect = app_rect or {}
     width = int(rect.get("width") or 0)
@@ -490,6 +520,7 @@ def classify_surface_runtime(
         "window_found": window_found,
         "uia_control_count": control_count,
         "named_control_count": named,
+        "meaningful_named_control_count": meaningful_named,
         "ocr_available": bool(ocr_available),
         "visual_word_count": word_count,
         "electron_hint": bool(electron_hint),
@@ -516,7 +547,7 @@ def classify_surface_runtime(
             evidence=evidence,
         )
 
-    if named > 0:
+    if meaningful_named > 0:
         return RuntimePlan(
             runtime=SurfaceRuntime.uia_sparse,
             confidence=0.78,

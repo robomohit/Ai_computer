@@ -176,6 +176,22 @@ def test_classify_surface_runtime_detects_custom_surface_when_ocr_probe_empty():
     assert plan.evidence["visual_word_count"] == 0
 
 
+def test_classify_surface_runtime_ignores_chrome_only_controls():
+    graph = build_affordance_graph(app="CanvasGame", count=4, controls=["System"])
+
+    plan = classify_surface_runtime(
+        app="CanvasGame",
+        graph=graph,
+        app_rect={"left": 0, "top": 0, "width": 900, "height": 600},
+        ocr_available=True,
+        visual_word_count=0,
+    )
+
+    assert plan.runtime == SurfaceRuntime.custom_rendered
+    assert plan.evidence["named_control_count"] == 1
+    assert plan.evidence["meaningful_named_control_count"] == 0
+
+
 def test_classify_surface_runtime_uses_ocr_when_probe_not_run():
     graph = build_affordance_graph(app="Canvas", count=0, controls=[])
 
@@ -414,7 +430,18 @@ def test_tool_executor_adaptive_observe_empty_ocr_marks_custom_surface(monkeypat
     monkeypatch.setattr(desktop_features, "foreground_window_info", lambda: {"title": "Game"})
     monkeypatch.setattr(desktop_features, "electron_hint_for_app", lambda app: None)
     monkeypatch.setattr(desktop_features, "ocr_available", lambda: True)
-    monkeypatch.setattr(desktop_features, "win_ocr_words", lambda l, t, w, h: [])
+    monkeypatch.setattr(
+        desktop_features,
+        "app_content_rect",
+        lambda app: {"left": 10, "top": 40, "width": 1200, "height": 680},
+    )
+    ocr_regions = []
+
+    def fake_ocr(left, top, width, height):
+        ocr_regions.append((left, top, width, height))
+        return []
+
+    monkeypatch.setattr(desktop_features, "win_ocr_words", fake_ocr)
     monkeypatch.setattr(
         ToolExecutor,
         "_app_rect_payload",
@@ -432,6 +459,54 @@ def test_tool_executor_adaptive_observe_empty_ocr_marks_custom_surface(monkeypat
     assert result.data["runtime"]["runtime"] == SurfaceRuntime.custom_rendered.value
     assert result.data["runtime"]["primary_layer"] == "keyboard_visual"
     assert result.data["runtime"]["evidence"]["visual_word_count"] == 0
+    assert ocr_regions == [(10, 40, 1200, 680)]
+
+
+def test_tool_executor_adaptive_observe_chrome_only_controls_run_ocr(monkeypatch, workspace):
+    import app.widget.desktop_features as desktop_features
+
+    monkeypatch.setattr(
+        desktop_features,
+        "survey_app_controls",
+        lambda app, cap=90, max_names=60, fallback_foreground=False: {
+            "count": 9,
+            "controls": ["System"],
+        },
+    )
+    monkeypatch.setattr(desktop_features, "foreground_window_info", lambda: {"title": "Game"})
+    monkeypatch.setattr(desktop_features, "electron_hint_for_app", lambda app: None)
+    monkeypatch.setattr(desktop_features, "ocr_available", lambda: True)
+    monkeypatch.setattr(
+        desktop_features,
+        "app_content_rect",
+        lambda app: {"left": 10, "top": 40, "width": 1200, "height": 680},
+    )
+    ocr_regions = []
+
+    def fake_ocr(left, top, width, height):
+        ocr_regions.append((left, top, width, height))
+        return []
+
+    monkeypatch.setattr(desktop_features, "win_ocr_words", fake_ocr)
+    monkeypatch.setattr(
+        ToolExecutor,
+        "_app_rect_payload",
+        staticmethod(lambda app: {"left": 0, "top": 0, "width": 1280, "height": 720}),
+    )
+    monkeypatch.setattr(
+        ToolExecutor,
+        "wait_for_window",
+        lambda self, title, timeout=10.0, paint_seconds=0.35: ToolResult(ok=False, output="missing"),
+    )
+
+    result = ToolExecutor(workspace).adaptive_observe("Game")
+
+    assert result.ok is True
+    assert result.data["graph"]["named_control_count"] == 1
+    assert result.data["runtime"]["runtime"] == SurfaceRuntime.custom_rendered.value
+    assert result.data["runtime"]["evidence"]["meaningful_named_control_count"] == 0
+    assert result.data["runtime"]["evidence"]["visual_word_count"] == 0
+    assert ocr_regions == [(10, 40, 1200, 680)]
 
 
 def test_tool_executor_adaptive_observe_recovers_after_focus_resurvey(monkeypatch, workspace):

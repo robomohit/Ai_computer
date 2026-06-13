@@ -2,6 +2,7 @@ from __future__ import annotations
 
 import os
 import json
+import sys
 from pathlib import Path
 
 from app.models import ToolResult
@@ -86,14 +87,30 @@ def test_run_canaries_supports_hard_ui_runners(monkeypatch, tmp_path):
             "affordance_maps": 1,
         }
 
+    def fake_custom_surface(workspace: Path):
+        return {
+            "name": "custom_surface",
+            "ok": True,
+            "duration_s": 0.4,
+            "steps": [{"name": "map_custom_surface", "ok": True}],
+            "failed_steps": [],
+            "control_layers": ["Adaptive UIA map"],
+            "affordance_maps": 1,
+        }
+
     monkeypatch.setattr(canary, "run_settings_canary", fake_settings)
     monkeypatch.setattr(canary, "run_discord_canary", fake_discord)
+    monkeypatch.setattr(canary, "run_custom_surface_canary", fake_custom_surface)
 
-    report = canary.run_canaries(["settings", "discord"], tmp_path)
+    report = canary.run_canaries(["settings", "discord", "custom_surface"], tmp_path)
 
     assert report["summary"]["ok"] is True
-    assert report["summary"]["passed"] == 2
-    assert [result["name"] for result in report["results"]] == ["settings", "discord"]
+    assert report["summary"]["passed"] == 3
+    assert [result["name"] for result in report["results"]] == [
+        "settings",
+        "discord",
+        "custom_surface",
+    ]
 
 
 def test_adaptive_map_step_redacts_control_labels():
@@ -123,6 +140,32 @@ def test_adaptive_map_step_redacts_control_labels():
     assert step["data"]["graph"]["named_control_count"] == 1
     assert step["data"]["runtime"]["runtime"] == "uia_sparse"
     assert "secret" not in json.dumps(step).lower()
+
+
+def test_optional_window_probe_step_keeps_title_miss_diagnostic():
+    result = ToolResult(ok=False, output="Timed out waiting for a visible window matching 'Discord'.")
+
+    step = canary._optional_window_probe_step("wait_for_discord", lambda: result)
+
+    assert step["ok"] is True
+    assert step["diagnostic_ok"] is False
+    assert "diagnostic window probe did not match" in step["output"]
+
+
+def test_running_process_exe_falls_back_without_psutil(monkeypatch):
+    monkeypatch.setitem(sys.modules, "psutil", None)
+
+    def fake_run(cmd, **kwargs):
+        return canary.subprocess.CompletedProcess(
+            cmd,
+            0,
+            stdout=r"C:\Users\mohit\AppData\Local\Discord\app-1.0.9240\Discord.exe" + "\n",
+            stderr="",
+        )
+
+    monkeypatch.setattr(canary.subprocess, "run", fake_run)
+
+    assert canary._running_process_exe("Discord.exe").endswith("Discord.exe")
 
 
 def test_canary_result_flags_failed_steps():

@@ -1371,7 +1371,11 @@ def app_window_rect(app_hint: str, *, fallback_foreground: bool = False) -> dict
         return {"left": 0, "top": 0, "width": 0, "height": 0}
     _ensure_uia_config(uia)
     try:
-        top = _uia_root(app_hint, fallback_foreground=fallback_foreground) if (app_hint or fallback_foreground) else None
+        top = (
+            _uia_root(app_hint, fallback_foreground=fallback_foreground)
+            if (app_hint or fallback_foreground)
+            else None
+        )
         if top is None:
             return {"left": 0, "top": 0, "width": 0, "height": 0}
         # Prefer DWM's visible bounds so the glow hugs the real window edge
@@ -1381,6 +1385,56 @@ def app_window_rect(app_hint: str, *, fallback_foreground: bool = False) -> dict
         if vis is not None:
             return vis
         return _onscreen_rect(top)
+    except Exception:
+        return {"left": 0, "top": 0, "width": 0, "height": 0}
+
+
+def _client_rect_for_hwnd(hwnd: int) -> Optional[dict]:
+    """Client/content area for a top-level HWND in screen coordinates."""
+    if not hwnd:
+        return None
+    try:
+        rect = wintypes.RECT()
+        if not ctypes.windll.user32.GetClientRect(wintypes.HWND(hwnd), ctypes.byref(rect)):
+            return None
+        pt = wintypes.POINT(0, 0)
+        if not ctypes.windll.user32.ClientToScreen(wintypes.HWND(hwnd), ctypes.byref(pt)):
+            return None
+        width = int(rect.right - rect.left)
+        height = int(rect.bottom - rect.top)
+        if width > 0 and height > 0:
+            return {
+                "left": int(pt.x),
+                "top": int(pt.y),
+                "width": width,
+                "height": height,
+            }
+    except Exception:
+        pass
+    return None
+
+
+def app_content_rect(app_hint: str, *, fallback_foreground: bool = False) -> dict:
+    """Client/content bounds for OCR/runtime probing.
+
+    Unlike app_window_rect, this excludes standard title bars and borders. That
+    matters for blank canvas/game surfaces: their title text should not make the
+    runtime classifier believe the rendered app content has OCR-readable text.
+    """
+    try:
+        import uiautomation as uia  # noqa: F401
+    except ImportError:
+        return {"left": 0, "top": 0, "width": 0, "height": 0}
+    _ensure_uia_config(uia)
+    try:
+        top = _uia_root(app_hint, fallback_foreground=fallback_foreground) if (app_hint or fallback_foreground) else None
+        if top is None:
+            return {"left": 0, "top": 0, "width": 0, "height": 0}
+        hwnd = int(getattr(top, "NativeWindowHandle", 0) or 0)
+        client = _client_rect_for_hwnd(hwnd)
+        if client is not None:
+            return client
+        return app_window_rect(app_hint, fallback_foreground=fallback_foreground)
     except Exception:
         return {"left": 0, "top": 0, "width": 0, "height": 0}
 

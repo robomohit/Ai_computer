@@ -2657,8 +2657,10 @@ class ToolExecutor:
                 format_affordance_graph,
                 format_recovery_plan,
                 format_runtime_plan,
+                meaningful_runtime_control_count,
             )
             from .widget.desktop_features import (
+                app_content_rect,
                 electron_hint_for_app,
                 foreground_window_info,
                 ocr_available,
@@ -2735,13 +2737,20 @@ class ToolExecutor:
         except Exception:
             ocr_ready = False
         visual_word_count = None
-        if graph["named_control_count"] == 0 and app_rect and ocr_ready:
+        meaningful_named = meaningful_runtime_control_count(
+            survey.get("controls") or [],
+            graph["named_control_count"],
+        )
+        if meaningful_named == 0 and app_rect and ocr_ready:
             try:
+                ocr_rect = app_content_rect(observed_app)
+                if not int(ocr_rect.get("width") or 0):
+                    ocr_rect = app_rect
                 words = win_ocr_words(
-                    int(app_rect["left"]),
-                    int(app_rect["top"]),
-                    int(app_rect["width"]),
-                    int(app_rect["height"]),
+                    int(ocr_rect["left"]),
+                    int(ocr_rect["top"]),
+                    int(ocr_rect["width"]),
+                    int(ocr_rect["height"]),
                 )
                 visual_word_count = len(words or [])
             except Exception:
