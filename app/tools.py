@@ -3593,7 +3593,11 @@ class ToolExecutor:
                 pass
             if not values:
                 return None
-            return any(needle in val for val in values)
+            def _normalize_readback(value: str) -> str:
+                return str(value).replace("\r\n", "\n").replace("\r", "\n")
+
+            needle = _normalize_readback(needle)
+            return any(needle in _normalize_readback(val) for val in values)
         except Exception:
             return None
 

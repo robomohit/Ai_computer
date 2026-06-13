@@ -702,6 +702,31 @@ def test_verify_typed_reads_legacy_accessible_value(monkeypatch, workspace):
     assert ToolExecutor(workspace)._verify_typed("Text editor", "Notepad", "hello") is True
 
 
+def test_verify_typed_normalizes_windows_editor_line_endings(monkeypatch, workspace):
+    import app.widget.desktop_features as desktop_features
+
+    class LegacyPattern:
+        Value = "first line\rsecond line\r"
+
+    class Ctrl:
+        def GetValuePattern(self):
+            raise RuntimeError("no value pattern")
+
+        def GetLegacyIAccessiblePattern(self):
+            return LegacyPattern()
+
+        def GetTextPattern(self):
+            raise RuntimeError("no text pattern")
+
+    monkeypatch.setattr(
+        desktop_features,
+        "_find_uia_control",
+        lambda query, app: (Ctrl(), {"name": "Text editor"}),
+    )
+
+    assert ToolExecutor(workspace)._verify_typed("Text editor", "Notepad", "first line\nsecond line") is True
+
+
 def test_verify_typed_returns_false_when_readback_contradicts(monkeypatch, workspace):
     import app.widget.desktop_features as desktop_features
 

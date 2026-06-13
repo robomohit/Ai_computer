@@ -1256,34 +1256,11 @@ def _find_uia_control(query: str, app_hint: str = ""):
                       "error": "uiautomation not installed (pip install uiautomation)"}
     _ensure_uia_config(uia)
     try:
-        root = _uia_root(app_hint)
+        roots = _uia_root_candidates(app_hint)
+        if not roots:
+            roots = []
 
-        # â”€â”€ Fast path: native exact-name FindFirst (runs in UIA's C++ core,
-        # ~2x faster than the Python walk below). The walk also early-exits on
-        # the first exact (score-100) hit, so this returns the same control â€”
-        # just quicker. maxSearchSeconds=0 = a single immediate search, so a
-        # miss returns fast and falls through to the scored walk (which handles
-        # fuzzy / AutomationId / role matches). Skipped for chrome/titlebar
-        # names so we never grab the window's Close over a real "Close" button.
         q = (query or "").strip()
-        if root is not None and q and not _is_chrome_control(q):
-            try:
-                fast = root.Control(searchDepth=0xFFFFFFFF, Name=q)
-                if fast.Exists(maxSearchSeconds=0, searchIntervalSeconds=0):
-                    r = fast.BoundingRectangle
-                    has_rect = r.right > r.left and r.bottom > r.top
-                    return fast, {
-                        "name": fast.Name or "",
-                        "automation_id": fast.AutomationId or "",
-                        "control_type": fast.ControlTypeName or "",
-                        "x": (r.left + r.right) // 2 if has_rect else 0,
-                        "y": (r.top + r.bottom) // 2 if has_rect else 0,
-                        "score": 100,
-                        "offscreen": not has_rect,
-                    }
-            except Exception:
-                pass
-
         best = [0, None, None]  # score, ctrl, info (mutable for early-exit)
 
         def walk(ctrl, depth=0):
@@ -1324,7 +1301,35 @@ def _find_uia_control(query: str, app_hint: str = ""):
             except Exception:
                 pass
 
-        walk(root)
+        for root in roots[:3]:
+            if root is None:
+                continue
+            # Fast path: native exact-name FindFirst (runs in UIA's C++ core,
+            # ~2x faster than the Python walk below). maxSearchSeconds=0 = a
+            # single immediate search, so a miss returns fast and falls through
+            # to the scored walk. Try each ranked root because WinUI apps can
+            # expose a stale/tab-frame root before the live document root.
+            if q and not _is_chrome_control(q):
+                try:
+                    fast = root.Control(searchDepth=0xFFFFFFFF, Name=q)
+                    if fast.Exists(maxSearchSeconds=0, searchIntervalSeconds=0):
+                        r = fast.BoundingRectangle
+                        has_rect = r.right > r.left and r.bottom > r.top
+                        return fast, {
+                            "name": fast.Name or "",
+                            "automation_id": fast.AutomationId or "",
+                            "control_type": fast.ControlTypeName or "",
+                            "x": (r.left + r.right) // 2 if has_rect else 0,
+                            "y": (r.top + r.bottom) // 2 if has_rect else 0,
+                            "score": 100,
+                            "offscreen": not has_rect,
+                        }
+                except Exception:
+                    pass
+            walk(root)
+            if best[0] >= 100:
+                break
+
         if best[1] is None:
             return None, {"ok": False, "error": f"no UIA control matched '{query}'"}
         return best[1], best[2]

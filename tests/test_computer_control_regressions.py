@@ -1805,6 +1805,54 @@ def test_uia_type_skips_background_setvalue_for_document_controls(monkeypatch):
     assert ("ctrl", "v") in calls["hotkey"]
 
 
+def test_find_uia_control_searches_later_ranked_roots(monkeypatch):
+    """WinUI apps can expose a stale frame before the live document root.
+    The write resolver should fall through just like the read resolver."""
+    import app.widget.desktop_features as df
+
+    class _Rect:
+        left = 10
+        top = 20
+        right = 210
+        bottom = 120
+
+    class _Missing:
+        def Exists(self, *args, **kwargs):
+            return False
+
+    class _Ctrl:
+        AutomationId = ""
+        IsOffscreen = False
+
+        def __init__(self, name, control_type="ButtonControl", children=None):
+            self.Name = name
+            self.ControlTypeName = control_type
+            self._children = children or []
+
+        @property
+        def BoundingRectangle(self):
+            return _Rect()
+
+        def GetChildren(self):
+            return self._children
+
+        def Control(self, *args, **kwargs):
+            return _Missing()
+
+    stale_root = _Ctrl("Notepad", "WindowControl", [_Ctrl("File")])
+    editor = _Ctrl("Text editor", "DocumentControl")
+    live_root = _Ctrl("Notepad", "WindowControl", [editor])
+
+    monkeypatch.setitem(sys.modules, "uiautomation", types.SimpleNamespace())
+    monkeypatch.setattr(df, "_ensure_uia_config", lambda uia: None)
+    monkeypatch.setattr(df, "_uia_root_candidates", lambda app_hint: [stale_root, live_root])
+
+    ctrl, info = df._find_uia_control("Text editor", "Notepad")
+
+    assert ctrl is editor
+    assert info["control_type"] == "DocumentControl"
+
+
 def test_uia_type_falls_back_to_paste_when_setvalue_lies(monkeypatch):
     """A React-style input that accepts SetValue into the DOM but desyncs app
     state is detected by the read-back and falls through to focus+paste."""
