@@ -390,6 +390,68 @@ async def test_tool_executor_adaptive_observe_maps_controls(monkeypatch, workspa
     assert result.data["graph"]["groups"]["command"] == ["Save"]
 
 
+def test_tool_executor_adaptive_observe_reuses_recent_map(monkeypatch, workspace):
+    import app.widget.desktop_features as desktop_features
+
+    calls = {"survey": 0}
+
+    def fake_survey(app, cap=90, max_names=60, fallback_foreground=False):
+        calls["survey"] += 1
+        return {
+            "count": 3,
+            "controls": ["Search", "Save"],
+        }
+
+    monkeypatch.setattr(desktop_features, "survey_app_controls", fake_survey)
+    monkeypatch.setattr(desktop_features, "foreground_window_info", lambda: {"title": "Notepad"})
+    monkeypatch.setattr(desktop_features, "electron_hint_for_app", lambda app: None)
+    monkeypatch.setattr(desktop_features, "ocr_available", lambda: True)
+    monkeypatch.setattr(
+        ToolExecutor,
+        "_app_rect_payload",
+        staticmethod(lambda app: {"left": 0, "top": 0, "width": 640, "height": 480}),
+    )
+
+    tools = ToolExecutor(workspace)
+    first = tools.adaptive_observe("Notepad", cap=120)
+    second = tools.adaptive_observe("Notepad", cap=120)
+
+    assert first.ok is True
+    assert second.ok is True
+    assert calls["survey"] == 1
+    assert second.data["cache"]["hit"] is True
+    assert second.data["graph"]["named_control_count"] == 2
+
+
+def test_tool_executor_adaptive_observe_cache_respects_cap(monkeypatch, workspace):
+    import app.widget.desktop_features as desktop_features
+
+    calls = {"survey": 0}
+
+    def fake_survey(app, cap=90, max_names=60, fallback_foreground=False):
+        calls["survey"] += 1
+        return {
+            "count": cap,
+            "controls": [f"Search {cap}"],
+        }
+
+    monkeypatch.setattr(desktop_features, "survey_app_controls", fake_survey)
+    monkeypatch.setattr(desktop_features, "foreground_window_info", lambda: {"title": "Notepad"})
+    monkeypatch.setattr(desktop_features, "electron_hint_for_app", lambda app: None)
+    monkeypatch.setattr(desktop_features, "ocr_available", lambda: True)
+    monkeypatch.setattr(
+        ToolExecutor,
+        "_app_rect_payload",
+        staticmethod(lambda app: {"left": 0, "top": 0, "width": 640, "height": 480}),
+    )
+
+    tools = ToolExecutor(workspace)
+    tools.adaptive_observe("Notepad", cap=120)
+    tools.adaptive_observe("Notepad", cap=160)
+
+    assert calls["survey"] == 2
+
+
 def test_tool_executor_adaptive_observe_empty_tree_adds_recovery_plan(monkeypatch, workspace):
     import app.widget.desktop_features as desktop_features
 
@@ -515,6 +577,59 @@ def test_tool_executor_adaptive_observe_chrome_only_controls_run_ocr(monkeypatch
     assert result.data["runtime"]["evidence"]["visual_word_count"] == 0
     assert activated == [42]
     assert ocr_regions == [(10, 40, 1200, 680)]
+
+
+def test_tool_executor_adaptive_observe_ignores_occluded_ocr(monkeypatch, workspace):
+    import app.widget.desktop_features as desktop_features
+
+    monkeypatch.setattr(
+        desktop_features,
+        "survey_app_controls",
+        lambda app, cap=90, max_names=60, fallback_foreground=False: {
+            "count": 9,
+            "controls": ["System"],
+        },
+    )
+    monkeypatch.setattr(
+        desktop_features,
+        "foreground_window_info",
+        lambda: {
+            "hwnd": 99,
+            "title": "Other app",
+            "rect": {"left": 0, "top": 0, "width": 1280, "height": 720},
+        },
+    )
+    monkeypatch.setattr(desktop_features, "electron_hint_for_app", lambda app: None)
+    monkeypatch.setattr(desktop_features, "ocr_available", lambda: True)
+    monkeypatch.setattr(
+        desktop_features,
+        "app_content_rect",
+        lambda app: {"left": 10, "top": 40, "width": 1200, "height": 680},
+    )
+    monkeypatch.setattr(
+        desktop_features,
+        "win_ocr_words",
+        lambda *args: (_ for _ in ()).throw(AssertionError("OCR should be skipped")),
+    )
+    monkeypatch.setattr(
+        ToolExecutor,
+        "_app_rect_payload",
+        staticmethod(lambda app: {"left": 0, "top": 0, "width": 1280, "height": 720}),
+    )
+    monkeypatch.setattr(ToolExecutor, "resolve_isolated_hwnd", lambda self: 42)
+    monkeypatch.setattr(ToolExecutor, "_activate_hwnd", lambda self, hwnd: (False, "Game"))
+    monkeypatch.setattr(
+        ToolExecutor,
+        "wait_for_window",
+        lambda self, title, timeout=10.0, paint_seconds=0.35: ToolResult(ok=False, output="missing"),
+    )
+
+    result = ToolExecutor(workspace).adaptive_observe("Game")
+
+    assert result.ok is True
+    assert result.data["runtime"]["runtime"] == SurfaceRuntime.custom_rendered.value
+    assert result.data["runtime"]["evidence"]["visual_word_count"] == 0
+    assert result.data["runtime"]["evidence"]["ocr_probe_occluded"] is True
 
 
 def test_tool_executor_adaptive_observe_recovers_after_focus_resurvey(monkeypatch, workspace):

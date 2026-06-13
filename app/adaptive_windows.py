@@ -523,6 +523,7 @@ def classify_surface_runtime(
         "meaningful_named_control_count": meaningful_named,
         "ocr_available": bool(ocr_available),
         "visual_word_count": word_count,
+        "ocr_probe_occluded": bool(graph.get("ocr_probe_occluded")),
         "electron_hint": bool(electron_hint),
         "model_vision": bool(model_vision),
     }

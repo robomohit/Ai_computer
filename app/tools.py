@@ -5,6 +5,7 @@ import time
 import subprocess
 import os
 import base64
+import copy
 import io
 import shutil
 import re
@@ -36,6 +37,7 @@ import logging
 
 _log = logging.getLogger(__name__)
 _PROCESS_QUERY_LIMITED_INFORMATION = 0x1000
+_ADAPTIVE_OBSERVE_CACHE_TTL_S = 4.0
 
 
 def _basename_lower(path: str) -> str:
@@ -60,6 +62,25 @@ def _process_exe_for_pid(pid: Optional[int]) -> str:
     except Exception:
         return ""
     return ""
+
+
+def _rect_overlap_ratio(base: dict[str, Any], other: dict[str, Any]) -> float:
+    try:
+        left = max(int(base.get("left") or 0), int(other.get("left") or 0))
+        top = max(int(base.get("top") or 0), int(other.get("top") or 0))
+        right = min(
+            int(base.get("left") or 0) + int(base.get("width") or 0),
+            int(other.get("left") or 0) + int(other.get("width") or 0),
+        )
+        bottom = min(
+            int(base.get("top") or 0) + int(base.get("height") or 0),
+            int(other.get("top") or 0) + int(other.get("height") or 0),
+        )
+        overlap = max(0, right - left) * max(0, bottom - top)
+        area = max(1, int(base.get("width") or 0) * int(base.get("height") or 0))
+        return overlap / area
+    except Exception:
+        return 0.0
 
 # Pre-click pointer overlay — off by default. Set ORYNN_POINTER_OVERLAY=1
 # to make desktop clicks "watchable": a ring flashes at the target before the
@@ -430,6 +451,7 @@ class ToolExecutor:
         self._isolated_app = None
         self._started_pids: set[int] = set()
         self._plugin_session_id = f"tools-{id(self)}"
+        self._adaptive_observe_cache: dict[str, dict[str, Any]] = {}
 
     @property
     def allowed_roots(self) -> tuple[Path, ...]:
@@ -565,6 +587,56 @@ class ToolExecutor:
                 self._started_pids.add(int(pid))
         except Exception:
             return
+
+    def _adaptive_observe_cache_key(self, app: str, cap: int) -> str:
+        fg_hwnd = 0
+        try:
+            if win32gui is not None:
+                fg_hwnd = int(win32gui.GetForegroundWindow() or 0)
+        except Exception:
+            fg_hwnd = 0
+        isolated = 0
+        try:
+            isolated = int(self.resolve_isolated_hwnd() or 0)
+        except Exception:
+            isolated = 0
+        return json.dumps(
+            {
+                "app": str(app or "").strip().casefold(),
+                "cap": int(cap or 0),
+                "foreground_hwnd": fg_hwnd,
+                "isolated_hwnd": isolated,
+            },
+            sort_keys=True,
+        )
+
+    def _cached_adaptive_observe(self, key: str) -> Optional[ToolResult]:
+        cached = self._adaptive_observe_cache.get(key)
+        if not cached:
+            return None
+        now = time.time()
+        if now >= float(cached.get("expires_at") or 0):
+            self._adaptive_observe_cache.pop(key, None)
+            return None
+        data = copy.deepcopy(cached.get("data") or {})
+        data["cache"] = {
+            "hit": True,
+            "age_s": round(now - float(cached.get("created_at") or now), 3),
+            "ttl_s": _ADAPTIVE_OBSERVE_CACHE_TTL_S,
+        }
+        output = str(cached.get("output") or "")
+        return ToolResult(ok=True, output=output + "\nAdaptive observe cache hit.", data=data)
+
+    def _remember_adaptive_observe(self, key: str, result: ToolResult) -> None:
+        if not result.ok or not isinstance(result.data, dict):
+            return
+        now = time.time()
+        self._adaptive_observe_cache[key] = {
+            "created_at": now,
+            "expires_at": now + _ADAPTIVE_OBSERVE_CACHE_TTL_S,
+            "output": result.output,
+            "data": copy.deepcopy(result.data),
+        }
 
     def _activate_hwnd(self, hwnd: int) -> tuple[bool, str]:
         """Best-effort foreground activation for real screen/OCR paths."""
@@ -2739,6 +2811,11 @@ class ToolExecutor:
             cap_i = max(20, min(240, int(cap or 90)))
         except Exception:
             cap_i = 90
+        cache_key = self._adaptive_observe_cache_key(app_hint, cap_i)
+        cached = self._cached_adaptive_observe(cache_key)
+        if cached is not None:
+            return cached
+
         def _survey_once(fallback_foreground: bool = False) -> Dict[str, Any]:
             try:
                 return survey_app_controls(
@@ -2807,22 +2884,36 @@ class ToolExecutor:
         )
         if meaningful_named == 0 and app_rect and ocr_ready:
             try:
+                target_hwnd = None
                 try:
-                    hwnd = self.resolve_isolated_hwnd() or self._get_hwnd_for_title(observed_app)
-                    if hwnd:
-                        self._activate_hwnd(int(hwnd))
+                    target_hwnd = self.resolve_isolated_hwnd() or self._get_hwnd_for_title(observed_app)
+                    if target_hwnd:
+                        self._activate_hwnd(int(target_hwnd))
                 except Exception:
                     pass
                 ocr_rect = app_content_rect(observed_app)
                 if not int(ocr_rect.get("width") or 0):
                     ocr_rect = app_rect
-                words = win_ocr_words(
-                    int(ocr_rect["left"]),
-                    int(ocr_rect["top"]),
-                    int(ocr_rect["width"]),
-                    int(ocr_rect["height"]),
-                )
-                visual_word_count = len(words or [])
+                ocr_occluded = False
+                try:
+                    fg_info = foreground_window_info()
+                    fg_hwnd = int((fg_info or {}).get("hwnd") or 0)
+                    fg_rect = (fg_info or {}).get("rect") or {}
+                    if target_hwnd and fg_hwnd and fg_hwnd != int(target_hwnd):
+                        ocr_occluded = _rect_overlap_ratio(ocr_rect, fg_rect) >= 0.25
+                except Exception:
+                    ocr_occluded = False
+                if ocr_occluded:
+                    graph["ocr_probe_occluded"] = True
+                    visual_word_count = 0
+                else:
+                    words = win_ocr_words(
+                        int(ocr_rect["left"]),
+                        int(ocr_rect["top"]),
+                        int(ocr_rect["width"]),
+                        int(ocr_rect["height"]),
+                    )
+                    visual_word_count = len(words or [])
             except Exception:
                 visual_word_count = None
         runtime_plan = classify_surface_runtime(
@@ -2868,7 +2959,12 @@ class ToolExecutor:
             )
             data["adaptive"] = analysis.to_dict()
             output += "\n" + format_recovery_plan(analysis)
-        return ToolResult(ok=True, output=output + self._app_rect_token(observed_app, app_rect), data=data)
+        result = ToolResult(ok=True, output=output + self._app_rect_token(observed_app, app_rect), data=data)
+        self._remember_adaptive_observe(cache_key, result)
+        resolved_cache_key = self._adaptive_observe_cache_key(observed_app, cap_i)
+        if resolved_cache_key != cache_key:
+            self._remember_adaptive_observe(resolved_cache_key, result)
+        return result
 
     # ── Hybrid resolver fallbacks: UIA -> OCR pixel (local, no model) -> the
     #    agent escalates to the vision model only if both miss. ──────────────
