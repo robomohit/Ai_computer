@@ -38,6 +38,7 @@ import logging
 _log = logging.getLogger(__name__)
 _PROCESS_QUERY_LIMITED_INFORMATION = 0x1000
 _ADAPTIVE_OBSERVE_CACHE_TTL_S = 4.0
+_UIA_FIND_CACHE_TTL_S = 2.0
 
 
 def _basename_lower(path: str) -> str:
@@ -452,6 +453,7 @@ class ToolExecutor:
         self._started_pids: set[int] = set()
         self._plugin_session_id = f"tools-{id(self)}"
         self._adaptive_observe_cache: dict[str, dict[str, Any]] = {}
+        self._uia_find_cache: dict[str, dict[str, Any]] = {}
 
     @property
     def allowed_roots(self) -> tuple[Path, ...]:
@@ -589,6 +591,19 @@ class ToolExecutor:
             return
 
     def _adaptive_observe_cache_key(self, app: str, cap: int) -> str:
+        return self._window_scoped_cache_key({"app": str(app or "").strip().casefold(), "cap": int(cap or 0)})
+
+    def _uia_find_cache_key(self, query: str, app: str, limit: int) -> str:
+        return self._window_scoped_cache_key(
+            {
+                "tool": "uia_find",
+                "query": str(query or "").strip().casefold(),
+                "app": str(app or "").strip().casefold(),
+                "limit": int(limit or 0),
+            }
+        )
+
+    def _window_scoped_cache_key(self, payload: dict[str, Any]) -> str:
         fg_hwnd = 0
         try:
             if win32gui is not None:
@@ -600,13 +615,11 @@ class ToolExecutor:
             isolated = int(self.resolve_isolated_hwnd() or 0)
         except Exception:
             isolated = 0
+        scoped = dict(payload)
+        scoped["foreground_hwnd"] = fg_hwnd
+        scoped["isolated_hwnd"] = isolated
         return json.dumps(
-            {
-                "app": str(app or "").strip().casefold(),
-                "cap": int(cap or 0),
-                "foreground_hwnd": fg_hwnd,
-                "isolated_hwnd": isolated,
-            },
+            scoped,
             sort_keys=True,
         )
 
@@ -637,6 +650,40 @@ class ToolExecutor:
             "output": result.output,
             "data": copy.deepcopy(result.data),
         }
+
+    def _cached_uia_find(self, key: str) -> Optional[ToolResult]:
+        cached = self._uia_find_cache.get(key)
+        if not cached:
+            return None
+        now = time.time()
+        if now >= float(cached.get("expires_at") or 0):
+            self._uia_find_cache.pop(key, None)
+            return None
+        data = copy.deepcopy(cached.get("data") or {})
+        data["cache"] = {
+            "hit": True,
+            "age_s": round(now - float(cached.get("created_at") or now), 3),
+            "ttl_s": _UIA_FIND_CACHE_TTL_S,
+        }
+        return ToolResult(
+            ok=True,
+            output=str(cached.get("output") or "") + "\nUIA find cache hit.",
+            data=data,
+        )
+
+    def _remember_uia_find(self, key: str, result: ToolResult) -> None:
+        if not result.ok or not isinstance(result.data, dict):
+            return
+        now = time.time()
+        self._uia_find_cache[key] = {
+            "created_at": now,
+            "expires_at": now + _UIA_FIND_CACHE_TTL_S,
+            "output": result.output,
+            "data": copy.deepcopy(result.data),
+        }
+
+    def _clear_uia_find_cache(self) -> None:
+        self._uia_find_cache.clear()
 
     def _activate_hwnd(self, hwnd: int) -> tuple[bool, str]:
         """Best-effort foreground activation for real screen/OCR paths."""
@@ -2724,7 +2771,15 @@ class ToolExecutor:
 
     def uia_find(self, query: str, app: str = "", limit: int = 5):
         from .widget.desktop_features import find_ui_elements
-        res = find_ui_elements(query, app, limit)
+        try:
+            limit_i = max(1, int(limit or 5))
+        except Exception:
+            limit_i = 5
+        cache_key = self._uia_find_cache_key(query, app, limit_i)
+        cached = self._cached_uia_find(cache_key)
+        if cached is not None:
+            return cached
+        res = find_ui_elements(query, app, limit_i)
         if not res.get("ok"):
             # OCR fallback: the control isn't in the accessibility tree, but is
             # its TEXT visible on screen? Report its pixel location + layer.
@@ -2782,7 +2837,13 @@ class ToolExecutor:
             rect=rect,
             app_rect=app_rect,
         )
-        return ToolResult(ok=True, output="UIA matches:\n" + "\n".join(lines) + tok + self._app_rect_token(app, app_rect), data=data)
+        result = ToolResult(
+            ok=True,
+            output="UIA matches:\n" + "\n".join(lines) + tok + self._app_rect_token(app, app_rect),
+            data=data,
+        )
+        self._remember_uia_find(cache_key, result)
+        return result
 
     def adaptive_observe(self, app: str = "", cap: int = 90):
         try:
@@ -3366,6 +3427,7 @@ class ToolExecutor:
         targets = [str(t).strip() for t in (targets or []) if str(t).strip()]
         if not targets:
             return ToolResult(ok=False, output="uia_click_sequence: no targets given.")
+        self._clear_uia_find_cache()
         steps, clicked, failed = [], 0, None
         for tgt in targets:
             res = invoke_ui_element(tgt, app)
@@ -3456,6 +3518,7 @@ class ToolExecutor:
 
     def uia_click(self, query: str, app: str = ""):
         from .widget.desktop_features import invoke_ui_element
+        self._clear_uia_find_cache()
         before = self._click_snapshot()
         res = invoke_ui_element(query, app)
         if not res.get("ok"):
@@ -3509,6 +3572,7 @@ class ToolExecutor:
 
     def uia_type(self, query: str, text: str, app: str = "", clear_first: bool = False, submit: bool = False):
         from .widget.desktop_features import type_into_ui_element
+        self._clear_uia_find_cache()
         res = type_into_ui_element(query, text, app, clear_first, submit)
         if not res.get("ok"):
             # Auto-fallback: OCR-find the field, click to focus, then paste.
@@ -3566,38 +3630,45 @@ class ToolExecutor:
         False if a value read-back contradicts it, None if not verifiable."""
         try:
             from .widget.desktop_features import _find_uia_control
-            ctrl, _info = _find_uia_control(query, app)
-            if ctrl is None:
-                return None
             needle = str(text or "").strip()
             if not needle:
                 return None
-            values = []
-            for getter_name, value_attr in (
-                ("GetValuePattern", "Value"),
-                ("GetLegacyIAccessiblePattern", "Value"),
-            ):
-                try:
-                    pattern = getattr(ctrl, getter_name)()
-                    val = getattr(pattern, value_attr)
-                    if val is not None:
-                        values.append(str(val))
-                except Exception:
-                    pass
-            try:
-                pattern = ctrl.GetTextPattern()
-                val = pattern.DocumentRange.GetText(-1)
-                if val is not None:
-                    values.append(str(val))
-            except Exception:
-                pass
-            if not values:
-                return None
+
             def _normalize_readback(value: str) -> str:
                 return str(value).replace("\r\n", "\n").replace("\r", "\n")
 
             needle = _normalize_readback(needle)
-            return any(needle in _normalize_readback(val) for val in values)
+            deadline = time.time() + 1.0
+            saw_readback = False
+            while True:
+                ctrl, _info = _find_uia_control(query, app)
+                values = []
+                if ctrl is not None:
+                    for getter_name, value_attr in (
+                        ("GetValuePattern", "Value"),
+                        ("GetLegacyIAccessiblePattern", "Value"),
+                    ):
+                        try:
+                            pattern = getattr(ctrl, getter_name)()
+                            val = getattr(pattern, value_attr)
+                            if val is not None:
+                                values.append(str(val))
+                        except Exception:
+                            pass
+                    try:
+                        pattern = ctrl.GetTextPattern()
+                        val = pattern.DocumentRange.GetText(-1)
+                        if val is not None:
+                            values.append(str(val))
+                    except Exception:
+                        pass
+                if values:
+                    saw_readback = True
+                    if any(needle in _normalize_readback(val) for val in values):
+                        return True
+                if time.time() >= deadline:
+                    return False if saw_readback else None
+                time.sleep(0.08)
         except Exception:
             return None
 

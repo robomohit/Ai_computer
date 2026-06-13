@@ -489,6 +489,123 @@ def test_tool_executor_adaptive_observe_cache_respects_cap(monkeypatch, workspac
     assert calls["survey"] == 2
 
 
+def test_tool_executor_uia_find_reuses_recent_result(monkeypatch, workspace):
+    import app.widget.desktop_features as desktop_features
+
+    calls = {"find": 0}
+
+    def fake_find(query, app, limit):
+        calls["find"] += 1
+        return {
+            "ok": True,
+            "items": [{
+                "name": "Search",
+                "automation_id": "",
+                "control_type": "ComboBoxControl",
+                "left": 10,
+                "top": 20,
+                "x": 40,
+                "y": 50,
+                "width": 60,
+                "height": 30,
+                "score": 100,
+            }],
+        }
+
+    monkeypatch.setattr(desktop_features, "find_ui_elements", fake_find)
+    monkeypatch.setattr(ToolExecutor, "_app_rect_payload", staticmethod(lambda app: None))
+
+    tools = ToolExecutor(workspace)
+    first = tools.uia_find("Search", "Discord", limit=5)
+    second = tools.uia_find("Search", "Discord", limit=5)
+
+    assert first.ok is True
+    assert second.ok is True
+    assert calls["find"] == 1
+    assert second.data["cache"]["hit"] is True
+
+
+def test_tool_executor_uia_find_cache_respects_limit(monkeypatch, workspace):
+    import app.widget.desktop_features as desktop_features
+
+    calls = {"find": 0}
+
+    def fake_find(query, app, limit):
+        calls["find"] += 1
+        return {
+            "ok": True,
+            "items": [{
+                "name": f"Search {limit}",
+                "automation_id": "",
+                "control_type": "ComboBoxControl",
+                "left": 10,
+                "top": 20,
+                "x": 40,
+                "y": 50,
+                "width": 60,
+                "height": 30,
+                "score": 100,
+            }],
+        }
+
+    monkeypatch.setattr(desktop_features, "find_ui_elements", fake_find)
+    monkeypatch.setattr(ToolExecutor, "_app_rect_payload", staticmethod(lambda app: None))
+
+    tools = ToolExecutor(workspace)
+    tools.uia_find("Search", "Discord", limit=1)
+    tools.uia_find("Search", "Discord", limit=2)
+
+    assert calls["find"] == 2
+
+
+def test_tool_executor_uia_find_cache_clears_after_click(monkeypatch, workspace):
+    import app.widget.desktop_features as desktop_features
+
+    calls = {"find": 0}
+
+    def fake_find(query, app, limit):
+        calls["find"] += 1
+        return {
+            "ok": True,
+            "items": [{
+                "name": "Search",
+                "automation_id": "",
+                "control_type": "ComboBoxControl",
+                "left": 10,
+                "top": 20,
+                "x": 40,
+                "y": 50,
+                "width": 60,
+                "height": 30,
+                "score": 100,
+            }],
+        }
+
+    monkeypatch.setattr(desktop_features, "find_ui_elements", fake_find)
+    monkeypatch.setattr(
+        desktop_features,
+        "invoke_ui_element",
+        lambda query, app: {
+            "ok": True,
+            "method": "invoke_pattern",
+            "target": query,
+            "control_type": "ButtonControl",
+            "rect": {"left": 0, "top": 0, "width": 10, "height": 10},
+        },
+    )
+    monkeypatch.setattr(ToolExecutor, "_app_rect_payload", staticmethod(lambda app: None))
+    monkeypatch.setattr(ToolExecutor, "_click_snapshot", lambda self: {})
+    monkeypatch.setattr(ToolExecutor, "_verify_clicked", lambda self, before: True)
+
+    tools = ToolExecutor(workspace)
+    tools.uia_find("Search", "Discord", limit=5)
+    tools.uia_find("Search", "Discord", limit=5)
+    tools.uia_click("Open", "Discord")
+    tools.uia_find("Search", "Discord", limit=5)
+
+    assert calls["find"] == 2
+
+
 def test_tool_executor_adaptive_observe_empty_tree_adds_recovery_plan(monkeypatch, workspace):
     import app.widget.desktop_features as desktop_features
 
@@ -762,6 +879,37 @@ def test_verify_typed_normalizes_windows_editor_line_endings(monkeypatch, worksp
     )
 
     assert ToolExecutor(workspace)._verify_typed("Text editor", "Notepad", "first line\nsecond line") is True
+
+
+def test_verify_typed_waits_for_editor_readback_to_settle(monkeypatch, workspace):
+    import app.widget.desktop_features as desktop_features
+
+    calls = {"value": 0}
+
+    class LegacyPattern:
+        @property
+        def Value(self):
+            calls["value"] += 1
+            return "" if calls["value"] == 1 else "settled text"
+
+    class Ctrl:
+        def GetValuePattern(self):
+            raise RuntimeError("no value pattern")
+
+        def GetLegacyIAccessiblePattern(self):
+            return LegacyPattern()
+
+        def GetTextPattern(self):
+            raise RuntimeError("no text pattern")
+
+    monkeypatch.setattr(
+        desktop_features,
+        "_find_uia_control",
+        lambda query, app: (Ctrl(), {"name": "Text editor"}),
+    )
+
+    assert ToolExecutor(workspace)._verify_typed("Text editor", "Notepad", "settled text") is True
+    assert calls["value"] >= 2
 
 
 def test_verify_typed_returns_false_when_readback_contradicts(monkeypatch, workspace):
