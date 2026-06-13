@@ -1853,6 +1853,49 @@ def test_find_uia_control_searches_later_ranked_roots(monkeypatch):
     assert info["control_type"] == "DocumentControl"
 
 
+def test_find_ui_elements_uses_native_exact_lookup_before_tree_walk(monkeypatch):
+    """Deep Electron trees are slow to walk; an exact visible UIA name should
+    return from the native lookup without traversing every child."""
+    import app.widget.desktop_features as df
+
+    class _Rect:
+        left = 30
+        top = 40
+        right = 230
+        bottom = 80
+
+    class _FastCtrl:
+        Name = "Search"
+        AutomationId = ""
+        ControlTypeName = "ComboBoxControl"
+        IsOffscreen = False
+
+        @property
+        def BoundingRectangle(self):
+            return _Rect()
+
+        def Exists(self, *args, **kwargs):
+            return True
+
+    class _Root:
+        def Control(self, *args, **kwargs):
+            return _FastCtrl()
+
+        def GetChildren(self):
+            raise AssertionError("slow tree walk should not run")
+
+    monkeypatch.setitem(sys.modules, "uiautomation", types.SimpleNamespace())
+    monkeypatch.setattr(df, "_ensure_uia_config", lambda uia: None)
+    monkeypatch.setattr(df, "_uia_root_candidates", lambda app_hint, fallback_foreground=False: [_Root()])
+
+    res = df.find_ui_elements("Search", "Discord", limit=5)
+
+    assert res["ok"] is True
+    assert len(res["items"]) == 1
+    assert res["items"][0]["control_type"] == "ComboBoxControl"
+    assert res["items"][0]["score"] == 100
+
+
 def test_uia_type_falls_back_to_paste_when_setvalue_lies(monkeypatch):
     """A React-style input that accepts SetValue into the DOM but desyncs app
     state is detected by the read-back and falls through to focus+paste."""

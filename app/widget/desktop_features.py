@@ -826,9 +826,42 @@ def find_ui_elements(query: str, app_hint: str = "",
         if not roots:
             roots = _uia_root_candidates("", fallback_foreground=True)
 
+        def control_info(ctrl, score: int) -> dict:
+            rect = ctrl.BoundingRectangle
+            has_rect = rect.right > rect.left and rect.bottom > rect.top
+            try:
+                offscreen = bool(ctrl.IsOffscreen)
+            except Exception:
+                offscreen = False
+            return {
+                "name": ctrl.Name or "",
+                "automation_id": ctrl.AutomationId or "",
+                "control_type": ctrl.ControlTypeName or "",
+                "left": rect.left if has_rect else 0,
+                "top": rect.top if has_rect else 0,
+                "x": (rect.left + rect.right) // 2 if has_rect else 0,
+                "y": (rect.top + rect.bottom) // 2 if has_rect else 0,
+                "width": max(0, rect.right - rect.left),
+                "height": max(0, rect.bottom - rect.top),
+                "score": score,
+                "offscreen": offscreen or not has_rect,
+            }
+
         def search(root) -> list[tuple[int, dict]]:
             candidates: list[tuple[int, dict]] = []
             perfect = [0]  # count of exact (score==100) hits found so far
+
+            q = (query or "").strip()
+            if q and not _is_chrome_control(q):
+                try:
+                    fast = root.Control(searchDepth=0xFFFFFFFF, Name=q)
+                    if fast.Exists(maxSearchSeconds=0, searchIntervalSeconds=0):
+                        item = control_info(fast, 100)
+                        if not item["offscreen"]:
+                            return [(100, item)]
+                        candidates.append((92, item))
+                except Exception:
+                    pass
 
             def walk(ctrl, depth=0):
                 if depth > _UIA_MAX_DEPTH or perfect[0] >= limit:
@@ -842,32 +875,15 @@ def find_ui_elements(query: str, app_hint: str = "",
                     # would match substring queries and steal the real target.
                     score = _score_match(query, name, aid, role) if depth > 0 else 0
                     if score > 0:
-                        rect = ctrl.BoundingRectangle
-                        has_rect = rect.right > rect.left and rect.bottom > rect.top
                         # Electron/Chromium controls (Discord servers/channels) often
                         # report a 0x0 rect and IsOffscreen even when they're visible
                         # and clickable via Invoke/Select patterns. Keep them â€” just
                         # rank them below on-screen matches so a visible duplicate
                         # wins ties. uia_click scrolls them into view before acting.
-                        try:
-                            offscreen = bool(ctrl.IsOffscreen)
-                        except Exception:
-                            offscreen = False
-                        eff = score - (8 if (offscreen or not has_rect) else 0)
-                        candidates.append((eff, {
-                            "name": name,
-                            "automation_id": aid,
-                            "control_type": role,
-                            "left": rect.left if has_rect else 0,
-                            "top": rect.top if has_rect else 0,
-                            "x": (rect.left + rect.right) // 2 if has_rect else 0,
-                            "y": (rect.top + rect.bottom) // 2 if has_rect else 0,
-                            "width": max(0, rect.right - rect.left),
-                            "height": max(0, rect.bottom - rect.top),
-                            "score": score,
-                            "offscreen": offscreen or not has_rect,
-                        }))
-                        if score >= 100 and has_rect and not offscreen:
+                        item = control_info(ctrl, score)
+                        eff = score - (8 if item["offscreen"] else 0)
+                        candidates.append((eff, item))
+                        if score >= 100 and not item["offscreen"]:
                             perfect[0] += 1
                     for child in ctrl.GetChildren():
                         if perfect[0] >= limit:
