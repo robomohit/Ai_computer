@@ -465,6 +465,7 @@ def test_tool_executor_adaptive_observe_empty_ocr_marks_custom_surface(monkeypat
 def test_tool_executor_adaptive_observe_chrome_only_controls_run_ocr(monkeypatch, workspace):
     import app.widget.desktop_features as desktop_features
 
+    activated = []
     monkeypatch.setattr(
         desktop_features,
         "survey_app_controls",
@@ -493,6 +494,12 @@ def test_tool_executor_adaptive_observe_chrome_only_controls_run_ocr(monkeypatch
         "_app_rect_payload",
         staticmethod(lambda app: {"left": 0, "top": 0, "width": 1280, "height": 720}),
     )
+    monkeypatch.setattr(ToolExecutor, "resolve_isolated_hwnd", lambda self: 42)
+    monkeypatch.setattr(
+        ToolExecutor,
+        "_activate_hwnd",
+        lambda self, hwnd: (activated.append(hwnd) or (True, "Game")),
+    )
     monkeypatch.setattr(
         ToolExecutor,
         "wait_for_window",
@@ -506,6 +513,7 @@ def test_tool_executor_adaptive_observe_chrome_only_controls_run_ocr(monkeypatch
     assert result.data["runtime"]["runtime"] == SurfaceRuntime.custom_rendered.value
     assert result.data["runtime"]["evidence"]["meaningful_named_control_count"] == 0
     assert result.data["runtime"]["evidence"]["visual_word_count"] == 0
+    assert activated == [42]
     assert ocr_regions == [(10, 40, 1200, 680)]
 
 

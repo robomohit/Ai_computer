@@ -30,10 +30,36 @@ try:
 except ImportError:
     win32gui = win32api = win32con = win32process = None  # type: ignore
 import ctypes
+from ctypes import wintypes
 import time
 import logging
 
 _log = logging.getLogger(__name__)
+_PROCESS_QUERY_LIMITED_INFORMATION = 0x1000
+
+
+def _basename_lower(path: str) -> str:
+    return os.path.basename(str(path or "").strip().strip('"')).lower()
+
+
+def _process_exe_for_pid(pid: Optional[int]) -> str:
+    if not pid:
+        return ""
+    try:
+        kernel32 = ctypes.windll.kernel32
+        handle = kernel32.OpenProcess(_PROCESS_QUERY_LIMITED_INFORMATION, False, int(pid))
+        if not handle:
+            return ""
+        try:
+            ebuf = ctypes.create_unicode_buffer(1024)
+            size = wintypes.DWORD(1024)
+            if kernel32.QueryFullProcessImageNameW(handle, 0, ebuf, ctypes.byref(size)):
+                return ebuf.value
+        finally:
+            kernel32.CloseHandle(handle)
+    except Exception:
+        return ""
+    return ""
 
 # Pre-click pointer overlay — off by default. Set ORYNN_POINTER_OVERLAY=1
 # to make desktop clicks "watchable": a ring flashes at the target before the
@@ -444,21 +470,57 @@ class ToolExecutor:
         return self._isolated_hwnd
 
     def _get_hwnd_for_title(self, title: str):
-        """Find a window by title within the same process context if possible."""
+        """Find a window by title, app name, or executable hint."""
         if win32gui is None:
             return None
-        if not title: return None
-        def callback(hwnd, windows):
-            if win32gui.IsWindowVisible(hwnd) and title.lower() in win32gui.GetWindowText(hwnd).lower():
-                windows.append(hwnd)
-        windows = []
-        win32gui.EnumWindows(callback, windows)
-        return windows[0] if windows else None
+        if not title:
+            return None
+        matches = self._iter_matching_windows(title)
+        return int(matches[0]["hwnd"]) if matches else None
+
+    @staticmethod
+    def _window_match_score(window: dict[str, Any], app_hint: str) -> int:
+        raw_hint = str(app_hint or "").strip().strip('"')
+        if not raw_hint:
+            return 0
+        raw_base = re.split(r"[\\/]", raw_hint)[-1]
+        raw_stem = raw_base[:-4] if raw_base.lower().endswith(".exe") else os.path.splitext(raw_base)[0]
+        parts: list[str] = []
+        for value in (raw_hint.lower(), raw_base.lower(), raw_stem.lower()):
+            value = value.strip()
+            if value and value not in parts:
+                parts.append(value)
+
+        title = str(window.get("title") or "").strip().lower()
+        exe = str(window.get("exe") or "").strip().lower()
+        exe_base = _basename_lower(exe)
+        exe_stem = exe_base[:-4] if exe_base.endswith(".exe") else os.path.splitext(exe_base)[0]
+        score = 0
+        for part in parts:
+            if title:
+                if title == part:
+                    score = max(score, 100)
+                elif title.startswith(part):
+                    score = max(score, 75)
+                elif part in title:
+                    score = max(score, 45)
+            if exe and exe == part:
+                score = max(score, 100)
+            if exe_base and exe_base == part:
+                score = max(score, 95)
+            if exe_stem:
+                if exe_stem == part:
+                    score = max(score, 90)
+                elif len(part) >= 4 and part in exe_stem:
+                    score = max(score, 60)
+                elif len(exe_stem) >= 4 and exe_stem in part:
+                    score = max(score, 55)
+        return score
 
     def _iter_matching_windows(self, title_substr: str) -> list[dict[str, Any]]:
         if win32gui is None:
             return []
-        needle = (title_substr or "").strip().lower()
+        hint = (title_substr or "").strip()
         matches: list[dict[str, Any]] = []
 
         def _callback(hwnd, windows):
@@ -466,8 +528,6 @@ class ToolExecutor:
                 if not win32gui.IsWindowVisible(hwnd):
                     return
                 title = win32gui.GetWindowText(hwnd) or ""
-                if needle and needle not in title.lower():
-                    return
                 left, top, right, bottom = win32gui.GetWindowRect(hwnd)
                 width = max(0, right - left)
                 height = max(0, bottom - top)
@@ -479,18 +539,24 @@ class ToolExecutor:
                         _, pid = win32process.GetWindowThreadProcessId(hwnd)
                     except Exception:
                         pid = None
+                exe = _process_exe_for_pid(pid)
+                score = self._window_match_score({"title": title, "exe": exe}, hint)
+                if score <= 0:
+                    return
                 windows.append({
                     "hwnd": hwnd,
                     "title": title,
+                    "exe": exe,
                     "pid": pid,
                     "rect": (left, top, right, bottom),
                     "area": width * height,
+                    "score": score,
                 })
             except Exception:
                 return
 
         win32gui.EnumWindows(_callback, matches)
-        matches.sort(key=lambda item: item["area"], reverse=True)
+        matches.sort(key=lambda item: (item["score"], item["area"]), reverse=True)
         return matches
 
     def _remember_started_pid(self, pid: Optional[int]) -> None:
@@ -499,6 +565,42 @@ class ToolExecutor:
                 self._started_pids.add(int(pid))
         except Exception:
             return
+
+    def _activate_hwnd(self, hwnd: int) -> tuple[bool, str]:
+        """Best-effort foreground activation for real screen/OCR paths."""
+        if win32gui is None:
+            return False, ""
+        try:
+            actual_title = win32gui.GetWindowText(hwnd) or ""
+        except Exception:
+            actual_title = ""
+        try:
+            if win32gui.IsIconic(hwnd):
+                win32gui.ShowWindow(hwnd, 9)  # SW_RESTORE
+        except Exception:
+            pass
+        try:
+            import win32com.client  # type: ignore
+            if actual_title:
+                shell = win32com.client.Dispatch("WScript.Shell")
+                shell.AppActivate(actual_title)
+        except Exception:
+            pass
+        time.sleep(0.2)
+        try:
+            win32gui.BringWindowToTop(hwnd)
+        except Exception:
+            pass
+        foregrounded = False
+        try:
+            win32gui.SetForegroundWindow(hwnd)
+            foregrounded = True
+        except Exception:
+            try:
+                foregrounded = (win32gui.GetForegroundWindow() == hwnd)
+            except Exception:
+                foregrounded = False
+        return foregrounded, actual_title
 
     def _looks_like_gui_launch(self, command: str) -> bool:
         stripped = (command or "").strip().lower()
@@ -1116,61 +1218,21 @@ class ToolExecutor:
         return ""
 
     def focus_window(self, title: str) -> ToolResult:
-        """Bring the first visible window whose title contains `title` to the foreground."""
+        """Bring the first visible window matching a title/app/exe hint to the foreground."""
         try:
-            import win32gui, win32com.client  # type: ignore
-            found: list = []
-
-            def _enum(hwnd, _):
-                if win32gui.IsWindowVisible(hwnd) and title.lower() in win32gui.GetWindowText(hwnd).lower():
-                    found.append(hwnd)
-
-            win32gui.EnumWindows(_enum, None)
-            if not found:
-                return ToolResult(ok=False, output=f"No window with title containing '{title}' found.")
-            hwnd = found[0]
-            actual_title = win32gui.GetWindowText(hwnd)
-            import time
-            # Windows blocks SetForegroundWindow under foreground-lock and raises
-            # pywintypes.error(0, 'SetForegroundWindow'). That is NOT a real
+            if win32gui is None:
+                return ToolResult(ok=False, output="focus_window is only available on Windows.")
+            matches = self._iter_matching_windows(title)
+            if not matches:
+                return ToolResult(ok=False, output=f"No window matching '{title}' found.")
+            match = matches[0]
+            hwnd = int(match["hwnd"])
+            foregrounded, actual_title = self._activate_hwnd(hwnd)
+            actual_title = actual_title or match.get("title") or title
+            # SetForegroundWindow may report a foreground-lock
             # failure — the window is usually activated anyway, and our UIA tools
-            # target by window title regardless of foreground. So try several
-            # activation methods best-effort and only hard-fail if NONE plausibly
-            # worked. (Restoring a minimized window + AppActivate is what actually
-            # clears the lock in practice.)
-            try:
-                if win32gui.IsIconic(hwnd):
-                    win32gui.ShowWindow(hwnd, 9)  # SW_RESTORE
-            except Exception:
-                pass
-            try:
-                shell = win32com.client.Dispatch("WScript.Shell")
-                shell.AppActivate(actual_title)  # bypasses foreground-lock
-            except Exception:
-                pass
-            time.sleep(0.2)
-            try:
-                win32gui.BringWindowToTop(hwnd)
-            except Exception:
-                pass
-            foregrounded = False
-            try:
-                win32gui.SetForegroundWindow(hwnd)
-                foregrounded = True
-            except Exception:
-                # Verify whether it ended up foreground anyway (AppActivate often
-                # succeeds even when SetForegroundWindow is refused).
-                try:
-                    foregrounded = (win32gui.GetForegroundWindow() == hwnd)
-                except Exception:
-                    foregrounded = False
             self.set_isolated_hwnd(hwnd, actual_title)
-            if win32process is not None:
-                try:
-                    _, pid = win32process.GetWindowThreadProcessId(hwnd)
-                    self._remember_started_pid(pid)
-                except Exception:
-                    pass
+            self._remember_started_pid(match.get("pid"))
             note = "" if foregrounded else " (activated; OS held foreground — UIA still targets it by title)"
             return ToolResult(ok=True, output=(
                 f"Focused window: '{actual_title}'{note}"
@@ -1191,14 +1253,16 @@ class ToolExecutor:
             if matches:
                 match = matches[0]
                 hwnd = int(match["hwnd"])
-                actual_title = match["title"] or needle
+                foregrounded, activated_title = self._activate_hwnd(hwnd)
+                actual_title = activated_title or match["title"] or needle
                 pid = match.get("pid")
                 self.set_isolated_hwnd(hwnd, actual_title)
                 self._remember_started_pid(pid)
                 time.sleep(max(0.0, float(paint_seconds)))
+                note = "" if foregrounded else " (matched; OS held foreground)"
                 return ToolResult(
                     ok=True,
-                    output=(f"Window ready: '{actual_title}' (pid {pid or '?'})"
+                    output=(f"Window ready: '{actual_title}' (pid {pid or '?'}){note}"
                             + self._control_menu_suffix(actual_title)),
                     data={"hwnd": hwnd, "pid": pid, "title": actual_title},
                 )
@@ -2743,6 +2807,12 @@ class ToolExecutor:
         )
         if meaningful_named == 0 and app_rect and ocr_ready:
             try:
+                try:
+                    hwnd = self.resolve_isolated_hwnd() or self._get_hwnd_for_title(observed_app)
+                    if hwnd:
+                        self._activate_hwnd(int(hwnd))
+                except Exception:
+                    pass
                 ocr_rect = app_content_rect(observed_app)
                 if not int(ocr_rect.get("width") or 0):
                     ocr_rect = app_rect
