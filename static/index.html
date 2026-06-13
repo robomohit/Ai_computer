@@ -403,6 +403,17 @@
     </div>
   </main>
 
+  <!-- Task panel — the model's named tasks (todo_write) for long/multi-step
+       runs, docked on the right so the user watches progress without the feed
+       flooding. Hidden until the model creates tasks. -->
+  <aside class="task-panel" id="task-panel" hidden aria-label="Task progress">
+    <div class="task-panel-head">
+      <span class="task-panel-title">Tasks</span>
+      <span class="task-panel-count" id="task-panel-count"></span>
+    </div>
+    <ol class="task-list" id="task-list"></ol>
+  </aside>
+
   <footer class="statusbar" id="statusbar">
     <div class="sb-item sb-status sb-status-ready" id="sb-status">
       <span class="sb-dot"></span>

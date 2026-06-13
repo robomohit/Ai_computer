@@ -617,6 +617,44 @@
     markFeedActive();
   };
 
+  // ── Task panel ── the model's own named task list (todo_write) rendered as a
+  // right-side progress dock for long/multi-step runs. Model-provided text →
+  // textContent only, never innerHTML.
+  const _TASK_ICONS = {
+    completed: '<svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2.4" stroke-linecap="round" stroke-linejoin="round"><path d="M20 6 9 17l-5-5"/></svg>',
+    in_progress: '<svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2.2" stroke-linecap="round"><circle cx="12" cy="12" r="9" opacity="0.25"/><path d="M12 3a9 9 0 0 1 9 9"/></svg>',
+    pending: '<svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round"><circle cx="12" cy="12" r="8.5" opacity="0.5"/></svg>',
+  };
+  const renderTaskPanel = (items = []) => {
+    const panel = $('task-panel');
+    const list = $('task-list');
+    if (!panel || !list) return;
+    const tasks = Array.isArray(items) ? items.filter((t) => t && (t.content || t.activeForm)) : [];
+    if (!tasks.length) { panel.hidden = true; list.replaceChildren(); return; }
+    const frag = document.createDocumentFragment();
+    let doneCount = 0;
+    tasks.forEach((t) => {
+      const status = ['completed', 'in_progress', 'pending'].includes(t.status) ? t.status : 'pending';
+      if (status === 'completed') doneCount += 1;
+      const li = document.createElement('li');
+      li.className = `task-row task-${status}`;
+      const ico = document.createElement('span');
+      ico.className = 'task-ico';
+      ico.innerHTML = _TASK_ICONS[status];          // trusted inline SVG constant
+      const label = document.createElement('span');
+      label.className = 'task-label';
+      // show the present-tense activeForm while running, the plain content otherwise
+      label.textContent = String((status === 'in_progress' ? (t.activeForm || t.content) : t.content) || '');
+      li.append(ico, label);
+      frag.appendChild(li);
+    });
+    list.replaceChildren(frag);
+    const count = $('task-panel-count');
+    if (count) count.textContent = `${doneCount}/${tasks.length}`;
+    panel.hidden = false;
+  };
+  const resetTaskPanel = () => renderTaskPanel([]);
+
   const bindExamples = () => {
     document.querySelectorAll('.example-btn').forEach((btn) => {
       btn.onclick = () => {
@@ -2903,6 +2941,7 @@
     lastActiveCard = null; taskWorkers = new Set(); $('feed')?.classList.remove('multi-worker');
     stopReplyStream();
     resetLiveAssistant();
+    if (!keepFeed) resetTaskPanel();
 
     setStatus('ready');
     setMode('auto');
@@ -3217,6 +3256,7 @@
 
     if (event.type === 'screenshot') { renderScreenshot(event); return; }
     if (event.type === 'reflection') { renderReflection(event); return; }
+    if (event.type === 'todos') { renderTaskPanel(event.items || []); return; }
 
     if (event.type === 'token_usage' || event.type === 'budget') {
       if (Number.isFinite(event.percent)) setBudget(event.percent);

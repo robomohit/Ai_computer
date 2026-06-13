@@ -216,7 +216,10 @@ _DESKTOP_IRRELEVANT_TOOL_EXCLUDES = {
     ActionType.run_and_watch,
     ActionType.bash,            # redundant with run_command for launching apps
     ActionType.analyze_folder,  # file analysis — not desktop control
-    ActionType.todo_write,      # multi-step todo tracking — noise for app control
+    # todo_write stays available on desktop tasks too — a long/multi-app run
+    # (e.g. "export this CapCut project then upload it") is exactly when the
+    # user wants to see named progress in the side panel. The tool's own
+    # guidance ("3+ distinct steps") keeps it off trivial app control.
 }
 
 
@@ -3009,6 +3012,13 @@ class AgentService:
                                     "commit_hash": _commit_hash,
                                     "message": f"[ai-computer] {action_type}: {os.path.basename(_fpath)}",
                                 })
+
+                    # ── Task panel: surface the model's named task list to the
+                    # UI side dock so the user sees long-run progress live. The
+                    # model drives this by calling todo_write; we just forward
+                    # the structured list.
+                    if action_type == "todo_write" and isinstance(res.data, dict) and res.data.get("todos") is not None:
+                        await self._emit(task_id, "todos", {"items": res.data.get("todos") or []})
 
                     # ── Auto-screenshot after computer actions so model sees result ──
                     post_action_note = ""
