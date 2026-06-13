@@ -98,16 +98,29 @@ def test_run_canaries_supports_hard_ui_runners(monkeypatch, tmp_path):
             "affordance_maps": 1,
         }
 
+    def fake_settings_to_notepad(workspace: Path):
+        return {
+            "name": "settings_to_notepad",
+            "ok": True,
+            "duration_s": 0.5,
+            "steps": [{"name": "paste_version_into_notepad", "ok": True}],
+            "failed_steps": [],
+            "control_layers": ["Adaptive UIA map"],
+            "affordance_maps": 2,
+        }
+
     monkeypatch.setattr(canary, "run_settings_canary", fake_settings)
+    monkeypatch.setattr(canary, "run_settings_to_notepad_canary", fake_settings_to_notepad)
     monkeypatch.setattr(canary, "run_discord_canary", fake_discord)
     monkeypatch.setattr(canary, "run_custom_surface_canary", fake_custom_surface)
 
-    report = canary.run_canaries(["settings", "discord", "custom_surface"], tmp_path)
+    report = canary.run_canaries(["settings", "settings_to_notepad", "discord", "custom_surface"], tmp_path)
 
     assert report["summary"]["ok"] is True
-    assert report["summary"]["passed"] == 3
+    assert report["summary"]["passed"] == 4
     assert [result["name"] for result in report["results"]] == [
         "settings",
+        "settings_to_notepad",
         "discord",
         "custom_surface",
     ]
@@ -166,6 +179,31 @@ def test_running_process_exe_falls_back_without_psutil(monkeypatch):
     monkeypatch.setattr(canary.subprocess, "run", fake_run)
 
     assert canary._running_process_exe("Discord.exe").endswith("Discord.exe")
+
+
+def test_extract_settings_windows_spec_pairs_same_row_values():
+    rows = [
+        {"name": "Edition", "left": 100, "right": 160, "top": 200, "y": 210},
+        {"name": "Windows 11 Home", "left": 520, "right": 680, "top": 200, "y": 210},
+        {"name": "Version", "left": 100, "right": 160, "top": 230, "y": 240},
+        {"name": "25H2", "left": 520, "right": 580, "top": 230, "y": 240},
+        {"name": "OS build", "left": 100, "right": 175, "top": 260, "y": 270},
+        {"name": "26200.8457", "left": 520, "right": 620, "top": 260, "y": 270},
+        {"name": "Experience", "left": 100, "right": 190, "top": 290, "y": 300},
+        {"name": "Windows Feature Experience Pack 1000.26100.304.0", "left": 520, "right": 900, "top": 290, "y": 300},
+        {"name": "Product ID", "left": 100, "right": 190, "top": 320, "y": 330},
+        {"name": "00342-00000-00000-AAOEM", "left": 520, "right": 760, "top": 320, "y": 330},
+    ]
+
+    specs = canary._extract_settings_windows_spec(rows)
+
+    assert specs == {
+        "Edition": "Windows 11 Home",
+        "Version": "25H2",
+        "OS build": "26200.8457",
+        "Experience": "Windows Feature Experience Pack 1000.26100.304.0",
+    }
+    assert "Product ID" not in specs
 
 
 def test_canary_result_flags_failed_steps():

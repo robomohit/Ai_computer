@@ -287,6 +287,60 @@ def test_window_hint_score_matches_camelcase_exe_token_to_title():
     assert score >= 90
 
 
+def test_window_hint_score_prefers_document_title_over_token_collision():
+    import app.widget.desktop_features as desktop_features
+    from app.tools import ToolExecutor
+
+    hint = "settings-to-notepad-version-123.txt"
+    settings_score = desktop_features._window_hint_score(
+        {
+            "hwnd": 100,
+            "title": "Settings",
+            "exe": r"C:\Windows\System32\ApplicationFrameHost.exe",
+        },
+        hint,
+    )
+    notepad_score = desktop_features._window_hint_score(
+        {
+            "hwnd": 200,
+            "title": "*settings-to-notepad-version-123.txt - Notepad",
+            "exe": r"C:\Windows\System32\Notepad.exe",
+        },
+        hint,
+    )
+    old_tab_score = desktop_features._window_hint_score(
+        {
+            "hwnd": 300,
+            "title": "*windows-version-from-settings-456.txt - Notepad",
+            "exe": r"C:\Windows\System32\Notepad.exe",
+        },
+        hint,
+    )
+
+    assert notepad_score > settings_score
+    assert old_tab_score == 0
+    assert ToolExecutor._window_match_score(
+        {
+            "title": "*settings-to-notepad-version-123.txt - Notepad",
+            "exe": r"C:\Windows\System32\Notepad.exe",
+        },
+        hint,
+    ) > ToolExecutor._window_match_score(
+        {
+            "title": "Settings",
+            "exe": r"C:\Windows\System32\ApplicationFrameHost.exe",
+        },
+        hint,
+    )
+    assert ToolExecutor._window_match_score(
+        {
+            "title": "*windows-version-from-settings-456.txt - Notepad",
+            "exe": r"C:\Windows\System32\Notepad.exe",
+        },
+        hint,
+    ) == 0
+
+
 def test_uia_root_candidates_falls_back_to_process_matched_hwnd(monkeypatch):
     import sys
     import types

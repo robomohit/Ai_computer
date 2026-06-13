@@ -57,6 +57,17 @@ def _app_hint_parts(app_hint: str) -> list[str]:
     return parts
 
 
+def _app_hint_anchor_parts(app_hint: str) -> set[str]:
+    raw_hint = str(app_hint or "").strip().strip('"')
+    raw_base = re.split(r"[\\/]", raw_hint)[-1]
+    raw_stem = raw_base[:-4] if raw_base.lower().endswith(".exe") else os.path.splitext(raw_base)[0]
+    return {
+        value.strip().lower()
+        for value in (raw_hint, raw_base, raw_stem)
+        if value.strip()
+    }
+
+
 def _window_hint_score(window: dict, app_hint: str, foreground_hwnd: int = 0) -> int:
     """Score whether a top-level window matches an app hint by title or exe.
 
@@ -67,18 +78,31 @@ def _window_hint_score(window: dict, app_hint: str, foreground_hwnd: int = 0) ->
     parts = _app_hint_parts(app_hint)
     if not parts:
         return 0
+    anchors = _app_hint_anchor_parts(app_hint)
+    hint_base = re.split(r"[\\/]", str(app_hint or "").strip().strip('"'))[-1].lower()
+    exe_hint = hint_base.endswith(".exe")
+    document_hint = bool(os.path.splitext(hint_base)[1]) and not exe_hint
     title = str(window.get("title") or "").strip().lower()
+    title_cmp = title.lstrip("* \t")
     exe_base = _basename_lower(str(window.get("exe") or ""))
     exe_stem = exe_base[:-4] if exe_base.endswith(".exe") else os.path.splitext(exe_base)[0]
     score = 0
     for part in parts:
+        token_only = part not in anchors
+        if document_hint and token_only:
+            continue
+        token_title_score = 100 if (not token_only or exe_hint) else 25
+        token_prefix_score = 75 if (not token_only or exe_hint) else 25
+        token_contains_score = 45 if (not token_only or exe_hint) else 20
         if title:
-            if title == part:
-                score = max(score, 100)
-            elif title.startswith(part):
-                score = max(score, 75)
-            elif part in title:
-                score = max(score, 45)
+            if title == part or title_cmp == part:
+                score = max(score, token_title_score)
+            elif title.startswith(part) or title_cmp.startswith(part):
+                score = max(score, token_prefix_score)
+            elif part in title or part in title_cmp:
+                score = max(score, token_contains_score)
+        if document_hint:
+            continue
         if exe_base and exe_base == part:
             score = max(score, 90)
         if exe_stem:

@@ -509,6 +509,8 @@ class ToolExecutor:
             return 0
         raw_base = re.split(r"[\\/]", raw_hint)[-1]
         raw_stem = raw_base[:-4] if raw_base.lower().endswith(".exe") else os.path.splitext(raw_base)[0]
+        exe_hint = raw_base.lower().endswith(".exe")
+        document_hint = bool(os.path.splitext(raw_base)[1]) and not exe_hint
         parts: list[str] = []
         for value in (raw_hint.lower(), raw_base.lower(), raw_stem.lower()):
             value = value.strip()
@@ -516,18 +518,21 @@ class ToolExecutor:
                 parts.append(value)
 
         title = str(window.get("title") or "").strip().lower()
+        title_cmp = title.lstrip("* \t")
         exe = str(window.get("exe") or "").strip().lower()
         exe_base = _basename_lower(exe)
         exe_stem = exe_base[:-4] if exe_base.endswith(".exe") else os.path.splitext(exe_base)[0]
         score = 0
         for part in parts:
             if title:
-                if title == part:
+                if title == part or title_cmp == part:
                     score = max(score, 100)
-                elif title.startswith(part):
+                elif title.startswith(part) or title_cmp.startswith(part):
                     score = max(score, 75)
-                elif part in title:
+                elif part in title or part in title_cmp:
                     score = max(score, 45)
+            if document_hint:
+                continue
             if exe and exe == part:
                 score = max(score, 100)
             if exe_base and exe_base == part:
